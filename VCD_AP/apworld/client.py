@@ -24,6 +24,7 @@ from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser
 from NetUtils import ClientStatus
 
 from . import VCDWorld, grants
+from .saves import SaveManager
 from .items import ITEM_NAME_TO_ID, access_item_name
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (LOCATION_NAME_TO_ID, employee_of_the_month_name,
@@ -103,6 +104,11 @@ class VCDCommandProcessor(ClientCommandProcessor):
         """Launch the game, or relaunch it to resume after quitting."""
         self.ctx.launch_game()
 
+    def _cmd_restore(self) -> None:
+        """Restore your career saves, undoing Archipelago save isolation. Close the
+        game first."""
+        self.ctx.restore_saves()
+
 
 class VCDContext(CommonContext):
     game = "Viscera Cleanup Detail"
@@ -119,13 +125,22 @@ class VCDContext(CommonContext):
         self.goal_need: int = 0
         self.last_seq: "str | None" = None
         self.game_launched: bool = False
+        self.saves_ready: bool = False
+        self.game_process: "subprocess.Popen | None" = None
 
         folder = str(VCDWorld.settings.install_folder)
         if folder and looks_like_install(Path(folder)):
             self.install_dir = Path(folder)
+        self.save_manager: "SaveManager | None" = (
+            SaveManager(self.install_dir) if self.install_dir else None)
+        if self.save_manager and self.save_manager.is_isolated():
+            client_logger.info(
+                f"Save isolation is active (seed '{self.save_manager.active_seed()}'). "
+                "Your career saves are stashed; use /restore to bring them back.")
 
     def set_install_dir(self, path: str) -> None:
         self.install_dir = Path(path)
+        self.save_manager = SaveManager(self.install_dir)
         self._save_install_folder(str(self.install_dir))
         # A newly set directory may already have a grants file to reconcile.
         self.last_grants_written = None
@@ -145,7 +160,7 @@ class VCDContext(CommonContext):
 
     async def setup_and_launch(self) -> None:
         """On connect: make sure an install folder is known (picker on first run),
-        then auto-launch the game if that setting is on."""
+        isolate this seed's saves, then auto-launch the game if that setting is on."""
         if not self.install_dir:
             if gui_enabled:
                 await self.pick_install_dir()
@@ -153,9 +168,31 @@ class VCDContext(CommonContext):
                 client_logger.warning(
                     "No install folder set. Use /install, or set "
                     "viscera_cleanup_detail_options -> install_folder in host.yaml.")
-        if (self.install_dir and not self.game_launched
-                and bool(VCDWorld.settings.auto_launch_game)):
+        if not self.install_dir:
+            return
+        self._isolate_saves()
+        self.saves_ready = True
+        self.write_grants_if_changed()
+        if not self.game_launched and bool(VCDWorld.settings.auto_launch_game):
             self.launch_game()
+
+    def _isolate_saves(self) -> None:
+        """Swap in this seed's own save set, unless disabled. Skipped if the game is
+        already running, so saves are never swapped under a live game."""
+        if not (self.save_manager and bool(VCDWorld.settings.isolate_saves)):
+            return
+        if not self.seed_name:
+            return
+        if self.game_running() and not self.save_manager.is_isolated():
+            client_logger.warning(
+                "The game is already running, so save isolation was skipped. Close "
+                "the game and reconnect to isolate this seed's saves.")
+            return
+        try:
+            client_logger.info(self.save_manager.isolate(self.seed_name))
+        except Exception as error:
+            client_logger.error(
+                f"Save isolation failed ({error}); using the current saves as-is.")
 
     async def pick_install_dir(self) -> None:
         """Open a folder picker off the event loop and save the choice."""
@@ -185,12 +222,46 @@ class VCDContext(CommonContext):
             client_logger.error(f"UDK.exe not found at {exe}.")
             return
         try:
-            subprocess.Popen([str(exe)], cwd=str(exe.parent))
+            self.game_process = subprocess.Popen([str(exe)], cwd=str(exe.parent))
         except OSError as error:
             client_logger.error(f"Could not launch the game: {error}")
             return
         self.game_launched = True
         client_logger.info("Launched Viscera Cleanup Detail.")
+
+    def game_running(self) -> bool:
+        return self.game_process is not None and self.game_process.poll() is None
+
+    def restore_saves(self) -> None:
+        """Move the career saves back and stop isolating (manual, via /restore)."""
+        if not self.save_manager:
+            client_logger.warning("No install folder set.")
+            return
+        if self.game_running():
+            client_logger.warning(
+                "The game is still running. Close it first, then run /restore.")
+            return
+        try:
+            client_logger.info(self.save_manager.restore())
+            self.saves_ready = False
+        except Exception as error:
+            client_logger.error(f"Could not restore your career saves: {error}")
+
+    async def shutdown(self) -> None:
+        # Manual-only restore, but also on a clean client close if the game is not
+        # running (never swap saves under a live game).
+        if self.save_manager and self.save_manager.is_isolated():
+            if self.game_running():
+                client_logger.warning(
+                    "Career saves are still stashed (the game is running). Close it, "
+                    "relaunch the client, and run /restore to get them back.")
+            else:
+                try:
+                    client_logger.info(self.save_manager.restore())
+                except Exception as error:
+                    client_logger.error(
+                        f"Could not restore career saves on exit: {error}")
+        await super().shutdown()
 
     async def server_auth(self, password_requested: bool = False) -> None:
         if password_requested and not self.password:
@@ -203,7 +274,7 @@ class VCDContext(CommonContext):
             slot_data = args.get("slot_data", {})
             self.unlocked_maps = set(slot_data.get("started_maps", []))
             self._set_goal(slot_data)
-            self.write_grants_if_changed()
+            self.saves_ready = False
             asyncio.create_task(self.setup_and_launch())
         elif cmd == "ReceivedItems":
             changed = False
@@ -230,7 +301,7 @@ class VCDContext(CommonContext):
             self.goal_need = len(self.goal_location_ids) if goal == "find_bob" else amount
 
     def write_grants_if_changed(self) -> None:
-        if not self.install_dir:
+        if not self.install_dir or not self.saves_ready:
             return
         ordered = [m for m, _, _ in LEVELS if m in self.unlocked_maps]
         joined = ",".join(ordered)

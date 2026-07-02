@@ -54,8 +54,15 @@ class VCDSettings(settings.Group):
         client session). On by default. Set to false to launch it yourself or with
         the /play command."""
 
+    class IsolateSaves(settings.Bool):
+        """Keep each Archipelago seed's Office, job saves, and collectibles in their
+        own save set, apart from your career saves, swapped in when the client
+        connects. On by default. Bring your career saves back with the client's
+        /restore command."""
+
     install_folder: InstallFolder = InstallFolder("")
     auto_launch_game: Union[AutoLaunchGame, bool] = True
+    isolate_saves: Union[IsolateSaves, bool] = True
 
 
 class VCDItem(Item):
