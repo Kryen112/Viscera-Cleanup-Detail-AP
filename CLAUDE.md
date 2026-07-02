@@ -112,9 +112,21 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   `DefaultVCArchipelago.ini` registers the config base. Write the FULL state
   (checked set, current percent, goal flag), not deltas, so a client reconnect
   recovers from the file.
-- Client to mod: level gating is the client rewriting the Archipelago mode's
-  entries in `VCProviders.ini` (menu gating); the mod needs no involvement. If the
-  mod ever needs granted state, the client writes a config ini the mod reads.
+- Archipelago is a game MODE, not a title. A dedicated title is not feasible
+  script-only (the `Switch game` menu titles are hardcoded UI and
+  `IsValidGameTitle` is a hardcoded static). The mode is a
+  `VCUIDataProvider_GameInfo` entry (GameClass `VCArchipelago.VCGame_Archipelago`,
+  `ValidTitles=Viscera`, a FriendlyName) that the data-driven Start Work menu
+  shows next to Cleanup and Speedrun.
+- Client to mod: the client writes the unlocked-level set (and other granted
+  state) to a config ini the mod reads. Level gating is IN-ENGINE: the mod
+  refuses to start a level not in that set. Do not gate by rewriting the shared
+  `VCProviders.ini` map list.
+- Office and save isolation is client-side: on AP connect, back up the whole
+  `Saves\` directory and swap in a fresh (or per-seed) Office; restore the
+  player's saves on disconnect. AP needs a fresh Office so collectibles, the
+  Employee-of-the-Month frames, and the cross-level Bob-note chain accumulate
+  cleanly without touching the player's normal career.
 
 Standing rules:
 - Recover outbound checks and goal completion on reconnect from the framework's
