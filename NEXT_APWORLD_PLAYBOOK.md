@@ -1,8 +1,9 @@
 # Building the next Archipelago world: a playbook
 
-Distilled from the HP2PC project. Game-agnostic. The ordering is deliberate:
-the first section is the scaffolding we wish we had on day one, before a single
-line of game logic. Everything after it is cheaper once that scaffolding exists.
+Distilled from the HP2PC and Viscera Cleanup Detail projects. Game-agnostic. The
+ordering is deliberate: the first section is the scaffolding we wish we had on
+day one, before a single line of game logic. Everything after it is cheaper once
+that scaffolding exists.
 
 The one-sentence lesson: **stand up the guardrails first, keep one source of
 truth, and do not build machinery (generators, protocols, abstractions) until
@@ -171,6 +172,22 @@ If the world talks to a game mod over a socket:
   load-bearing fact, before you commit to an explanation.
 - **Measure before speculating.** Ground guards and special-casing in observed
   data. Do not add complexity against an imagined problem.
+- **Read the source, do not guess.** When you need a game's internal logic (a
+  score formula, which class owns a field, whether a member is readable from your
+  code), decompile the shipped code and read it. Grepping compiled artifacts
+  gives names and class trees but not call sites, formulas, or access modifiers,
+  and iterated compile-and-run probes burn the human's in-game runs. For Unreal,
+  decompile with UE Explorer (Appendix B.1). We spent several probe cycles
+  guessing at a scoring API that one decompile answered outright.
+- **Run a control before trusting a live signal.** A value that moves the way you
+  expect may be driven by something else. We nearly built progressive checks on a
+  field that looked like cleanliness but was a pure time decay; one
+  idle-versus-act control run exposed it in seconds. Vary only the input you care
+  about and confirm the value responds to that, not to the clock.
+- **Reuse the game's own computation.** Prefer calling the game's existing
+  function to reimplementing its logic. It is exact and far less code. Read the
+  source first to learn which functions are free of side effects (state
+  replication, UI triggers, saves) and therefore safe to call on a live timer.
 - In-game verification is the final gate for anything the player sees. Note the
   date and result in the memory log so it is not re-litigated.
 
@@ -223,6 +240,10 @@ its specifics as hypotheses to confirm, not facts to assume.
 the precise entry-point hook, a language quirk) are engine-version-specific.
 Bisect and confirm each per game before relying on it. Asserting "HP3 works like
 HP2" from theory is exactly the trap the main playbook warns against.
+
+To read any of these packages, decompile them with UE Explorer (Appendix B.1);
+it handles Unreal Engine 1 through 3, so it applies to this appendix too, not
+just the UE3 one.
 
 ### A.1 Mod entry point
 - Subclass the engine's `GameInfo`, override `event InitGame()`, and register it
@@ -314,3 +335,133 @@ As in the main playbook, expect a dev checkout used only for validation and a
 separate frozen install the player actually launches. Debug the frozen one: its
 config, its logs, its generated output. Confirm which is which before chasing
 any in-game bug.
+
+---
+
+## Appendix B. Unreal Engine 3 / UDK mod patterns (Viscera Cleanup Detail and kin)
+
+Viscera Cleanup Detail is a UDK game (Unreal Engine 3, engine build 10907, exe
+`UDK.exe`). These patterns transfer to other UE3/UDK titles, but the specifics
+(build number, which config wins, class names) are per game. Verify each before
+relying on it, exactly as in Appendix A.
+
+The headline lesson: UE3 is not automatically "locked." A UDK game that ships
+uncooked script and its editor can take real UnrealScript mods, and a decompiler
+turns the whole thing from guesswork into reading.
+
+### B.1 Decompile the packages first (UE Explorer)
+This is the single biggest time saver, and it applies to UE1 through UE3.
+- Grepping compiled `.u` files gives you names, class hierarchies, and some
+  signatures, but not call sites, formulas, or access modifiers. It caps out
+  fast. Do not run a guess-and-compile loop against a complex system; decompile.
+- Use **UE Explorer** (UELib, by EliotVU). Free, Windows, GUI plus a CLI. Install
+  it, then decompile from the command line so an agent can read the output:
+  `UEExplorer.exe <path\to\Package.u> -console -silent -export=classes`. It writes
+  a folder of decompiled `.uc` files (one per class) that you read directly.
+- Decompile the game's own packages, not just the engine ones. For us the
+  scoring logic lived in a content package (`VisceraGameContent`), while the base
+  classes in the game package were empty stubs. Follow the class up its parents
+  and across packages until you find the real implementation.
+- Property-tag deserialization warnings during export are usually about
+  `defaultproperties` assets, not code. The function bodies still decompile.
+- This is the same move HP2 made with its own decompile. Do it in the first hour,
+  not after a dozen failed probes.
+
+### B.2 Uncooked script may be moddable (check before assuming it is locked)
+The common wisdom "UE3 script is cooked and locked" is often false for UDK games
+that ship with their editor. Confirm per game:
+- No `CookedPC` folder, and the game runs script from `UDKGame\Script\*.u`.
+- A build tool ships (`UDK.exe make`, or the editor exe).
+- The GameInfo class is a plain script class you can subclass.
+If all three hold, you can add real script, which reopens event-driven checks,
+in-engine gating, and reading live game state, not just map and Kismet edits.
+
+### B.3 Two package lists, both required
+UDK config splits the roles across `DefaultEngine.ini`:
+- `[UnrealEd.EditorEngine] +EditPackages=` is the compiler's build list.
+- `[Engine.ScriptPackages] +NonNativePackages=` is what the running game loads at
+  boot.
+Add your package to BOTH, or it either will not compile or will compile and never
+load. `UDKEngine.ini` and `UDKGame.ini` are generated mirrors of the `Default*`
+files; edit the `Default*` and delete the generated ones so they regenerate.
+
+### B.4 Compile a new package against the shipped `.u` without source
+You do not need the game's UnrealScript source. Put your classes under
+`Development\Src\<YourPackage>\Classes\*.uc`, `extends` a shipped class, override
+the members you want, and run `make`. The compiler reads the parent's layout from
+the compiled `.u`. This is how you subclass the GameInfo or a scoring object the
+game never shipped source for.
+
+### B.5 Entry point: subclass the GameInfo, but find where the class is actually chosen
+Subclassing the GameInfo and overriding `InitGame` is the anchor, as in UE1
+(A.1). But `DefaultGame` in the ini is not always what the game uses. VCD's menu
+launches maps with an explicit `?Game=<class>` on the URL, taken from a
+data-driven config (`VCProviders.ini`, a `GameClass` field per game mode), and
+the URL overrides `DefaultGame`. So trace how the map is actually launched and
+patch the real lever. That same config lever doubles as clean isolation: define a
+dedicated mode with your GameInfo class so your mod never touches the stock game
+or its saves.
+
+### B.6 Build and log mechanics
+- `UDK.exe make` may leave its console window open even after it finishes.
+  It does complete; read the result from `UDKGame\Logs\Launch.log`
+  (`Success: Compiled ...` or the error), and script a timeout-then-kill if you
+  drive it programmatically.
+- Log encoding is per engine, so verify it, do not carry it over. HP2's UE1 log
+  was UTF-16; VCD's UE3 `Launch.log` is single-byte UTF-8/ANSI (zero null bytes).
+  We wasted a spike on a log tailer hard-coded to UTF-16 that silently matched
+  nothing against a UTF-8 log. Check the first bytes (a `FF FE` BOM and null-
+  padded ASCII means UTF-16; no nulls means single-byte) before you write a
+  reader.
+- Your own `` `log `` lines appear in `Launch.log` prefixed `ScriptLog:`, which
+  is a clean marker to grep for when confirming your code ran.
+- `Launch.log` is buffered on disk (VCD flushed it roughly every 20 to 30
+  seconds), so tailing it is NOT a low-latency mod-to-client channel. Options for
+  a live bridge, cheapest first: launch with `-forcelogflush` (flush per line, at
+  a global I/O cost) and keep tailing; or have the mod write a small dedicated
+  state file with `SaveConfig` on change and have the client poll it (this is also
+  reconnect-safe if it writes the full checked set, per A.9); or a DLLBind native
+  pipe. Prefer the state file for production; the log is a noisy shared stream.
+  Confirmed on VCD: `SaveConfig()` on a `config(<Base>)` object writes the runtime
+  file `UDK<Base>.ini` synchronously at about one second latency (register the
+  base first with a `Default<Base>.ini`, or it may not write), and a polling
+  client tracks it with no bursts. Put the state on its own small config object so
+  `SaveConfig` touches only that file, not the game config.
+
+### B.7 Reading game state from your mod
+- A field is only readable from your package if it is not `private` or
+  `protected`. Interface methods and concrete-class methods differ. Decompile to
+  confirm ownership and visibility before you write the read; a wrong guess is a
+  wasted compile.
+- Watch for per-map subclasses. Cast to the common base that declares the field
+  (for us every map's punchout handler extended one `_General` base that owned
+  the scoring fields), not to the leaf class.
+- The obviously-named class may be a spawner or manager, not the thing itself.
+  Our `VCMessFactorySplat` actors were spawners with no saturation; the real mess
+  actors were a different class. Decompile the scan loop to learn which class the
+  game actually counts.
+
+### B.8 Reuse the game's own computation over a timer, but mind side effects
+We needed a live cleanliness percentage. Rather than reimplement the scoring, we
+call the game's own scan function on a timer and read the result field it sets.
+- This gives the exact in-game number for a fraction of the code.
+- But read the function first. Its sibling that finalizes results replicated
+  state and triggered the end-of-level UI; calling that on a timer would have
+  fired the results screen mid-level. Call only the side-effect-light function,
+  and note any minor side effects you accept.
+- A value updated only by a timer (a time-decaying score potential, a par-time
+  factor) will look like progress but ignore the player's actions. Run the
+  control from Part 4 before you trust it.
+
+### B.9 Probe methodology for finding a live signal
+The fastest way to identify the right live value: a mod that runs a repeating
+timer, logs the candidate values with a greppable prefix, and a scripted apply /
+compile / check-log loop so each iteration is cheap. Pair it with the
+idle-versus-act control run. This is how we distinguished the real cleanliness
+signal from a time decay that moved similarly.
+
+### B.10 The UE1 hazards likely still apply, re-verified
+The GC-on-teardown hazard (A.5), event-driven over polling (A.7), and
+persistence across travel (A.8) are UnrealScript-family patterns that probably
+carry to UE3. Treat them as hypotheses to confirm on the new engine, not
+guarantees.
