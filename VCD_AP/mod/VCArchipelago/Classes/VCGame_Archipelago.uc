@@ -32,6 +32,11 @@ event InitGame(string Options, out string ErrorMessage)
 {
     super.InitGame(Options, ErrorMessage);
     APState = new(self) class'VCArchipelagoState';
+    // A config object starts from the last values written to the ini, which belong
+    // to the previous level. Clear the per-level fields so this level rebuilds its
+    // own rungs from its own cleanliness instead of inheriting the last level's.
+    APState.APMilestones = "";
+    APState.APCleanPct = 0;
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
     SetTimer(1.0, true, 'PublishCleanliness');
