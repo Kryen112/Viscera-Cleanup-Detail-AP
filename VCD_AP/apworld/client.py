@@ -1,0 +1,330 @@
+"""Archipelago client for Viscera Cleanup Detail.
+
+The mod and this client talk through two files in the game install (the mod cannot
+open a socket). The mod writes its state to
+``UDKGame\\Config\\UDKVCArchipelago.ini`` whenever it changes; this client polls
+that file, maps the cleanliness rungs it reports to location checks, and sends
+them. In the other direction this client writes the unlocked-level set to
+``Saves\\VCArchipelagoGrants.sav``, which the mod reads to gate levels.
+
+State the client recovers from the framework, never from memory: checked locations
+(so reconnecting re-derives what to send) and received items (so the grants file is
+rebuilt from the item list plus the seed's starting levels).
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import subprocess
+from pathlib import Path
+
+import Utils
+from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser,
+                          gui_enabled, server_loop)
+from NetUtils import ClientStatus
+
+from . import VCDWorld, grants
+from .items import ITEM_NAME_TO_ID, access_item_name
+from .levels import DISPLAY_BY_MAP, LEVELS
+from .locations import (LOCATION_NAME_TO_ID, employee_of_the_month_name,
+                        milestone_name, punch_out_name)
+
+# Player-facing lines go to the "Client" logger, or they do not show in the client
+# window.
+client_logger = logging.getLogger("Client")
+
+STATE_SECTION = "[vcarchipelago.vcarchipelagostate]"
+POLL_SECONDS = 1.0
+
+# Received-item id to internal map name, so a granted access item unlocks its level.
+ACCESS_ID_TO_MAP: dict[int, str] = {
+    ITEM_NAME_TO_ID[access_item_name(display)]: map_name
+    for map_name, display, _title in LEVELS
+}
+
+
+def read_mod_state(install_dir: Path) -> dict[str, str]:
+    """Parse the mod's state section from UDKVCArchipelago.ini. Returns an empty
+    dict if the file is absent or the section is missing."""
+    ini = install_dir / "UDKGame" / "Config" / "UDKVCArchipelago.ini"
+    try:
+        text = ini.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    in_section = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_section = stripped.lower() == STATE_SECTION
+            continue
+        if in_section and "=" in stripped:
+            key, _, value = stripped.partition("=")
+            out[key.strip()] = value.strip()
+    return out
+
+
+def parse_rungs(milestones: str) -> list[int]:
+    """Turn the mod's "5,10,15" rung string into a list of ints."""
+    rungs: list[int] = []
+    for part in milestones.split(","):
+        part = part.strip()
+        if part.isdigit():
+            rungs.append(int(part))
+    return rungs
+
+
+def looks_like_install(path: Path) -> bool:
+    """A folder counts as a Viscera install only if it holds the game exe. An
+    unset UserFolderPath resolves to the Archipelago root, so a non-empty value is
+    not enough on its own."""
+    return (path / "Binaries" / "Win32" / "UDK.exe").is_file()
+
+
+class VCDCommandProcessor(ClientCommandProcessor):
+    def _cmd_install(self, path: str = "") -> None:
+        """Choose the Viscera install folder (the one holding Binaries and UDKGame)
+        and save it to host.yaml. With no argument, opens a folder picker. Typing a
+        path is discouraged: the command parser eats backslashes."""
+        chosen = path if path and Path(path).is_dir() else Utils.open_directory(
+            "Select the Viscera install folder (holds Binaries and UDKGame)",
+            suggest=str(self.ctx.install_dir or ""))
+        if not chosen:
+            self.output("No folder selected.")
+            return
+        if not looks_like_install(Path(chosen)):
+            self.output("That folder has no Binaries\\Win32\\UDK.exe. Pick the Viscera "
+                        "install root (it holds Binaries and UDKGame).")
+            return
+        self.ctx.set_install_dir(chosen)
+        self.output(f"Install folder set to {self.ctx.install_dir} (saved to host.yaml).")
+
+    def _cmd_play(self) -> None:
+        """Launch the game, or relaunch it to resume after quitting."""
+        self.ctx.launch_game()
+
+
+class VCDContext(CommonContext):
+    game = "Viscera Cleanup Detail"
+    # Receive remote items, our own items, and starting inventory.
+    items_handling = 0b111
+    command_processor = VCDCommandProcessor
+
+    def __init__(self, server_address: "str | None", password: "str | None") -> None:
+        super().__init__(server_address, password)
+        self.install_dir: "Path | None" = None
+        self.unlocked_maps: set[str] = set()
+        self.last_grants_written: "str | None" = None
+        self.goal_location_ids: list[int] = []
+        self.goal_need: int = 0
+        self.last_seq: "str | None" = None
+        self.game_launched: bool = False
+
+        folder = str(VCDWorld.settings.install_folder)
+        if folder and looks_like_install(Path(folder)):
+            self.install_dir = Path(folder)
+
+    def set_install_dir(self, path: str) -> None:
+        self.install_dir = Path(path)
+        self._save_install_folder(str(self.install_dir))
+        # A newly set directory may already have a grants file to reconcile.
+        self.last_grants_written = None
+        self.write_grants_if_changed()
+
+    def _save_install_folder(self, path: str) -> None:
+        """Persist the install folder to host.yaml, so the player picks it once."""
+        try:
+            import settings as ap_settings
+            current = VCDWorld.settings.install_folder
+            VCDWorld.settings.install_folder = type(current)(path)
+            ap_settings.get_settings().save()
+        except Exception as error:
+            client_logger.warning(
+                f"Could not save the install folder to host.yaml ({error}); set "
+                "viscera_cleanup_detail_options -> install_folder there yourself.")
+
+    async def setup_and_launch(self) -> None:
+        """On connect: make sure an install folder is known (picker on first run),
+        then auto-launch the game if that setting is on."""
+        if not self.install_dir:
+            if gui_enabled:
+                await self.pick_install_dir()
+            else:
+                client_logger.warning(
+                    "No install folder set. Use /install, or set "
+                    "viscera_cleanup_detail_options -> install_folder in host.yaml.")
+        if (self.install_dir and not self.game_launched
+                and bool(VCDWorld.settings.auto_launch_game)):
+            self.launch_game()
+
+    async def pick_install_dir(self) -> None:
+        """Open a folder picker off the event loop and save the choice."""
+        loop = asyncio.get_event_loop()
+        chosen = await loop.run_in_executor(
+            None, Utils.open_directory,
+            "Select the Viscera install folder (holds Binaries and UDKGame)")
+        if not chosen:
+            client_logger.warning(
+                "No install folder chosen. Use /install to try again, or set "
+                "viscera_cleanup_detail_options -> install_folder in host.yaml.")
+            return
+        if not looks_like_install(Path(chosen)):
+            client_logger.warning(
+                f"'{chosen}' has no Binaries\\Win32\\UDK.exe, so it is not a Viscera "
+                "install folder. Not saved; use /install to try again.")
+            return
+        self.set_install_dir(chosen)
+        client_logger.info(f"Install folder set to {self.install_dir} (saved to host.yaml).")
+
+    def launch_game(self) -> None:
+        if not self.install_dir:
+            client_logger.warning("No install folder set. Use /install first.")
+            return
+        exe = self.install_dir / "Binaries" / "Win32" / "UDK.exe"
+        if not exe.is_file():
+            client_logger.error(f"UDK.exe not found at {exe}.")
+            return
+        try:
+            subprocess.Popen([str(exe)], cwd=str(exe.parent))
+        except OSError as error:
+            client_logger.error(f"Could not launch the game: {error}")
+            return
+        self.game_launched = True
+        client_logger.info("Launched Viscera Cleanup Detail.")
+
+    async def server_auth(self, password_requested: bool = False) -> None:
+        if password_requested and not self.password:
+            await super().server_auth(password_requested)
+        await self.get_username()
+        await self.send_connect()
+
+    def on_package(self, cmd: str, args: dict) -> None:
+        if cmd == "Connected":
+            slot_data = args.get("slot_data", {})
+            self.unlocked_maps = set(slot_data.get("started_maps", []))
+            self._set_goal(slot_data)
+            self.write_grants_if_changed()
+            asyncio.create_task(self.setup_and_launch())
+        elif cmd == "ReceivedItems":
+            changed = False
+            for item in args.get("items", []):
+                map_name = ACCESS_ID_TO_MAP.get(item.item)
+                if map_name and map_name not in self.unlocked_maps:
+                    self.unlocked_maps.add(map_name)
+                    changed = True
+            if changed:
+                self.write_grants_if_changed()
+
+    def _set_goal(self, slot_data: dict) -> None:
+        goal = slot_data.get("goal", "complete_levels")
+        amount = int(slot_data.get("goal_amount", len(LEVELS)))
+        if goal == "employee_of_the_month":
+            self.goal_location_ids = [
+                LOCATION_NAME_TO_ID[employee_of_the_month_name(d)] for _, d, _ in LEVELS]
+            self.goal_need = amount
+        else:
+            # complete_levels, find_bob, and collect_collectibles all resolve to
+            # punch-out reachability in the world today. find_bob needs every level.
+            self.goal_location_ids = [
+                LOCATION_NAME_TO_ID[punch_out_name(d)] for _, d, _ in LEVELS]
+            self.goal_need = len(self.goal_location_ids) if goal == "find_bob" else amount
+
+    def write_grants_if_changed(self) -> None:
+        if not self.install_dir:
+            return
+        ordered = [m for m, _, _ in LEVELS if m in self.unlocked_maps]
+        joined = ",".join(ordered)
+        if joined == self.last_grants_written:
+            return
+        try:
+            grants.write(self.install_dir / "Saves" / "VCArchipelagoGrants.sav", ordered)
+        except OSError as error:
+            client_logger.error(f"Could not write the grants file: {error}")
+            return
+        self.last_grants_written = joined
+        client_logger.info(f"Unlocked {len(ordered)} level(s).")
+
+    async def apply_mod_state(self, state: dict[str, str]) -> None:
+        """Map the current level's reported rungs to location checks and send the
+        ones this seed actually has."""
+        if not self.slot:
+            return
+        display = DISPLAY_BY_MAP.get(state.get("APMap", ""))
+        if not display:
+            return
+        new_ids: list[int] = []
+        for rung in parse_rungs(state.get("APMilestones", "")):
+            name = (employee_of_the_month_name(display) if rung >= 100
+                    else milestone_name(display, rung))
+            loc_id = LOCATION_NAME_TO_ID.get(name)
+            if loc_id is not None and loc_id in self.missing_locations:
+                new_ids.append(loc_id)
+        if new_ids:
+            await self.check_locations(new_ids)
+        await self.maybe_send_goal()
+
+    async def maybe_send_goal(self) -> None:
+        if self.finished_game or not self.goal_location_ids:
+            return
+        reached = sum(1 for loc_id in self.goal_location_ids
+                      if loc_id in self.checked_locations)
+        if reached >= self.goal_need:
+            await self.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
+            self.finished_game = True
+            client_logger.info("Goal complete. The shift is over.")
+
+    def run_gui(self) -> None:
+        from kvui import GameManager
+
+        class VCDManager(GameManager):
+            logging_pairs = [("Client", "Archipelago")]
+            base_title = "Viscera Cleanup Detail Client"
+
+        self.ui = VCDManager(self)
+        self.ui_task = asyncio.create_task(self.ui.async_run(), name="UI")
+
+
+async def vcd_bridge_loop(ctx: VCDContext) -> None:
+    """Poll the mod state file and act on each new APSeq."""
+    while not ctx.exit_event.is_set():
+        await asyncio.sleep(POLL_SECONDS)
+        if not ctx.install_dir or not ctx.slot:
+            continue
+        state = read_mod_state(ctx.install_dir)
+        seq = state.get("APSeq")
+        if not seq or seq == ctx.last_seq:
+            continue
+        ctx.last_seq = seq
+        await ctx.apply_mod_state(state)
+
+
+def launch() -> None:
+    Utils.init_logging("VCDClient", exception_logger="Client")
+
+    async def main() -> None:
+        parser = get_base_parser()
+        parser.add_argument("--install", default=None,
+                            help="Path to the Viscera install directory.")
+        args = parser.parse_args()
+
+        ctx = VCDContext(args.connect, args.password)
+        if args.install:
+            ctx.set_install_dir(args.install)
+        ctx.server_task = asyncio.create_task(server_loop(ctx), name="ServerLoop")
+        if gui_enabled:
+            ctx.run_gui()
+        ctx.run_cli()
+        bridge_task = asyncio.create_task(vcd_bridge_loop(ctx), name="VCDBridge")
+
+        await ctx.exit_event.wait()
+        bridge_task.cancel()
+        await ctx.shutdown()
+
+    import colorama
+    colorama.init()
+    asyncio.run(main())
+    colorama.deinit()
+
+
+if __name__ == "__main__":
+    launch()

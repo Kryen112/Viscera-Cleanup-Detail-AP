@@ -10,10 +10,13 @@ Collectible and Bob-chain checks are TODO. See V1_PLAN.md and CLAUDE.md.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Union
 
+import settings
 from BaseClasses import Item, ItemClassification, Location, Region
 from worlds.AutoWorld import World
+from worlds.LauncherComponents import (Component, Type, components,
+                                       launch_subprocess)
 
 from .items import (FILLER_NAMES, ITEM_GROUPS, ITEM_NAME_TO_ID,
                     LEVEL_ACCESS_ITEMS, access_item_name)
@@ -25,6 +28,34 @@ from .options import VCDOptions
 
 GAME_NAME = "Viscera Cleanup Detail"
 PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(LEVEL_ACCESS_ITEMS)
+
+
+def _launch_client() -> None:
+    from .client import launch
+    launch_subprocess(launch, name="VCDClient")
+
+
+components.append(Component("Viscera Cleanup Detail Client", func=_launch_client,
+                            component_type=Type.CLIENT))
+
+
+class VCDSettings(settings.Group):
+    # Client settings, stored in host.yaml under viscera_cleanup_detail_options.
+    class InstallFolder(settings.UserFolderPath):
+        """Viscera Cleanup Detail install folder: the root holding Binaries (with
+        Win32/UDK.exe) and UDKGame. The client reads and writes game state here and
+        launches the game. Blank by default; the client offers a folder picker on
+        first connect and saves the choice here. Use forward slashes."""
+        description = "Viscera Cleanup Detail install folder"
+        required = False
+
+    class AutoLaunchGame(settings.Bool):
+        """Launch UDK.exe automatically when the client connects to a seed (once per
+        client session). On by default. Set to false to launch it yourself or with
+        the /play command."""
+
+    install_folder: InstallFolder = InstallFolder("")
+    auto_launch_game: Union[AutoLaunchGame, bool] = True
 
 
 class VCDItem(Item):
@@ -41,6 +72,7 @@ class VCDWorld(World):
     game = GAME_NAME
     options_dataclass = VCDOptions
     options: VCDOptions
+    settings: ClassVar[VCDSettings]
 
     item_name_to_id = ITEM_NAME_TO_ID
     location_name_to_id = LOCATION_NAME_TO_ID
