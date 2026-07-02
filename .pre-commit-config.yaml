@@ -1,0 +1,28 @@
+# Pre-commit gate: hygiene, lint (check-only), and the world's own tests.
+# Install once with:  pip install pre-commit  &&  pre-commit install
+# Run on demand with: pre-commit run --all-files
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.2.0
+    hooks:
+      # Reads setup.cfg, lints only the changed .py files. No auto-fix.
+      - id: flake8
+
+  - repo: local
+    hooks:
+      - id: world-tests
+        name: world tests (pytest)
+        entry: python VCD_AP/scripts/run_world_tests.py
+        language: system
+        pass_filenames: false
+        files: ^VCD_AP/apworld/.*\.py$

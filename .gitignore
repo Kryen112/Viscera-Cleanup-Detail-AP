@@ -19,3 +19,9 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local-only working files, not part of the shipped world. Anchored to the repo
+# root so VCD_AP/scripts (the apworld test runner) is still tracked.
+/plans/
+/scripts/
+/spikes/
