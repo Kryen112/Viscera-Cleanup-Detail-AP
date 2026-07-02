@@ -10,10 +10,13 @@
 // where the punchout handler's ProcessMapState recomputes FinalPenalty. Every
 // per-map handler extends VCPunchoutHandler_General, which owns those fields.
 //
+// Level access is gated two ways: the curated menu (VCGameViewportClient_Archipelago
+// hides locked levels from the list) is the front door, and EnforceLevelGate here
+// refuses a locked level that is reached some other way.
+//
 // TODO: detect punch-out, speedrun, and collectibles as checks; make detection
 // event-driven where the game gives an event; throttle the mess scan (calling
-// ProcessMapState every tick is a full scan); enforce level gating (refuse to
-// start a level not in the client-written unlocked set).
+// ProcessMapState every second is a full scan).
 class VCGame_Archipelago extends VCGame;
 
 // The published state object. Not named "State": that is a reserved UnrealScript
@@ -32,6 +35,69 @@ event InitGame(string Options, out string ErrorMessage)
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
     SetTimer(1.0, true, 'PublishCleanliness');
+    EnforceLevelGate();
+}
+
+// Reads the client-written unlocked set (Saves\VCArchipelagoGrants.sav, fresh via
+// BasicLoadObject) and, if this level is not unlocked, returns the player to the
+// Office. The Office and menu maps are always allowed. The client is the only
+// writer of the grants file; the mod only reads it.
+//
+// This only ever runs in Archipelago mode: the class is instantiated only for a
+// level launched as ?Game=VCArchipelago.VCGame_Archipelago. Cleanup and Speedrun
+// use their own GameInfo, so normal play (including workshop maps) is untouched;
+// workshop maps are refused only inside an Archipelago run, where they are never
+// granted.
+function EnforceLevelGate()
+{
+    local VCMapInfo MapInfo;
+    local string mapName;
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.bIsOfficeLevel)
+        return;
+
+    mapName = WorldInfo.GetMapName(true);
+    if (IsMapUnlocked(mapName))
+    {
+        `log("VCAP GATE map="$mapName$" allowed=true");
+        return;
+    }
+
+    `log("VCAP GATE map="$mapName$" allowed=false locked; returning to Office");
+    // Let the level finish loading before travelling out.
+    SetTimer(1.0, false, 'BounceLockedLevel');
+}
+
+function bool IsMapUnlocked(string MapName)
+{
+    local VCArchipelagoGrants Grants;
+    local string unlocked;
+
+    Grants = new class'VCArchipelagoGrants';
+    if (!class'Engine'.static.BasicLoadObject(Grants, "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1))
+        return false;
+    unlocked = Grants.UnlockedMaps;
+    return unlocked != "" && InStr(","$unlocked$",", ","$MapName$",") != -1;
+}
+
+function BounceLockedLevel()
+{
+    local VCGameViewportClient ViewportClient;
+
+    // Stop our timer so it does not fire against a level being torn down.
+    ClearTimer('PublishCleanliness');
+
+    // The trophy handler is persistent (it lives on the viewport client and
+    // survives travel) and holds a reference to this level's punchout handler.
+    // The normal punch-out flow clears that; our abrupt travel does not, so the
+    // old world would leak and garbage collection aborts (appError). Break the
+    // reference here. The next level re-sets it on load.
+    ViewportClient = VCGameViewportClient(class'Engine'.static.GetEngine().GameViewport);
+    if (ViewportClient != None && ViewportClient.TrophyHandler != None)
+        ViewportClient.TrophyHandler.PunchoutHandler = None;
+
+    ConsoleCommand("open VC_JanitorOffice");
 }
 
 function PublishCleanliness()

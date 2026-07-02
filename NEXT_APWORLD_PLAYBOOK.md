@@ -428,6 +428,57 @@ or its saves.
   client tracks it with no bursts. Put the state on its own small config object so
   `SaveConfig` touches only that file, not the game config.
 
+### B.6b The compiled UI is a hard wall, and ActiveClassRedirects will not scale it
+The menus are compiled UI classes in a content/script package you cannot
+recompile. Two things follow, both learned the hard way:
+- A menu opened by a hardcoded `Class'Package.MenuClass'` reference cannot be
+  swapped for your subclass. `ActiveClassRedirects` (in `[Core.System]`) only fix
+  up cross-package imports and serialized references (maps, save games); they do
+  NOT redirect an intra-package script class literal (e.g. a menu in package X
+  opening another class in package X). We confirmed the redirect reached the
+  effective config and our subclass compiled, yet the override never ran.
+- So a filter hook that lives on a UI class (for us, the level-list filter
+  `GameAcceptsLevel`, a stub begging to be overridden) is unreachable if you
+  cannot get your subclass instantiated. Do not sink time into redirect tricks for
+  intra-package UI.
+- What you CAN do to the UI from config: the data it reads. Menu list entries come
+  from `bSearchAllInis` data providers, so you can add or hide entries by writing
+  provider inis. But those are startup-cached (like all config), so config edits do
+  not take until a restart.
+
+### B.6c Curate a menu list at runtime by flipping the data provider fields
+You do not need to reach the menu class to curate its list. The menu rebuilds each
+open from data provider objects and honors their fields (for the level list, it
+shows a map only when `bHideFromMenu` is false). So flip that field on the live
+provider objects and the next rebuild reflects it. This gives a dynamic, per-seed
+curated list script-only, which B.6b wrongly called impossible.
+
+The trap is WHERE and WHEN you flip. The flip has to be on the instances the menu
+reads, at the moment it reads them. Both of the obvious spots fail:
+- From your GameInfo in a gameplay level: the providers are re-created when the
+  menu map re-registers its UI on travel, so the flip is discarded.
+- From the datastore itself (subclass via `GlobalDataStoreClasses`, override the
+  `InitializeListElementProviders` or `Registered` events): fires during
+  registration, before the providers finish loading their config, so the config
+  value overwrites the flip. A re-read right after confirms the flip stuck on the
+  returned instances, yet the menu still ignores it.
+
+What works: a persistent object that ticks in the menu map. Subclass the viewport
+client (`[Engine.Engine] GameViewportClientClassName`, config-swappable) and flip
+the providers on a slow timer in `Tick`. The viewport client is the same object
+the menu reaches through `GetViewportClient()`, it survives travel, and it ticks
+in the FrontEnd, so it curates in the menu's own context and picks up state changes
+live (re-read the `.sav` each pass). Enumerate providers exactly as the menu does:
+`GetDataStoreClient().FindDataStore(tag)` then the native static
+`GetAllResourceDataProviders(ProviderClass, out list)`. Do NOT try to subclass the
+provider class to set the field in its own `InitializeProvider`: the map providers
+are `perobjectconfig` sections keyed by the stock class name, so a renamed subclass
+finds no config and loads nothing.
+
+Still enforce in-engine as a backstop (refuse the action from your GameInfo,
+reading fresh state from a `.sav` via BasicLoadObject): the curated list is the
+front door, the refusal covers console commands and any client/menu race.
+
 ### B.7 Reading game state from your mod
 - A field is only readable from your package if it is not `private` or
   `protected`. Interface methods and concrete-class methods differ. Decompile to
