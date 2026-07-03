@@ -88,7 +88,7 @@ class TestNoOver100ByDefault(VCDTestBase):
 
 
 class TestTrapPercentage(VCDTestBase):
-    options = {"trap_percentage": 50}
+    options = {"trap_percentage": 50, "useful_percentage": 0}
 
     def test_half_the_filler_is_traps_and_classified_trap(self):
         from BaseClasses import ItemClassification
@@ -112,13 +112,79 @@ class TestTrapPercentage(VCDTestBase):
             self.assertEqual(item.classification, ItemClassification.trap)
 
 
-class TestNoTrapsByDefault(VCDTestBase):
+class TestUsefulPercentage(VCDTestBase):
+    options = {"trap_percentage": 0, "useful_percentage": 50}
+
+    def test_half_the_filler_is_useful_and_classified_useful(self):
+        from BaseClasses import ItemClassification
+        from ..traps import USEFUL_NAMES
+        pool_useful = [item for item in self.multiworld.itempool
+                       if item.name in USEFUL_NAMES]
+        filler = [item for item in self.multiworld.itempool
+                  if item.name not in USEFUL_NAMES
+                  and item.classification == ItemClassification.filler]
+        self.assertGreater(len(pool_useful), 0)
+        # Half the filler slots, rounded down.
+        self.assertEqual(len(pool_useful), (len(pool_useful) + len(filler)) // 2)
+        for item in pool_useful:
+            self.assertEqual(item.classification, ItemClassification.useful, item.name)
+
+    def test_useful_items_never_progression(self):
+        from BaseClasses import ItemClassification
+        from ..traps import USEFUL_NAMES
+        for name in USEFUL_NAMES:
+            item = self.world.create_item(name)
+            self.assertEqual(item.classification, ItemClassification.useful)
+
+
+class TestTrapAndUsefulSharesCapAtTheFiller(VCDTestBase):
+    options = {"trap_percentage": 60, "useful_percentage": 60}
+
+    def test_traps_take_their_share_first(self):
+        from BaseClasses import ItemClassification
+        from ..traps import TRAP_NAMES, USEFUL_NAMES
+        pool_traps = sum(1 for item in self.multiworld.itempool
+                         if item.name in TRAP_NAMES)
+        pool_useful = sum(1 for item in self.multiworld.itempool
+                          if item.name in USEFUL_NAMES)
+        plain_filler = sum(1 for item in self.multiworld.itempool
+                           if item.name not in TRAP_NAMES
+                           and item.name not in USEFUL_NAMES
+                           and item.classification == ItemClassification.filler)
+        filler_slots = pool_traps + pool_useful + plain_filler
+        self.assertEqual(pool_traps, filler_slots * 60 // 100)
+        # The useful share is capped at what the traps left over.
+        self.assertEqual(pool_useful, filler_slots - pool_traps)
+        self.assertEqual(plain_filler, 0)
+
+
+class TestDefaultShares(VCDTestBase):
     options = {}
 
-    def test_pool_has_no_traps(self):
-        from ..traps import TRAP_NAMES
+    def test_defaults_are_five_percent_traps_and_fifteen_percent_useful(self):
+        from BaseClasses import ItemClassification
+        from ..traps import TRAP_NAMES, USEFUL_NAMES
+        pool_traps = sum(1 for item in self.multiworld.itempool
+                         if item.name in TRAP_NAMES)
+        pool_useful = sum(1 for item in self.multiworld.itempool
+                          if item.name in USEFUL_NAMES)
+        plain_filler = sum(1 for item in self.multiworld.itempool
+                           if item.name not in TRAP_NAMES
+                           and item.name not in USEFUL_NAMES
+                           and item.classification == ItemClassification.filler)
+        filler_slots = pool_traps + pool_useful + plain_filler
+        self.assertEqual(pool_traps, filler_slots * 5 // 100)
+        self.assertEqual(pool_useful, filler_slots * 15 // 100)
+
+
+class TestZeroPercentagesDisableTrapsAndUseful(VCDTestBase):
+    options = {"trap_percentage": 0, "useful_percentage": 0}
+
+    def test_pool_has_no_traps_or_useful_items(self):
+        from ..traps import TRAP_NAMES, USEFUL_NAMES
         for item in self.multiworld.itempool:
             self.assertNotIn(item.name, TRAP_NAMES)
+            self.assertNotIn(item.name, USEFUL_NAMES)
 
 
 class TestStep25(VCDTestBase):

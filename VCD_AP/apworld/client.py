@@ -48,10 +48,11 @@ ACCESS_ID_TO_MAP: dict[int, str] = {
     for map_name, display, _title in LEVELS
 }
 
-# Received-item id to the trap type token the mod switches on.
-TRAP_ID_TO_TYPE: dict[int, str] = {
-    ITEM_NAME_TO_ID[name]: trap_type
-    for name, trap_type in traps.TRAP_TYPE_BY_NAME.items()
+# Received-item id to the queued spawn type token the mod switches on, for
+# traps and useful supply drops alike.
+QUEUE_ID_TO_TYPE: dict[int, str] = {
+    ITEM_NAME_TO_ID[name]: queue_type
+    for name, queue_type in traps.QUEUE_TYPE_BY_NAME.items()
 }
 
 
@@ -490,7 +491,7 @@ class VCDContext(CommonContext):
             return
         seed_tag, baseline, queue = traps.queue_fields(
             self.seed_name, self.trap_baseline,
-            [item.item for item in self.items_received], TRAP_ID_TO_TYPE)
+            [item.item for item in self.items_received], QUEUE_ID_TO_TYPE)
         payload = f"{seed_tag}|{baseline}|{queue}"
         if payload == self.last_traps_written:
             return

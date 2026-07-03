@@ -1,16 +1,18 @@
-"""The trap queue file the client writes and the mod reads.
+"""The spawn queue file the client writes and the mod reads. It carries every
+received item with an in-level effect: traps and useful supply drops alike.
 
 ``Saves\\VCArchipelagoTraps.sav`` holds three string properties (see grants.py
 for the byte layout):
 - ``SeedTag``: the connected seed, so a stale file from another seed is never
   replayed.
 - ``BaselineIndex``: how many items the player already held when this session
-  connected. Traps at or below the baseline are treated as already applied, so
-  a fresh connect never dumps a backlog into the level.
+  connected. Entries at or below the baseline are treated as already applied,
+  so a fresh connect never dumps a backlog into the level.
 - ``TrapQueue``: the full ordered queue as ``index:Type`` entries, e.g.
-  ``"3:MessDump,7:Slowdown"``. Indexes are 1-based positions in the framework's
-  received-item list, so the queue is rebuilt identically on every reconnect;
-  the mod tracks the last index it applied and applies each new trap once.
+  ``"3:MessDump,7:CleanBucket"``. Indexes are 1-based positions in the
+  framework's received-item list, so the queue is rebuilt identically on every
+  reconnect; the mod tracks the last index it applied and applies each new
+  entry once.
 """
 from __future__ import annotations
 
@@ -26,29 +28,39 @@ TRAP_TYPE_BY_NAME: dict[str, str] = {
 }
 TRAP_NAMES: list[str] = list(TRAP_TYPE_BY_NAME)
 
+# Helpful supply drops that ride the same queue as traps, with their own tokens.
+USEFUL_TYPE_BY_NAME: dict[str, str] = {
+    "Clean Water Bucket": "CleanBucket",
+    "Empty Bin": "EmptyBin",
+}
+USEFUL_NAMES: list[str] = list(USEFUL_TYPE_BY_NAME)
 
-def build_queue(received_item_ids: "list[int]", trap_id_to_type: "dict[int, str]",
+# Every queued spawn type, trap and useful alike, for building the queue.
+QUEUE_TYPE_BY_NAME: dict[str, str] = {**TRAP_TYPE_BY_NAME, **USEFUL_TYPE_BY_NAME}
+
+
+def build_queue(received_item_ids: "list[int]", queue_id_to_type: "dict[int, str]",
                 ) -> str:
-    """The full trap queue implied by the received-item list: one ``index:Type``
-    entry per trap item, 1-based, in receive order."""
+    """The full spawn queue implied by the received-item list: one ``index:Type``
+    entry per trap or useful item, 1-based, in receive order."""
     entries = [
-        f"{position}:{trap_id_to_type[item_id]}"
+        f"{position}:{queue_id_to_type[item_id]}"
         for position, item_id in enumerate(received_item_ids, start=1)
-        if item_id in trap_id_to_type
+        if item_id in queue_id_to_type
     ]
     return ",".join(entries)
 
 
 def queue_fields(seed_name: str, trap_baseline: "int | None",
                  received_item_ids: "list[int]",
-                 trap_id_to_type: "dict[int, str]") -> "tuple[str, int, str]":
+                 queue_id_to_type: "dict[int, str]") -> "tuple[str, int, str]":
     """The (seed tag, baseline, queue) triple the traps file carries. Before the
     resync packet fixes the baseline, every item known so far counts into it, so
     the queue and baseline written together are always consistent and a connect
     can never replay a backlog."""
     baseline = (trap_baseline if trap_baseline is not None
                 else len(received_item_ids))
-    return seed_name, baseline, build_queue(received_item_ids, trap_id_to_type)
+    return seed_name, baseline, build_queue(received_item_ids, queue_id_to_type)
 
 
 def write(path: Path, seed_tag: str, baseline_index: int, queue: str) -> None:

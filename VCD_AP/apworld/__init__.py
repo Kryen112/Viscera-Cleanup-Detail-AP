@@ -25,7 +25,7 @@ from .collectibles import (BOB_ALTAR_MAP, BOB_NOTE_MAPS, COLLECTIBLES,
                            GATED_COLLECTIBLE_TOKENS)
 from .items import (FILLER_NAMES, ITEM_GROUPS, ITEM_NAME_TO_ID,
                     LEVEL_ACCESS_ITEMS, access_item_name)
-from .traps import TRAP_NAMES
+from .traps import TRAP_NAMES, USEFUL_NAMES
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (BOB_GATED_LOCATIONS, FIND_BOB_LOCATION,
                         LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
@@ -36,6 +36,7 @@ from .options import VCDOptions
 GAME_NAME = "Viscera Cleanup Detail"
 PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(LEVEL_ACCESS_ITEMS)
 TRAP_ITEM_NAMES: frozenset[str] = frozenset(TRAP_NAMES)
+USEFUL_ITEM_NAMES: frozenset[str] = frozenset(USEFUL_NAMES)
 
 
 def _launch_client() -> None:
@@ -182,6 +183,8 @@ class VCDWorld(World):
             classification = ItemClassification.progression
         elif name in TRAP_ITEM_NAMES:
             classification = ItemClassification.trap
+        elif name in USEFUL_ITEM_NAMES:
+            classification = ItemClassification.useful
         else:
             classification = ItemClassification.filler
         return VCDItem(name, classification, self.item_name_to_id[name], self.player)
@@ -235,9 +238,15 @@ class VCDWorld(World):
             len(self._enabled_locations_for(m)) for m in self.pooled_maps)
         filler_slots = active_locations - placed
         trap_slots = filler_slots * int(self.options.trap_percentage.value) // 100
+        # Traps take their share first; supplies cap at the remaining slots.
+        useful_slots = min(
+            filler_slots * int(self.options.useful_percentage.value) // 100,
+            filler_slots - trap_slots)
         for _ in range(trap_slots):
             self.multiworld.itempool.append(self.create_item(self.random.choice(TRAP_NAMES)))
-        for _ in range(filler_slots - trap_slots):
+        for _ in range(useful_slots):
+            self.multiworld.itempool.append(self.create_item(self.random.choice(USEFUL_NAMES)))
+        for _ in range(filler_slots - trap_slots - useful_slots):
             self.multiworld.itempool.append(self.create_item(self.get_filler_item_name()))
 
     def _goal_locations(self) -> tuple[list[str], int]:

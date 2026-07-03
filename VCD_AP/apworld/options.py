@@ -47,7 +47,19 @@ class TrapPercentage(Range):
     display_name = "Trap percentage"
     range_start = 0
     range_end = 100
-    default = 0
+    default = 5
+
+
+class UsefulPercentage(Range):
+    """The share of filler items that become useful supplies: a bucket of
+    clean water or an empty bin dropped next to the janitor. Supplies arrive
+    from the multiworld while cleaning; they are never required by logic. When
+    trap_percentage and useful_percentage together pass 100, traps take their
+    share first. 0 disables supplies."""
+    display_name = "Useful percentage"
+    range_start = 0
+    range_end = 100
+    default = 15
 
 
 class LevelPool(OptionSet):
@@ -121,6 +133,7 @@ class VCDOptions(PerGameCommonOptions):
     above_and_beyond: AboveAndBeyond
     speedrunsanity: Speedrunsanity
     trap_percentage: TrapPercentage
+    useful_percentage: UsefulPercentage
     goal: Goal
     goal_amount: GoalAmount
     starting_levels: StartingLevels

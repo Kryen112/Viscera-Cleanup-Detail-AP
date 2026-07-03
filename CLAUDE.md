@@ -71,15 +71,19 @@ The reviewer treats a violation of any of these as a correctness blocker.
   data (map name tables, punchout handlers, `GP_Notes_Arch`); do not hand-guess
   entries. The Doom Armour and Shotgun are an Office stash, not locations.
 - Item classification lives in `create_item`: level-access items are progression,
-  trap items are `ItemClassification.trap`, the rest is filler. No tool-gating.
-  Traps are never progression and never required by logic; the `trap_percentage`
-  option (default 0) converts a share of filler slots into traps.
-- Traps travel client to mod via `Saves\VCArchipelagoTraps.sav` (SeedTag,
-  BaselineIndex, and a full "index:Type" queue keyed by received-item position).
-  The mod stores the last applied index in its config state, applies one trap per
-  poll, only in cleanable levels, and never replays another seed's queue or a
-  pre-connect backlog. A trap must never softlock, block a required check, or
-  corrupt a save.
+  trap items are `ItemClassification.trap`, useful supply items are
+  `ItemClassification.useful`, the rest is filler. No tool-gating. Traps and
+  supplies are never progression and never required by logic; the
+  `trap_percentage` (default 5) and `useful_percentage` (default 15) options
+  convert shares of filler slots, traps first.
+- Traps and useful supply drops travel client to mod via
+  `Saves\VCArchipelagoTraps.sav` (SeedTag, BaselineIndex, and a full
+  "index:Type" queue keyed by received-item position). The mod stores the last
+  applied index in its config state, applies one entry per poll, only in
+  cleanable levels, and never replays another seed's queue or a pre-connect
+  backlog. A trap must never softlock, block a required check, or corrupt a
+  save. Supply drops reuse the game's own dispenser spawns (a plain VCBucket or
+  VCBin) so they score exactly like vended equipment.
 - Game logic lives in one boolean-predicate access-rule module. Read changes
   there as logic, not plumbing.
 - The apworld is hand-maintained. There is no generator and no `data/*.yaml`

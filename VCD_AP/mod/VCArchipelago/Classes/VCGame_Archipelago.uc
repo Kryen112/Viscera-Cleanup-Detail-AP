@@ -149,18 +149,19 @@ function StampSeedTag()
         APState.APSeedTag = "";
 }
 
-// Applies traps from the client-written queue, one per poll so a burst spaces
-// itself out. The queue file is read fresh every time (config-style objects
-// cache at startup; BasicLoadObject does not). The applied counter lives in the
-// config state, never in memory alone, so a relaunch cannot replay traps.
+// Applies entries from the client-written queue (traps and useful supply
+// drops), one per poll so a burst spaces itself out. The queue file is read
+// fresh every time (config-style objects cache at startup; BasicLoadObject does
+// not). The applied counter lives in the config state, never in memory alone,
+// so a relaunch cannot replay entries.
 function PollTraps()
 {
     local VCMapInfo MapInfo;
     local array<string> Entries;
     local int I, EntryIndex;
-    local string TrapType;
+    local string QueueType;
 
-    // Traps only fire in a cleanable gameplay level.
+    // Queue entries only fire in a cleanable gameplay level.
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
     if (MapInfo == None || MapInfo.bIsOfficeLevel || APState == None)
         return;
@@ -202,30 +203,38 @@ function PollTraps()
         EntryIndex = int(Left(Entries[I], InStr(Entries[I], ":")));
         if (EntryIndex <= APState.APTrapsApplied)
             continue;
-        TrapType = Mid(Entries[I], InStr(Entries[I], ":") + 1);
-        ApplyTrap(TrapType);
+        QueueType = Mid(Entries[I], InStr(Entries[I], ":") + 1);
+        ApplyQueueEntry(QueueType);
         APState.APTrapsApplied = EntryIndex;
         APState.SaveConfig();
         return;
     }
 }
 
-function ApplyTrap(string TrapType)
+function ApplyQueueEntry(string QueueType)
 {
-    `log("VCAP TRAP type="$TrapType);
-    if (TrapType ~= "MessDump")
+    `log("VCAP QUEUE type="$QueueType);
+    if (QueueType ~= "MessDump")
     {
         SpawnMessDump();
     }
-    else if (TrapType ~= "BucketSpill")
+    else if (QueueType ~= "BucketSpill")
     {
         // A level with no bucket in play still owes a setback.
         if (!SpillNearestBucket())
             SpawnMessDump();
     }
-    else if (TrapType ~= "Slowdown")
+    else if (QueueType ~= "Slowdown")
     {
         SlowJanitors();
+    }
+    else if (QueueType ~= "CleanBucket")
+    {
+        SpawnSupplyNearJanitor(class'VCBucket');
+    }
+    else if (QueueType ~= "EmptyBin")
+    {
+        SpawnSupplyNearJanitor(class'VCBin');
     }
 }
 
@@ -336,6 +345,38 @@ function RestoreJanitorSpeeds()
     }
     SlowedJanitors.Length = 0;
     SlowedJanitorSpeeds.Length = 0;
+}
+
+// Drops a supply item on the floor near the janitor. A plain spawn is exactly
+// what the game's own dispensers vend: a fresh VCBucket is full of clean water
+// and a fresh VCBin is empty, and both score as misplaced equipment if left
+// out, same as a vended one.
+function SpawnSupplyNearJanitor(class<VCDebris> SupplyClass)
+{
+    local VCPawn Janitor;
+    local Vector Start, HitLocation, HitNormal, Offset;
+    local Actor Floor;
+    local int I;
+
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+        break;
+    if (Janitor == None)
+        return;
+
+    for (I = 0; I < 10; I++)
+    {
+        Offset = VRand() * RandRange(64.0, 160.0);
+        Offset.Z = 0.0;
+        Start = Janitor.Location + Offset + vect(0, 0, 32);
+        // World-geometry-only trace, straight down.
+        Floor = Trace(HitLocation, HitNormal, Start - vect(0, 0, 512), Start, false);
+        if (Floor == None)
+            continue;
+        if (Spawn(SupplyClass,,, HitLocation + vect(0, 0, 24)) != None)
+            return;
+    }
+    // No clear floor spot took the spawn; drop it from above the janitor.
+    Spawn(SupplyClass,,, Janitor.Location + vect(0, 0, 96));
 }
 
 // The game's single legitimate punch-out path: the punch machine and the level

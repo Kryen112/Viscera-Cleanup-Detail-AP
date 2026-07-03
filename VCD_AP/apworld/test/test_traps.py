@@ -1,4 +1,4 @@
-"""Tests for the trap queue: the codec layout the mod reads, the queue the
+"""Tests for the spawn queue: the codec layout the mod reads, the queue the
 client derives from the received-item list, and the baseline that keeps a
 connect from replaying a backlog."""
 import unittest
@@ -7,12 +7,14 @@ from .bases import read_sav_properties
 from .. import grants, traps
 from ..items import ITEM_NAME_TO_ID
 
-TRAP_ID_TO_TYPE = {
-    ITEM_NAME_TO_ID[name]: trap_type
-    for name, trap_type in traps.TRAP_TYPE_BY_NAME.items()
+QUEUE_ID_TO_TYPE = {
+    ITEM_NAME_TO_ID[name]: queue_type
+    for name, queue_type in traps.QUEUE_TYPE_BY_NAME.items()
 }
 MESS_DUMP = ITEM_NAME_TO_ID["Mess Dump Trap"]
 SLOWDOWN = ITEM_NAME_TO_ID["Slowdown Trap"]
+CLEAN_BUCKET = ITEM_NAME_TO_ID["Clean Water Bucket"]
+EMPTY_BIN = ITEM_NAME_TO_ID["Empty Bin"]
 FILLER = ITEM_NAME_TO_ID["Overtime Pay"]
 
 
@@ -39,28 +41,33 @@ class TestTrapsFile(unittest.TestCase):
 class TestBuildQueue(unittest.TestCase):
     def test_queue_indexes_are_one_based_positions(self) -> None:
         received = [FILLER, MESS_DUMP, FILLER, FILLER, SLOWDOWN]
-        self.assertEqual(traps.build_queue(received, TRAP_ID_TO_TYPE),
+        self.assertEqual(traps.build_queue(received, QUEUE_ID_TO_TYPE),
                          "2:MessDump,5:Slowdown")
 
-    def test_no_traps_is_empty(self) -> None:
-        self.assertEqual(traps.build_queue([FILLER, FILLER], TRAP_ID_TO_TYPE), "")
+    def test_useful_items_ride_the_queue_in_receive_order(self) -> None:
+        received = [MESS_DUMP, CLEAN_BUCKET, FILLER, EMPTY_BIN]
+        self.assertEqual(traps.build_queue(received, QUEUE_ID_TO_TYPE),
+                         "1:MessDump,2:CleanBucket,4:EmptyBin")
+
+    def test_no_queued_items_is_empty(self) -> None:
+        self.assertEqual(traps.build_queue([FILLER, FILLER], QUEUE_ID_TO_TYPE), "")
 
 
 class TestQueueFields(unittest.TestCase):
     def test_fixed_baseline_is_kept(self) -> None:
         seed, baseline, queue = traps.queue_fields(
-            "seed_1", 1, [FILLER, MESS_DUMP], TRAP_ID_TO_TYPE)
+            "seed_1", 1, [FILLER, MESS_DUMP], QUEUE_ID_TO_TYPE)
         self.assertEqual((seed, baseline, queue), ("seed_1", 1, "2:MessDump"))
 
     def test_unknown_baseline_counts_every_known_item(self) -> None:
         # Before the resync packet fixes the baseline, everything known so far
         # is baselined, so the queued trap (index 2) can never apply early.
         seed, baseline, queue = traps.queue_fields(
-            "seed_1", None, [FILLER, MESS_DUMP], TRAP_ID_TO_TYPE)
+            "seed_1", None, [FILLER, MESS_DUMP], QUEUE_ID_TO_TYPE)
         self.assertEqual((seed, baseline, queue), ("seed_1", 2, "2:MessDump"))
 
     def test_unknown_baseline_with_no_items_is_zero(self) -> None:
-        self.assertEqual(traps.queue_fields("seed_1", None, [], TRAP_ID_TO_TYPE),
+        self.assertEqual(traps.queue_fields("seed_1", None, [], QUEUE_ID_TO_TYPE),
                          ("seed_1", 0, ""))
 
 
