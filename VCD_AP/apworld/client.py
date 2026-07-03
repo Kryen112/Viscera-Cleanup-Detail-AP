@@ -131,6 +131,28 @@ def location_names_from_state(state: dict[str, str]) -> list[str]:
     return names
 
 
+def goal_locations_from_slot_data(slot_data: dict) -> "tuple[list[int], int]":
+    """The location ids whose checks count toward the goal, and how many are
+    needed. Level goals count only the pooled levels. The collectible goal
+    keeps the full list: collectible checks outside the pool never exist
+    server-side, so they never arrive as checked."""
+    goal = slot_data.get("goal", "complete_levels")
+    amount = int(slot_data.get("goal_amount", len(LEVELS)))
+    pooled_maps = slot_data.get("pooled_maps")
+    pooled = set(m for m, _, _ in LEVELS) if pooled_maps is None else set(pooled_maps)
+    pooled_displays = [d for m, d, _ in LEVELS if m in pooled]
+    if goal == "employee_of_the_month":
+        return [LOCATION_NAME_TO_ID[employee_of_the_month_name(d)]
+                for d in pooled_displays], amount
+    if goal == "find_bob":
+        return [LOCATION_NAME_TO_ID[FIND_BOB_LOCATION]], 1
+    if goal == "collect_collectibles":
+        return [LOCATION_NAME_TO_ID[name]
+                for name in COLLECTIBLE_LOCATION_NAMES], amount
+    return [LOCATION_NAME_TO_ID[punch_out_name(d)]
+            for d in pooled_displays], amount
+
+
 def state_is_current(state: dict[str, str], seed_name: "str | None") -> bool:
     """Whether a state snapshot belongs to the connected seed. The mod stamps
     the state with the seed tag it reads from the traps file; a missing or
@@ -422,23 +444,8 @@ class VCDContext(CommonContext):
             self.write_traps_if_changed()
 
     def _set_goal(self, slot_data: dict) -> None:
-        goal = slot_data.get("goal", "complete_levels")
-        amount = int(slot_data.get("goal_amount", len(LEVELS)))
-        if goal == "employee_of_the_month":
-            self.goal_location_ids = [
-                LOCATION_NAME_TO_ID[employee_of_the_month_name(d)] for _, d, _ in LEVELS]
-            self.goal_need = amount
-        elif goal == "find_bob":
-            self.goal_location_ids = [LOCATION_NAME_TO_ID[FIND_BOB_LOCATION]]
-            self.goal_need = 1
-        elif goal == "collect_collectibles":
-            self.goal_location_ids = [
-                LOCATION_NAME_TO_ID[name] for name in COLLECTIBLE_LOCATION_NAMES]
-            self.goal_need = amount
-        else:
-            self.goal_location_ids = [
-                LOCATION_NAME_TO_ID[punch_out_name(d)] for _, d, _ in LEVELS]
-            self.goal_need = amount
+        self.goal_location_ids, self.goal_need = goal_locations_from_slot_data(
+            slot_data)
 
     def write_grants_if_changed(self) -> None:
         if not self.install_dir or not self.saves_ready:

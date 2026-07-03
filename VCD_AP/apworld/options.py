@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from Options import (Choice, NamedRange, PerGameCommonOptions, Range,
-                     StartInventoryPool, Toggle)
+from Options import (Choice, NamedRange, OptionSet, PerGameCommonOptions,
+                     Range, StartInventoryPool, Toggle)
+
+from .levels import LEVELS
 
 
 class MilestoneStep(Choice):
@@ -48,6 +50,19 @@ class TrapPercentage(Range):
     default = 0
 
 
+class LevelPool(OptionSet):
+    """The levels the seed plays, keyed by display name. Every level is a valid
+    key; the default is all of them. A level left out generates no checks and
+    no access item. The find_bob goal forces the Digsite and the six note
+    levels into the pool. The Digsite's gate-locked checks (Open the Digsite
+    Gates, Find Bob, the Red Keycard) only exist when the pool holds the
+    Digsite and every note level."""
+    display_name = "Level pool"
+    valid_keys = frozenset(d for _, d, _ in LEVELS)
+    # An ordered default keeps the generated template yaml stable.
+    default = tuple(d for _, d, _ in LEVELS)
+
+
 class Goal(Choice):
     """The win condition.
 
@@ -66,9 +81,10 @@ class Goal(Choice):
 
 
 class GoalAmount(NamedRange):
-    """How many levels (or collectibles) the goal needs. Level goals cap at the
-    26 levels; collect_collectibles caps at the 39 collectibles. `all` is every
-    level. Ignored by find_bob."""
+    """How many levels (or collectibles) the goal needs. It must fit the level
+    pool: asking for more levels than the pool holds, or more collectibles than
+    the pooled levels hold, fails generation. `all` is every level. Ignored by
+    find_bob."""
     display_name = "Goal amount"
     range_start = 1
     range_end = 39
@@ -89,6 +105,7 @@ class StartingLevels(NamedRange):
 @dataclass
 class VCDOptions(PerGameCommonOptions):
     start_inventory_from_pool: StartInventoryPool
+    level_pool: LevelPool
     milestone_step: MilestoneStep
     above_and_beyond: AboveAndBeyond
     speedrunsanity: Speedrunsanity

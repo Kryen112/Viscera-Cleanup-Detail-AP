@@ -3,7 +3,10 @@ location names, with the punch-out and speedrun policy applied, and only a
 snapshot stamped with the connected seed counts."""
 import unittest
 
-from ..client import location_names_from_state, parse_rungs, state_is_current
+from ..client import (goal_locations_from_slot_data, location_names_from_state,
+                      parse_rungs, state_is_current)
+from ..levels import LEVELS
+from ..locations import LOCATION_NAME_TO_ID
 
 
 class TestParseRungs(unittest.TestCase):
@@ -93,6 +96,28 @@ class TestLocationNamesFromState(unittest.TestCase):
             "Unearthly Excavation - Open the Digsite Gates",
             "Unearthly Excavation - Find Bob",
         ])
+
+
+class TestGoalLocationsFromSlotData(unittest.TestCase):
+    def test_level_goal_counts_only_pooled_levels(self) -> None:
+        ids, need = goal_locations_from_slot_data({
+            "goal": "complete_levels", "goal_amount": 2,
+            "pooled_maps": ["VC_SplatterStation", "VC_Cryo"]})
+        self.assertEqual(need, 2)
+        self.assertCountEqual(ids, [
+            LOCATION_NAME_TO_ID["Splatter Station - Punch Out"],
+            LOCATION_NAME_TO_ID["Cryogenesis - Punch Out"]])
+
+    def test_missing_pool_means_every_level(self) -> None:
+        ids, need = goal_locations_from_slot_data({
+            "goal": "employee_of_the_month", "goal_amount": 26})
+        self.assertEqual(len(ids), len(LEVELS))
+        self.assertEqual(need, 26)
+
+    def test_find_bob_needs_exactly_one(self) -> None:
+        ids, need = goal_locations_from_slot_data({"goal": "find_bob"})
+        self.assertEqual(len(ids), 1)
+        self.assertEqual(need, 1)
 
 
 if __name__ == "__main__":

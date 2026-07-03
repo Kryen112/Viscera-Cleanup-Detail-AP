@@ -16,21 +16,21 @@ from typing import ClassVar, Union
 
 import settings
 from BaseClasses import Item, ItemClassification, Location, Region
+from Options import OptionError
 from worlds.AutoWorld import World
 from worlds.LauncherComponents import (Component, Type, components,
                                        launch_subprocess)
 
-from .collectibles import (BOB_NOTE_MAPS, COLLECTIBLES,
+from .collectibles import (BOB_ALTAR_MAP, BOB_NOTE_MAPS, COLLECTIBLES,
                            GATED_COLLECTIBLE_TOKENS)
 from .items import (FILLER_NAMES, ITEM_GROUPS, ITEM_NAME_TO_ID,
                     LEVEL_ACCESS_ITEMS, access_item_name)
 from .traps import TRAP_NAMES
-from .levels import DISPLAY_BY_MAP, LEVELS, MAP_NAMES
-from .locations import (COLLECTIBLE_LOCATION_NAMES, DIGSITE_GATES_LOCATION,
-                        FIND_BOB_LOCATION, LOCATION_GROUPS, LOCATION_MAP,
-                        LOCATION_NAME_TO_ID, collectible_name,
-                        employee_of_the_month_name, location_enabled,
-                        punch_out_name)
+from .levels import DISPLAY_BY_MAP, LEVELS
+from .locations import (BOB_GATED_LOCATIONS, FIND_BOB_LOCATION,
+                        LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
+                        collectible_name, employee_of_the_month_name,
+                        location_enabled, punch_out_name)
 from .options import VCDOptions
 
 GAME_NAME = "Viscera Cleanup Detail"
@@ -95,18 +95,36 @@ class VCDWorld(World):
     location_name_groups = LOCATION_GROUPS
 
     started_maps: ClassVar[set[str]]
+    pooled_maps: ClassVar[list[str]]
+    bob_chain_pooled: ClassVar[bool]
 
     def generate_early(self) -> None:
-        pooled = list(MAP_NAMES)
-        start_n = min(int(self.options.starting_levels.value), len(pooled))
-        self.started_maps = set(self.random.sample(pooled, start_n))
-        # Cannot need more than exists: levels for the level goals, collectibles
-        # for the collectible goal.
-        cap = (len(COLLECTIBLE_LOCATION_NAMES)
-               if self.options.goal.current_key == "collect_collectibles"
-               else len(pooled))
-        if int(self.options.goal_amount.value) > cap:
-            self.options.goal_amount.value = cap
+        goal = self.options.goal.current_key
+        if goal == "find_bob":
+            # The goal needs the note levels and the Digsite; force them in.
+            self.options.level_pool.value |= {
+                DISPLAY_BY_MAP[m] for m in BOB_NOTE_MAPS + [BOB_ALTAR_MAP]}
+        chosen = self.options.level_pool.value
+        self.pooled_maps = [m for m, d, _ in LEVELS if d in chosen]
+        if not self.pooled_maps:
+            raise OptionError(f"{self.player_name}: level_pool holds no levels.")
+        pooled = set(self.pooled_maps)
+        self.bob_chain_pooled = pooled.issuperset(BOB_NOTE_MAPS + [BOB_ALTAR_MAP])
+        start_n = min(int(self.options.starting_levels.value), len(self.pooled_maps))
+        self.started_maps = set(self.random.sample(self.pooled_maps, start_n))
+        # The goal cannot need more than the pool holds: levels for the level
+        # goals, collectibles the pooled levels carry for the collectible goal.
+        if goal == "collect_collectibles":
+            cap = sum(1 for m, t, _ in COLLECTIBLES if m in pooled
+                      and (self.bob_chain_pooled
+                           or t not in GATED_COLLECTIBLE_TOKENS))
+        else:
+            cap = len(self.pooled_maps)
+        if goal != "find_bob" and int(self.options.goal_amount.value) > cap:
+            raise OptionError(
+                f"{self.player_name}: goal_amount "
+                f"{int(self.options.goal_amount.value)} needs more than the "
+                f"level pool holds ({cap}).")
 
     def create_item(self, name: str) -> VCDItem:
         if name in PROGRESSION_ITEM_NAMES:
@@ -131,12 +149,15 @@ class VCDWorld(World):
             name for name, loc_map in LOCATION_MAP.items()
             if loc_map == map_name
             and location_enabled(name, step, speedrunsanity, above_and_beyond)
+            and (self.bob_chain_pooled or name not in BOB_GATED_LOCATIONS)
         ]
 
     def create_regions(self) -> None:
         menu = Region("Menu", self.player, self.multiworld)
         self.multiworld.regions.append(menu)
         for map_name, display, _title in LEVELS:
+            if map_name not in self.pooled_maps:
+                continue
             region = Region(map_name, self.player, self.multiworld)
             self.multiworld.regions.append(region)
             access = access_item_name(display)
@@ -151,13 +172,16 @@ class VCDWorld(World):
     def create_items(self) -> None:
         placed = 0
         for map_name, display, _title in LEVELS:
+            if map_name not in self.pooled_maps:
+                continue
             item = self.create_item(access_item_name(display))
             if map_name in self.started_maps:
                 self.multiworld.push_precollected(item)
             else:
                 self.multiworld.itempool.append(item)
                 placed += 1
-        active_locations = sum(len(self._enabled_locations_for(m)) for m in MAP_NAMES)
+        active_locations = sum(
+            len(self._enabled_locations_for(m)) for m in self.pooled_maps)
         filler_slots = active_locations - placed
         trap_slots = filler_slots * int(self.options.trap_percentage.value) // 100
         for _ in range(trap_slots):
@@ -170,30 +194,35 @@ class VCDWorld(World):
         needed."""
         goal = self.options.goal.current_key
         amount = int(self.options.goal_amount.value)
+        pooled = set(self.pooled_maps)
         if goal == "employee_of_the_month":
-            return [employee_of_the_month_name(d) for _, d, _ in LEVELS], amount
+            return [employee_of_the_month_name(d)
+                    for m, d, _ in LEVELS if m in pooled], amount
         if goal == "find_bob":
             # Find Bob's own access rule carries the note levels plus the Digsite.
             return [FIND_BOB_LOCATION], 1
         if goal == "collect_collectibles":
-            return list(COLLECTIBLE_LOCATION_NAMES), amount
-        return [punch_out_name(d) for _, d, _ in LEVELS], amount
+            return [collectible_name(DISPLAY_BY_MAP[m], c)
+                    for m, t, c in COLLECTIBLES if m in pooled
+                    and (self.bob_chain_pooled
+                         or t not in GATED_COLLECTIBLE_TOKENS)], amount
+        return [punch_out_name(d) for m, d, _ in LEVELS if m in pooled], amount
 
     def set_rules(self) -> None:
         # The Digsite gate needs all nine Bob notes on the pedestal: six live in
         # the note levels (three are Office freebies), and Bob and the Red
         # Keycard sit behind the gate. So those checks need every note level on
-        # top of the Digsite access their region already requires. All 26
-        # access items are progression, so these are guaranteed reachable.
-        note_access = tuple(access_item_name(DISPLAY_BY_MAP[m]) for m in BOB_NOTE_MAPS)
+        # top of the Digsite access their region already requires. They only
+        # exist when the pool holds the whole chain, whose access items are all
+        # progression, so they are guaranteed reachable.
         player = self.player
-        gated = [DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION]
-        gated += [collectible_name(DISPLAY_BY_MAP[m], c)
-                  for m, t, c in COLLECTIBLES if t in GATED_COLLECTIBLE_TOKENS]
-        for name in gated:
-            self.get_location(name).access_rule = (
-                lambda state, items=note_access: state.has_all(items, player)
-            )
+        if self.bob_chain_pooled:
+            note_access = tuple(
+                access_item_name(DISPLAY_BY_MAP[m]) for m in BOB_NOTE_MAPS)
+            for name in BOB_GATED_LOCATIONS:
+                self.get_location(name).access_rule = (
+                    lambda state, items=note_access: state.has_all(items, player)
+                )
 
         locations, need = self._goal_locations()
         self.multiworld.completion_condition[player] = (
@@ -210,5 +239,5 @@ class VCDWorld(World):
             "above_and_beyond": bool(self.options.above_and_beyond),
             "speedrunsanity": bool(self.options.speedrunsanity),
             "started_maps": sorted(self.started_maps),
-            "pooled_maps": list(MAP_NAMES),
+            "pooled_maps": list(self.pooled_maps),
         }

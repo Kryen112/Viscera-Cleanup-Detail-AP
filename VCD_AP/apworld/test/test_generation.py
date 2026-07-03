@@ -6,12 +6,15 @@ tests, so each exercises a full generation. TestData needs no world.
 
 import unittest
 
+from Options import OptionError
+
 from .bases import VCDTestBase
 from ..collectibles import (BOB_NOTE_MAPS, BOB_NOTES, COLLECTIBLES,
                             GATED_COLLECTIBLE_TOKENS)
 from ..items import ITEM_NAME_TO_ID, access_item_name
 from ..levels import DISPLAY_BY_MAP, LEVELS, MAP_NAMES
-from ..locations import (DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION,
+from ..locations import (BOB_GATED_LOCATIONS, DIGSITE_GATES_LOCATION,
+                         FIND_BOB_LOCATION, LOCATION_MAP,
                          LOCATION_NAME_TO_ID, MILESTONE_PERCENT,
                          collectible_name, milestone_enabled, milestone_name,
                          over_100_rungs, punch_out_name, speedrun_name,
@@ -165,11 +168,95 @@ class TestCollectiblesGoalFullAmount(VCDTestBase):
         self.assertEqual(int(self.world.options.goal_amount.value), 39)
 
 
-class TestLevelGoalAmountClamped(VCDTestBase):
-    options = {"goal": "complete_levels", "goal_amount": 39}
+class TestLevelPool(VCDTestBase):
+    options = {"level_pool": {"Splatter Station", "Cryogenesis", "Gravity Drive"},
+               "goal_amount": 3}
 
-    def test_amount_clamped_to_the_level_count(self):
-        self.assertEqual(int(self.world.options.goal_amount.value), len(LEVELS))
+    def test_only_pooled_levels_have_locations(self):
+        maps = {LOCATION_MAP[loc.name]
+                for loc in self.multiworld.get_locations(self.player)}
+        self.assertEqual(maps, {"VC_SplatterStation", "VC_Cryo", "VC_ZeroG_New"})
+
+    def test_only_pooled_access_items_exist(self):
+        pool = (list(self.multiworld.itempool)
+                + self.multiworld.precollected_items[self.player])
+        access = [item.name for item in pool if item.name.endswith(" Access")]
+        self.assertCountEqual(access, ["Splatter Station Access",
+                                       "Cryogenesis Access",
+                                       "Gravity Drive Access"])
+
+    def test_slot_data_reports_the_pool(self):
+        self.assertEqual(self.world.fill_slot_data()["pooled_maps"],
+                         ["VC_SplatterStation", "VC_Cryo", "VC_ZeroG_New"])
+
+
+class TestLevelPoolDigsiteWithoutNotes(VCDTestBase):
+    # The Digsite without every note level: the gate can never open, so the
+    # gate-locked checks stay out while the open-area drops stay in.
+    options = {"level_pool": {"Unearthly Excavation", "Splatter Station"},
+               "goal_amount": 2}
+
+    def test_gated_checks_absent_open_area_drops_present(self):
+        names = {loc.name for loc in self.multiworld.get_locations(self.player)}
+        for gated in BOB_GATED_LOCATIONS:
+            self.assertNotIn(gated, names)
+        self.assert_location_exists(
+            collectible_name("Unearthly Excavation", "Bolter"))
+        self.assert_location_exists(
+            collectible_name("Unearthly Excavation", "Saber"))
+
+
+class TestFindBobGoalForcesPool(VCDTestBase):
+    options = {"level_pool": {"Splatter Station"}, "goal": "find_bob"}
+
+    def test_chain_levels_forced_into_the_pool(self):
+        for map_name in BOB_NOTE_MAPS + ["VC_Digsite"]:
+            self.assertIn(map_name, self.world.pooled_maps)
+        self.assert_location_exists(FIND_BOB_LOCATION)
+
+
+class TestCollectiblesGoalPooled(VCDTestBase):
+    # Cryogenesis and Gravity Drive hold two collectibles each, so four fit.
+    options = {"goal": "collect_collectibles", "goal_amount": 4,
+               "level_pool": {"Cryogenesis", "Gravity Drive"}}
+
+    def test_completion_needs_both_pooled_levels(self):
+        one = self.state_with([access_item_name("Cryogenesis")])
+        both = self.state_with([access_item_name("Cryogenesis"),
+                                access_item_name("Gravity Drive")])
+        self.assertFalse(self.multiworld.completion_condition[self.player](one))
+        self.assertTrue(self.multiworld.completion_condition[self.player](both))
+
+
+class TestPoolOptionErrors(unittest.TestCase):
+    @staticmethod
+    def _generate(options: dict) -> None:
+        probe_class = type("Probe", (VCDTestBase,), {"options": options})
+        probe_class("setUp").setUp()
+
+    def test_level_goal_over_pool_raises(self):
+        with self.assertRaises(OptionError):
+            self._generate({"level_pool": {"Splatter Station", "Cryogenesis"},
+                            "goal": "complete_levels", "goal_amount": 3})
+
+    def test_level_goal_over_level_count_raises(self):
+        with self.assertRaises(OptionError):
+            self._generate({"goal": "complete_levels", "goal_amount": 39})
+
+    def test_default_goal_amount_over_small_pool_raises(self):
+        # The default amount is every level; a two-level pool cannot carry it.
+        with self.assertRaises(OptionError):
+            self._generate({"level_pool": {"Splatter Station", "Cryogenesis"}})
+
+    def test_collectible_goal_over_pooled_collectibles_raises(self):
+        # The two pooled levels hold four collectibles between them.
+        with self.assertRaises(OptionError):
+            self._generate({"level_pool": {"Cryogenesis", "Gravity Drive"},
+                            "goal": "collect_collectibles", "goal_amount": 5})
+
+    def test_empty_pool_raises(self):
+        with self.assertRaises(OptionError):
+            self._generate({"level_pool": set(), "goal_amount": 1})
 
 
 class TestCompleteFew(VCDTestBase):
@@ -191,7 +278,6 @@ class TestData(unittest.TestCase):
     def test_each_level_has_the_full_static_set(self):
         # Punch Out + 19 clean rungs + Employee of the Month + Speedrun = 22,
         # plus the level's collectibles, its Bob note, and the Digsite events.
-        from ..locations import LOCATION_MAP
         for _map, display, _title in LEVELS:
             expected = 22 + len(over_100_rungs(_map))
             expected += sum(1 for m, _t, _c in COLLECTIBLES if m == _map)

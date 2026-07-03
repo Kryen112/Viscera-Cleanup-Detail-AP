@@ -16,7 +16,8 @@ above_and_beyond options.
 
 from __future__ import annotations
 
-from .collectibles import BOB_ALTAR_MAP, BOB_NOTES, COLLECTIBLES
+from .collectibles import (BOB_ALTAR_MAP, BOB_NOTES, COLLECTIBLES,
+                           GATED_COLLECTIBLE_TOKENS)
 from .levels import DISPLAY_BY_MAP, LEVELS, MAX_CLEAN_PERCENT_BY_MAP
 
 LOCATION_ID_BASE = 0x5643_1_0000  # kept well clear of the item id range
@@ -114,6 +115,15 @@ for _map, _display, _title in LEVELS:
 COLLECTIBLE_LOCATION_NAMES: list[str] = [
     collectible_name(DISPLAY_BY_MAP[_m], _c) for _m, _t, _c in COLLECTIBLES
 ]
+
+# Every check behind the Digsite gates: the two Bob events plus the gate-locked
+# collectibles. They share the all-note-levels access rule and only exist when
+# the level pool holds the Digsite and every note level.
+BOB_GATED_LOCATIONS: list[str] = (
+    [DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION]
+    + [collectible_name(DISPLAY_BY_MAP[_m], _c)
+       for _m, _t, _c in COLLECTIBLES if _t in GATED_COLLECTIBLE_TOKENS]
+)
 
 # Location groups for the client and tracker.
 LOCATION_GROUPS: dict[str, list[str]] = {}
