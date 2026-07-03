@@ -26,3 +26,7 @@ Thumbs.db
 /scripts/
 /spikes/
 /VCD_AP/docs/
+
+# The generated options template, copied to the repo root for inspection after
+# every yaml-affecting change. Regenerated, never committed.
+/Viscera Cleanup Detail.yaml
