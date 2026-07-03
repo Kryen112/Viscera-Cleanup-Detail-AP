@@ -45,12 +45,9 @@ class Goal(Choice):
 
     complete_levels: punch out of `goal_amount` levels.
     employee_of_the_month: reach 100 percent on `goal_amount` levels.
-    find_bob: complete the Bob storyline (needs the note levels plus the Digsite).
-    collect_collectibles: return `goal_amount` collectibles.
-
-    find_bob and collect_collectibles depend on the collectibles module, which is
-    not in this skeleton yet, so they currently resolve to a conservative
-    level-completion requirement. Do not ship them until that lands.
+    find_bob: follow the notes and find Bob in the Digsite (needs the six
+    note levels plus the Digsite).
+    collect_collectibles: bank `goal_amount` collectibles in the trunk.
     """
     display_name = "Goal"
     option_complete_levels = 0
@@ -61,13 +58,15 @@ class Goal(Choice):
 
 
 class GoalAmount(NamedRange):
-    """How many levels (or collectibles) the goal needs. `all` is every pooled
+    """How many levels (or collectibles) the goal needs. Level goals cap at the
+    26 levels; collect_collectibles caps at the 39 collectibles. `all` is every
     level. Ignored by find_bob."""
     display_name = "Goal amount"
     range_start = 1
-    range_end = 26
+    range_end = 39
     default = 26
-    special_range_names = {"few": 5, "half": 13, "most": 20, "all": 26}
+    special_range_names = {"few": 5, "half": 13, "most": 20, "all": 26,
+                           "all_collectibles": 39}
 
 
 class StartingLevels(NamedRange):

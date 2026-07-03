@@ -28,6 +28,16 @@ var config int APPunchedOut;
 var config int APFired;
 var config int APSpeedrun;
 
+// Comma-separated tokens for what banked in the trunk at a punch-out in good
+// standing: collectible class names (VCSpecialDrop_*) and Bob note archetype
+// names (Note_Bob_*). Cleared on level start like the other punch-out fields.
+var config string APTrunkFinds;
+
+// Bob storyline events for the current map, set live when the game saves the
+// matching global stat (the Digsite Kismet fires both). Cleared on level start.
+var config int APDigsiteGates;
+var config int APFoundBob;
+
 // Trap bookkeeping, persistent across levels (not cleared on level start). The
 // seed the applied counter belongs to, and the highest received-item index whose
 // trap has been applied. Both survive a game relaunch through the config file,

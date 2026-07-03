@@ -36,8 +36,12 @@ class VCDTestBase(WorldTestBase):
     world: VCDWorld
 
     def state_with(self, names: list[str]) -> CollectionState:
-        """A CollectionState holding exactly the named items (no sweep)."""
+        """A CollectionState holding exactly the named items (no sweep). The
+        seed's random precollected starting levels are removed first, so the
+        state is deterministic across seeds."""
         state = CollectionState(self.multiworld)
+        for item in self.multiworld.precollected_items[self.player]:
+            state.remove(item)
         for name in names:
             state.collect(self.world.create_item(name), prevent_sweep=True)
         return state

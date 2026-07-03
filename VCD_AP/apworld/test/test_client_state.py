@@ -50,6 +50,23 @@ class TestLocationNamesFromState(unittest.TestCase):
             "Athena's Wrath - Speedrun",
         ])
 
+    def test_trunk_finds_map_to_home_level_locations(self) -> None:
+        # Tokens resolve to their home level even when banked elsewhere: the
+        # glasses and the Cryo note belong to Cryogenesis, banked from VC_Hall.
+        state = {"APMap": "VC_Hall",
+                 "APTrunkFinds": "VCSpecialDrop_Item2,Note_Bob_Cryo01,Junk"}
+        self.assertEqual(location_names_from_state(state), [
+            "Cryogenesis - Glasses",
+            "Cryogenesis - Bob Note",
+        ])
+
+    def test_bob_event_flags(self) -> None:
+        state = {"APMap": "VC_Digsite", "APDigsiteGates": "1", "APFoundBob": "1"}
+        self.assertEqual(location_names_from_state(state), [
+            "Unearthly Excavation - Open the Digsite Gates",
+            "Unearthly Excavation - Find Bob",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

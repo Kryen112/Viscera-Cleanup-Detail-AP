@@ -49,8 +49,5 @@ DISPLAY_BY_MAP: dict[str, str] = {m: d for m, d, _ in LEVELS}
 MAP_BY_DISPLAY: dict[str, str] = {d: m for m, d, _ in LEVELS}
 TITLE_BY_MAP: dict[str, str] = {m: t for m, _, t in LEVELS}
 
-# The Digsite is the altar level for the Bob storyline (bFoundBob). The nine
-# note-bearing levels are not yet mapped to their map names; that comes with the
-# collectibles module. Until then goals that need Bob use a conservative
-# over-approximation (see __init__).
-BOB_ALTAR_MAP = "VC_Digsite"
+# The Bob storyline data (note levels, the Digsite altar, collectible tables)
+# lives in collectibles.py.

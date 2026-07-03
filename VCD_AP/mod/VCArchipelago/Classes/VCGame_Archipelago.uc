@@ -53,6 +53,9 @@ event InitGame(string Options, out string ErrorMessage)
     APState.APPunchedOut = 0;
     APState.APFired = 0;
     APState.APSpeedrun = 0;
+    APState.APTrunkFinds = "";
+    APState.APDigsiteGates = 0;
+    APState.APFoundBob = 0;
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
     SetTimer(1.0, true, 'PublishCleanliness');
@@ -335,6 +338,12 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     APState.APPunchedOut = 1;
     if (Handler.JobStatus.bStatus)
         APState.APFired = 1;
+    else
+    {
+        // Trophies only bank on a punch-out in good standing (a fired one runs
+        // ClearTrophies), so the trunk scan mirrors that.
+        APState.APTrunkFinds = CollectTrunkFinds();
+    }
     // The game's own speedrun standard, evaluated here because Archipelago is
     // its own mode: status bit 1 or 2 (at least 95 percent clean) inside 75
     // percent of the map's par time, dilated for player count.
@@ -347,6 +356,74 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     APState.APSeq = APState.APSeq + 1;
     APState.SaveConfig();
     `log("VCAP PUNCHOUT map="$APState.APMap$" fired="$APState.APFired$" speedrun="$APState.APSpeedrun);
+}
+
+// Tokens for everything in the janitor's trunk that maps to a check: a
+// collectible's class name, or a Bob note's archetype name. Both are unique
+// across the whole game, so the client resolves each token to its home level's
+// location no matter where it was banked.
+function string CollectTrunkFinds()
+{
+    local VCGameViewportClient ViewportClient;
+    local array<VCDebris> TrunkItems;
+    local string Token, Finds;
+    local int I;
+
+    Finds = "";
+    ViewportClient = VCGameViewportClient(class'Engine'.static.GetEngine().GameViewport);
+    if (ViewportClient == None || ViewportClient.TrophyHandler == None)
+        return Finds;
+    TrunkItems = ViewportClient.TrophyHandler.GetTrunkActors();
+    for (I = 0; I < TrunkItems.Length; I++)
+    {
+        if (TrunkItems[I] == None)
+            continue;
+        Token = "";
+        if (InStr(string(TrunkItems[I].Class.Name), "VCSpecialDrop") == 0)
+            Token = string(TrunkItems[I].Class.Name);
+        else if (TrunkItems[I].ObjectArchetype != None
+            && InStr(string(TrunkItems[I].ObjectArchetype.Name), "Note_Bob_") == 0)
+        {
+            Token = string(TrunkItems[I].ObjectArchetype.Name);
+        }
+        if (Token == "" || InStr(","$Finds$",", ","$Token$",") != -1)
+            continue;
+        if (Finds == "")
+            Finds = Token;
+        else
+            Finds = Finds $ "," $ Token;
+    }
+    return Finds;
+}
+
+// The game routes every global stat save through here (VCStatsData.SaveData
+// calls the GameInfo). The two Bob events fire from the Digsite Kismet.
+function GlobalStatChanged(string KeyName, string NewValue)
+{
+    local bool bTruthy;
+
+    super.GlobalStatChanged(KeyName, NewValue);
+    if (APState == None)
+        return;
+    bTruthy = NewValue == "1" || NewValue ~= "true";
+    if (!bTruthy)
+        return;
+    if (KeyName ~= "bOpenedDigsiteGates" && APState.APDigsiteGates == 0)
+    {
+        APState.APDigsiteGates = 1;
+        APState.APMap = WorldInfo.GetMapName(true);
+        APState.APSeq = APState.APSeq + 1;
+        APState.SaveConfig();
+        `log("VCAP BOB event=DigsiteGates");
+    }
+    else if (KeyName ~= "bFoundBob" && APState.APFoundBob == 0)
+    {
+        APState.APFoundBob = 1;
+        APState.APMap = WorldInfo.GetMapName(true);
+        APState.APSeq = APState.APSeq + 1;
+        APState.SaveConfig();
+        `log("VCAP BOB event=FoundBob");
+    }
 }
 
 function PublishCleanliness()

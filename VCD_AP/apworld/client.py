@@ -26,9 +26,12 @@ from NetUtils import ClientStatus
 
 from . import VCDWorld, grants, traps
 from .saves import SaveManager
+from .collectibles import BOB_NOTE_MAP_BY_TOKEN, COLLECTIBLE_BY_TOKEN
 from .items import ITEM_NAME_TO_ID, access_item_name
 from .levels import DISPLAY_BY_MAP, LEVELS
-from .locations import (LOCATION_NAME_TO_ID, employee_of_the_month_name,
+from .locations import (COLLECTIBLE_LOCATION_NAMES, DIGSITE_GATES_LOCATION,
+                        FIND_BOB_LOCATION, LOCATION_NAME_TO_ID, bob_note_name,
+                        collectible_name, employee_of_the_month_name,
                         milestone_name, punch_out_name, speedrun_name)
 
 # Player-facing lines go to the "Client" logger, or they do not show in the client
@@ -82,11 +85,29 @@ def parse_rungs(milestones: str) -> list[int]:
     return rungs
 
 
+def trunk_find_names(trunk_finds: str) -> list[str]:
+    """Location names for the mod's banked-trunk tokens. A token names either a
+    collectible class or a Bob note archetype; both are unique game-wide and map
+    to their home level's location no matter where they were banked (carrying a
+    collectible onward always required its home level first). Unknown tokens are
+    ignored."""
+    names: list[str] = []
+    for token in trunk_finds.split(","):
+        token = token.strip()
+        if token in COLLECTIBLE_BY_TOKEN:
+            map_name, collectible = COLLECTIBLE_BY_TOKEN[token]
+            names.append(collectible_name(DISPLAY_BY_MAP[map_name], collectible))
+        elif token in BOB_NOTE_MAP_BY_TOKEN:
+            names.append(bob_note_name(DISPLAY_BY_MAP[BOB_NOTE_MAP_BY_TOKEN[token]]))
+    return names
+
+
 def location_names_from_state(state: dict[str, str]) -> list[str]:
     """The location names a mod state snapshot implies. Policy lives here: each
     reported rung is a milestone (100 is Employee of the Month), a punch-out in
-    good standing (not fired) is the Punch Out check, and the speedrun flag is
-    the Speedrun check. Unknown maps yield nothing."""
+    good standing (not fired) is the Punch Out check, the speedrun flag is the
+    Speedrun check, banked trunk tokens are collectible and Bob note checks, and
+    the Digsite stat flags are the two Bob events. Unknown maps yield nothing."""
     display = DISPLAY_BY_MAP.get(state.get("APMap", ""))
     if not display:
         return []
@@ -98,6 +119,11 @@ def location_names_from_state(state: dict[str, str]) -> list[str]:
         names.append(punch_out_name(display))
         if state.get("APSpeedrun") == "1":
             names.append(speedrun_name(display))
+    names.extend(trunk_find_names(state.get("APTrunkFinds", "")))
+    if state.get("APDigsiteGates") == "1":
+        names.append(DIGSITE_GATES_LOCATION)
+    if state.get("APFoundBob") == "1":
+        names.append(FIND_BOB_LOCATION)
     return names
 
 
@@ -331,12 +357,17 @@ class VCDContext(CommonContext):
             self.goal_location_ids = [
                 LOCATION_NAME_TO_ID[employee_of_the_month_name(d)] for _, d, _ in LEVELS]
             self.goal_need = amount
+        elif goal == "find_bob":
+            self.goal_location_ids = [LOCATION_NAME_TO_ID[FIND_BOB_LOCATION]]
+            self.goal_need = 1
+        elif goal == "collect_collectibles":
+            self.goal_location_ids = [
+                LOCATION_NAME_TO_ID[name] for name in COLLECTIBLE_LOCATION_NAMES]
+            self.goal_need = amount
         else:
-            # complete_levels, find_bob, and collect_collectibles all resolve to
-            # punch-out reachability in the world today. find_bob needs every level.
             self.goal_location_ids = [
                 LOCATION_NAME_TO_ID[punch_out_name(d)] for _, d, _ in LEVELS]
-            self.goal_need = len(self.goal_location_ids) if goal == "find_bob" else amount
+            self.goal_need = amount
 
     def write_grants_if_changed(self) -> None:
         if not self.install_dir or not self.saves_ready:

@@ -54,15 +54,22 @@ The reviewer treats a violation of any of these as a correctness blocker.
 - Only progression items are guaranteed reachable by the generator. Logic must
   not gate access on a non-progression item.
 - The 26 level-access unlock items are progression. Every per-level check
-  (milestone ladder, speedrun, that level's collectibles) requires only that
-  level's access item: a single predicate `has(Access(level))`.
+  (milestone ladder, speedrun, punch-out, that level's collectibles and Bob
+  note) requires only that level's access item: a single predicate
+  `has(Access(level))`. The ONLY exceptions are the two Digsite Bob events
+  (Open the Digsite Gates, Find Bob) and the Red Keycard collectible (it sits
+  behind those gates), which additionally require the six note-level access
+  items (the pedestal needs all nine notes; three are Office freebies).
 - `completion_condition` is a solvability contract and switches on the `goal`
   option. Treat edits to it as high-risk. Named count-based traps:
-  - `find_bob` requires access to all nine Bob-note levels plus the Digsite.
-    Those access items must be progression and reachable, or the goal is
-    unsolvable.
+  - `find_bob` resolves to the Find Bob location, whose rule carries the six
+    note levels plus the Digsite. Those access items must be progression and
+    reachable, or the goal is unsolvable.
   - `collect_collectibles` with amount N requires access to the levels that hold
-    those N collectibles.
+    N collectibles; the amount is clamped to the 39 that exist.
+- The collectible and Bob tables in `collectibles.py` are transcribed from game
+  data (map name tables, punchout handlers, `GP_Notes_Arch`); do not hand-guess
+  entries. The Doom Armour and Shotgun are an Office stash, not locations.
 - Item classification lives in `create_item`: level-access items are progression,
   trap items are `ItemClassification.trap`, the rest is filler. No tool-gating.
   Traps are never progression and never required by logic; the `trap_percentage`

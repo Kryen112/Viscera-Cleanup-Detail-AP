@@ -4,9 +4,10 @@ Items, locations, levels, and options live in this directory. There is no
 code-generation step; build_apworld.py only packages the world.
 
 v1 shape: level-access unlock items gate each level; per-level checks are a
-milestone cleanliness ladder plus a punch-out completion, and a speedrun when
-the speedrunsanity option is on. Collectible and Bob-chain checks are TODO. See
-V1_PLAN.md and CLAUDE.md.
+milestone cleanliness ladder, a punch-out completion, the level's collectibles
+and Bob note, and a speedrun when the speedrunsanity option is on. The two
+Digsite Bob events additionally need every note level. See V1_PLAN.md and
+CLAUDE.md.
 """
 
 from __future__ import annotations
@@ -19,11 +20,15 @@ from worlds.AutoWorld import World
 from worlds.LauncherComponents import (Component, Type, components,
                                        launch_subprocess)
 
+from .collectibles import (BOB_NOTE_MAPS, COLLECTIBLES,
+                           GATED_COLLECTIBLE_TOKENS)
 from .items import (FILLER_NAMES, ITEM_GROUPS, ITEM_NAME_TO_ID,
                     LEVEL_ACCESS_ITEMS, access_item_name)
 from .traps import TRAP_NAMES
-from .levels import LEVELS, MAP_NAMES
-from .locations import (LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
+from .levels import DISPLAY_BY_MAP, LEVELS, MAP_NAMES
+from .locations import (COLLECTIBLE_LOCATION_NAMES, DIGSITE_GATES_LOCATION,
+                        FIND_BOB_LOCATION, LOCATION_GROUPS, LOCATION_MAP,
+                        LOCATION_NAME_TO_ID, collectible_name,
                         employee_of_the_month_name, location_enabled,
                         punch_out_name)
 from .options import VCDOptions
@@ -95,9 +100,13 @@ class VCDWorld(World):
         pooled = list(MAP_NAMES)
         start_n = min(int(self.options.starting_levels.value), len(pooled))
         self.started_maps = set(self.random.sample(pooled, start_n))
-        # Cannot need more levels than exist in the pool.
-        if int(self.options.goal_amount.value) > len(pooled):
-            self.options.goal_amount.value = len(pooled)
+        # Cannot need more than exists: levels for the level goals, collectibles
+        # for the collectible goal.
+        cap = (len(COLLECTIBLE_LOCATION_NAMES)
+               if self.options.goal.current_key == "collect_collectibles"
+               else len(pooled))
+        if int(self.options.goal_amount.value) > cap:
+            self.options.goal_amount.value = cap
 
     def create_item(self, name: str) -> VCDItem:
         if name in PROGRESSION_ITEM_NAMES:
@@ -156,23 +165,35 @@ class VCDWorld(World):
 
     def _goal_locations(self) -> tuple[list[str], int]:
         """The locations whose reachability defines victory, and how many are
-        needed. Reaching any of a level's checks means owning that level's access
-        item, so these counts are really 'access to N levels'."""
+        needed."""
         goal = self.options.goal.current_key
         amount = int(self.options.goal_amount.value)
         if goal == "employee_of_the_month":
             return [employee_of_the_month_name(d) for _, d, _ in LEVELS], amount
-        punch_outs = [punch_out_name(d) for _, d, _ in LEVELS]
         if goal == "find_bob":
-            # TODO: gate on the nine Bob-note levels plus the Digsite once the
-            # collectibles module exists. Conservative for now: every level.
-            return punch_outs, len(punch_outs)
-        # complete_levels, and (TODO) collect_collectibles until collectibles land.
-        return punch_outs, amount
+            # Find Bob's own access rule carries the note levels plus the Digsite.
+            return [FIND_BOB_LOCATION], 1
+        if goal == "collect_collectibles":
+            return list(COLLECTIBLE_LOCATION_NAMES), amount
+        return [punch_out_name(d) for _, d, _ in LEVELS], amount
 
     def set_rules(self) -> None:
-        locations, need = self._goal_locations()
+        # The Digsite gate needs all nine Bob notes on the pedestal: six live in
+        # the note levels (three are Office freebies), and Bob and the Red
+        # Keycard sit behind the gate. So those checks need every note level on
+        # top of the Digsite access their region already requires. All 26
+        # access items are progression, so these are guaranteed reachable.
+        note_access = tuple(access_item_name(DISPLAY_BY_MAP[m]) for m in BOB_NOTE_MAPS)
         player = self.player
+        gated = [DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION]
+        gated += [collectible_name(DISPLAY_BY_MAP[m], c)
+                  for m, t, c in COLLECTIBLES if t in GATED_COLLECTIBLE_TOKENS]
+        for name in gated:
+            self.get_location(name).access_rule = (
+                lambda state, items=note_access: state.has_all(items, player)
+            )
+
+        locations, need = self._goal_locations()
         self.multiworld.completion_condition[player] = (
             lambda state, locs=locations, n=need:
                 sum(state.can_reach_location(loc, player) for loc in locs) >= n

@@ -7,10 +7,14 @@ tests, so each exercises a full generation. TestData needs no world.
 import unittest
 
 from .bases import VCDTestBase
-from ..items import ITEM_NAME_TO_ID
-from ..levels import LEVELS, MAP_NAMES
-from ..locations import (LOCATION_NAME_TO_ID, MILESTONE_PERCENT,
-                         milestone_enabled, punch_out_name, speedrun_name)
+from ..collectibles import (BOB_NOTE_MAPS, BOB_NOTES, COLLECTIBLES,
+                            GATED_COLLECTIBLE_TOKENS)
+from ..items import ITEM_NAME_TO_ID, access_item_name
+from ..levels import DISPLAY_BY_MAP, LEVELS, MAP_NAMES
+from ..locations import (DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION,
+                         LOCATION_NAME_TO_ID, MILESTONE_PERCENT,
+                         collectible_name, milestone_enabled, punch_out_name,
+                         speedrun_name)
 
 
 class TestDefault(VCDTestBase):
@@ -20,6 +24,31 @@ class TestDefault(VCDTestBase):
         names = {loc.name for loc in self.multiworld.get_locations(self.player)}
         for _map, display, _title in LEVELS:
             self.assertNotIn(speedrun_name(display), names)
+
+    def test_bob_gated_checks_need_every_note_level_plus_the_digsite(self):
+        needed = [access_item_name(DISPLAY_BY_MAP[m])
+                  for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
+        gated = [DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION]
+        gated += [collectible_name(DISPLAY_BY_MAP[m], c)
+                  for m, t, c in COLLECTIBLES if t in GATED_COLLECTIBLE_TOKENS]
+        for name in gated:
+            self.assertFalse(
+                self.multiworld.get_location(name, self.player).can_reach(
+                    self.state_with(needed[:-1])), name)
+            self.assertTrue(
+                self.multiworld.get_location(name, self.player).can_reach(
+                    self.state_with(needed)), name)
+
+    def test_collectibles_need_only_their_level(self):
+        # Except the gate-locked ones, which the Bob-gated test covers.
+        for map_name, token, collectible in COLLECTIBLES:
+            if token in GATED_COLLECTIBLE_TOKENS:
+                continue
+            display = DISPLAY_BY_MAP[map_name]
+            location = self.multiworld.get_location(
+                collectible_name(display, collectible), self.player)
+            self.assertTrue(
+                location.can_reach(self.state_with([access_item_name(display)])))
 
 
 class TestSpeedrunsanity(VCDTestBase):
@@ -79,6 +108,44 @@ class TestEmployeeGoal(VCDTestBase):
 class TestFindBobGoal(VCDTestBase):
     options = {"goal": "find_bob"}
 
+    def test_completion_requires_the_note_levels(self):
+        needed = [access_item_name(DISPLAY_BY_MAP[m])
+                  for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
+        self.assertFalse(
+            self.multiworld.completion_condition[self.player](
+                self.state_with(needed[:-1])))
+        self.assertTrue(
+            self.multiworld.completion_condition[self.player](
+                self.state_with(needed)))
+
+
+class TestCollectiblesGoal(VCDTestBase):
+    options = {"goal": "collect_collectibles", "goal_amount": 3}
+
+    def test_completion_counts_reachable_collectibles(self):
+        # Cryogenesis and Gravity Drive hold two collectibles each; the two
+        # levels together clear the three-collectible bar.
+        one = self.state_with([access_item_name("Cryogenesis")])
+        both = self.state_with([access_item_name("Cryogenesis"),
+                                access_item_name("Gravity Drive")])
+        self.assertFalse(self.multiworld.completion_condition[self.player](one))
+        self.assertTrue(self.multiworld.completion_condition[self.player](both))
+
+
+class TestCollectiblesGoalFullAmount(VCDTestBase):
+    # 39 is the collectible cap, so it survives the clamp and must still fill.
+    options = {"goal": "collect_collectibles", "goal_amount": 39}
+
+    def test_amount_kept(self):
+        self.assertEqual(int(self.world.options.goal_amount.value), 39)
+
+
+class TestLevelGoalAmountClamped(VCDTestBase):
+    options = {"goal": "complete_levels", "goal_amount": 39}
+
+    def test_amount_clamped_to_the_level_count(self):
+        self.assertEqual(int(self.world.options.goal_amount.value), len(LEVELS))
+
 
 class TestCompleteFew(VCDTestBase):
     options = {"goal": "complete_levels", "goal_amount": 5, "milestone_step": 20}
@@ -97,11 +164,22 @@ class TestData(unittest.TestCase):
         self.assertEqual(len(MAP_NAMES), len(set(MAP_NAMES)))
 
     def test_each_level_has_the_full_static_set(self):
-        # Punch Out + 19 clean rungs + Employee of the Month + Speedrun = 22.
+        # Punch Out + 19 clean rungs + Employee of the Month + Speedrun = 22,
+        # plus the level's collectibles, its Bob note, and the Digsite events.
         from ..locations import LOCATION_MAP
         for _map, display, _title in LEVELS:
+            expected = 22
+            expected += sum(1 for m, _t, _c in COLLECTIBLES if m == _map)
+            expected += sum(1 for m, _t in BOB_NOTES if m == _map)
+            if _map == "VC_Digsite":
+                expected += 2
             count = sum(1 for m in LOCATION_MAP.values() if m == _map)
-            self.assertEqual(count, 22, display)
+            self.assertEqual(count, expected, display)
+
+    def test_collectible_tokens_unique(self):
+        tokens = ([t for _m, t, _c in COLLECTIBLES] + [t for _m, t in BOB_NOTES])
+        self.assertEqual(len(tokens), len(set(tokens)))
+        self.assertEqual(len(COLLECTIBLES), 39)
 
     def test_milestone_step_gating(self):
         # Punch Out (not a milestone) is always enabled.
