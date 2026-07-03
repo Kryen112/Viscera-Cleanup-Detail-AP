@@ -30,6 +30,40 @@ class TestSpeedrunsanity(VCDTestBase):
             self.assert_location_exists(speedrun_name(display))
 
 
+class TestTrapPercentage(VCDTestBase):
+    options = {"trap_percentage": 50}
+
+    def test_half_the_filler_is_traps_and_classified_trap(self):
+        from BaseClasses import ItemClassification
+        from ..traps import TRAP_NAMES
+        pool_traps = [item for item in self.multiworld.itempool
+                      if item.name in TRAP_NAMES]
+        filler = [item for item in self.multiworld.itempool
+                  if item.name not in TRAP_NAMES
+                  and item.classification == ItemClassification.filler]
+        self.assertGreater(len(pool_traps), 0)
+        # Half the filler slots, rounded down.
+        self.assertEqual(len(pool_traps), (len(pool_traps) + len(filler)) // 2)
+        for item in pool_traps:
+            self.assertEqual(item.classification, ItemClassification.trap, item.name)
+
+    def test_traps_never_progression(self):
+        from BaseClasses import ItemClassification
+        from ..traps import TRAP_NAMES
+        for name in TRAP_NAMES:
+            item = self.world.create_item(name)
+            self.assertEqual(item.classification, ItemClassification.trap)
+
+
+class TestNoTrapsByDefault(VCDTestBase):
+    options = {}
+
+    def test_pool_has_no_traps(self):
+        from ..traps import TRAP_NAMES
+        for item in self.multiworld.itempool:
+            self.assertNotIn(item.name, TRAP_NAMES)
+
+
 class TestStep25(VCDTestBase):
     options = {"milestone_step": 25}
 

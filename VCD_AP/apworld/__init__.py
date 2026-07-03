@@ -21,6 +21,7 @@ from worlds.LauncherComponents import (Component, Type, components,
 
 from .items import (FILLER_NAMES, ITEM_GROUPS, ITEM_NAME_TO_ID,
                     LEVEL_ACCESS_ITEMS, access_item_name)
+from .traps import TRAP_NAMES
 from .levels import LEVELS, MAP_NAMES
 from .locations import (LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
                         employee_of_the_month_name, location_enabled,
@@ -29,6 +30,7 @@ from .options import VCDOptions
 
 GAME_NAME = "Viscera Cleanup Detail"
 PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(LEVEL_ACCESS_ITEMS)
+TRAP_ITEM_NAMES: frozenset[str] = frozenset(TRAP_NAMES)
 
 
 def _launch_client() -> None:
@@ -98,9 +100,12 @@ class VCDWorld(World):
             self.options.goal_amount.value = len(pooled)
 
     def create_item(self, name: str) -> VCDItem:
-        classification = (ItemClassification.progression
-                          if name in PROGRESSION_ITEM_NAMES
-                          else ItemClassification.filler)
+        if name in PROGRESSION_ITEM_NAMES:
+            classification = ItemClassification.progression
+        elif name in TRAP_ITEM_NAMES:
+            classification = ItemClassification.trap
+        else:
+            classification = ItemClassification.filler
         return VCDItem(name, classification, self.item_name_to_id[name], self.player)
 
     def get_filler_item_name(self) -> str:
@@ -142,7 +147,11 @@ class VCDWorld(World):
                 self.multiworld.itempool.append(item)
                 placed += 1
         active_locations = sum(len(self._enabled_locations_for(m)) for m in MAP_NAMES)
-        for _ in range(active_locations - placed):
+        filler_slots = active_locations - placed
+        trap_slots = filler_slots * int(self.options.trap_percentage.value) // 100
+        for _ in range(trap_slots):
+            self.multiworld.itempool.append(self.create_item(self.random.choice(TRAP_NAMES)))
+        for _ in range(filler_slots - trap_slots):
             self.multiworld.itempool.append(self.create_item(self.get_filler_item_name()))
 
     def _goal_locations(self) -> tuple[list[str], int]:

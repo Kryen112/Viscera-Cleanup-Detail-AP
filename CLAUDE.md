@@ -63,8 +63,16 @@ The reviewer treats a violation of any of these as a correctness blocker.
     unsolvable.
   - `collect_collectibles` with amount N requires access to the levels that hold
     those N collectibles.
-- Item classification is per game mode in `create_item`: level-access items are
-  progression, the rest is filler for v1. No tool-gating, no traps in v1.
+- Item classification lives in `create_item`: level-access items are progression,
+  trap items are `ItemClassification.trap`, the rest is filler. No tool-gating.
+  Traps are never progression and never required by logic; the `trap_percentage`
+  option (default 0) converts a share of filler slots into traps.
+- Traps travel client to mod via `Saves\VCArchipelagoTraps.sav` (SeedTag,
+  BaselineIndex, and a full "index:Type" queue keyed by received-item position).
+  The mod stores the last applied index in its config state, applies one trap per
+  poll, only in cleanable levels, and never replays another seed's queue or a
+  pre-connect backlog. A trap must never softlock, block a required check, or
+  corrupt a save.
 - Game logic lives in one boolean-predicate access-rule module. Read changes
   there as logic, not plumbing.
 - The apworld is hand-maintained. There is no generator and no `data/*.yaml`

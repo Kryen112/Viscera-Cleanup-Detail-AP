@@ -1,19 +1,17 @@
-"""Codec for the grants save file the client writes and the mod reads.
-
-The mod reads ``Saves\\VCArchipelagoGrants.sav`` via ``BasicLoadObject`` into a
-``VCArchipelagoGrants`` object holding one ``StrProperty``, ``UnlockedMaps``: the
-comma-separated internal map names the player may enter. This writes that file in
-the byte layout ``BasicLoadObject`` expects: a single tagged property terminated
-by ``"None"``.
+"""Codec for the save files the client writes and the mod reads via
+``BasicLoadObject``: the grants file (``Saves\\VCArchipelagoGrants.sav``, one
+``StrProperty`` named ``UnlockedMaps``) and, through ``build_object``, any
+sibling file holding a list of string properties (the traps file uses this).
 
 Byte layout (little-endian), decoded from a mod-written file:
     int32 revision = 1
     int32 = -1                      (header marker BasicSaveObject emits)
-    FString "UnlockedMaps"          (property name)
-    FString "StrProperty"           (property type)
-    int32 propertySize              (byte length of the value FString)
-    int32 arrayIndex = 0
-    FString <value>                 (the comma-separated map names)
+    per property:
+        FString <name>              (property name)
+        FString "StrProperty"       (property type)
+        int32 propertySize          (byte length of the value FString)
+        int32 arrayIndex = 0
+        FString <value>
     FString "None"                  (property-list terminator)
 
 An FString is ``int32 length-including-null`` then that many ASCII bytes ending in
@@ -33,19 +31,24 @@ def _fstring(text: str) -> bytes:
     return struct.pack("<i", len(raw)) + raw
 
 
+def build_object(properties: "list[tuple[str, str]]") -> bytes:
+    """Serialize named string properties into the .sav byte layout."""
+    data = struct.pack("<i", REVISION) + struct.pack("<i", -1)
+    for name, value in properties:
+        encoded = _fstring(value)
+        data += (
+            _fstring(name)
+            + _fstring("StrProperty")
+            + struct.pack("<i", len(encoded))
+            + struct.pack("<i", 0)
+            + encoded
+        )
+    return data + _fstring("None")
+
+
 def build(unlocked_maps: str) -> bytes:
     """Serialize a comma-separated map-name string into the .sav byte layout."""
-    value = _fstring(unlocked_maps)
-    return (
-        struct.pack("<i", REVISION)
-        + struct.pack("<i", -1)
-        + _fstring("UnlockedMaps")
-        + _fstring("StrProperty")
-        + struct.pack("<i", len(value))
-        + struct.pack("<i", 0)
-        + value
-        + _fstring("None")
-    )
+    return build_object([("UnlockedMaps", unlocked_maps)])
 
 
 def build_from_maps(map_names: Iterable[str]) -> bytes:
@@ -58,12 +61,16 @@ def build_from_maps(map_names: Iterable[str]) -> bytes:
     return build(",".join(seen))
 
 
-def write(path: Path, map_names: Iterable[str]) -> None:
-    """Write the grants file atomically, so the mod never reads a half-written
-    file. Writes to a temporary sibling and replaces the target."""
+def write_atomic(path: Path, data: bytes) -> None:
+    """Write a .sav atomically, so the mod never reads a half-written file.
+    Writes to a temporary sibling and replaces the target."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = build_from_maps(map_names)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(data)
     tmp.replace(path)
+
+
+def write(path: Path, map_names: Iterable[str]) -> None:
+    """Write the grants file atomically."""
+    write_atomic(path, build_from_maps(map_names))

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from Options import (Choice, NamedRange, PerGameCommonOptions,
+from Options import (Choice, NamedRange, PerGameCommonOptions, Range,
                      StartInventoryPool, Toggle)
 
 
@@ -27,6 +27,17 @@ class Speedrunsanity(Toggle):
     within 75 percent of the level's par time. Off by default, so seeds carry no
     speed pressure unless asked for."""
     display_name = "Speedrunsanity"
+
+
+class TrapPercentage(Range):
+    """The share of filler items that become traps: a mess dump near the
+    janitor, a spilled bucket, or thirty seconds of slow walking. Traps arrive
+    from the multiworld while cleaning; they are never required by logic. 0
+    disables traps."""
+    display_name = "Trap percentage"
+    range_start = 0
+    range_end = 100
+    default = 0
 
 
 class Goal(Choice):
@@ -73,6 +84,7 @@ class VCDOptions(PerGameCommonOptions):
     start_inventory_from_pool: StartInventoryPool
     milestone_step: MilestoneStep
     speedrunsanity: Speedrunsanity
+    trap_percentage: TrapPercentage
     goal: Goal
     goal_amount: GoalAmount
     starting_levels: StartingLevels

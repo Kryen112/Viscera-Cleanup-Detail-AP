@@ -27,3 +27,10 @@ var config string APMilestones;
 var config int APPunchedOut;
 var config int APFired;
 var config int APSpeedrun;
+
+// Trap bookkeeping, persistent across levels (not cleared on level start). The
+// seed the applied counter belongs to, and the highest received-item index whose
+// trap has been applied. Both survive a game relaunch through the config file,
+// so a trap is never applied twice.
+var config string APTrapSeed;
+var config int APTrapsApplied;

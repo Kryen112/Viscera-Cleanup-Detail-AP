@@ -24,7 +24,7 @@ from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser
                           gui_enabled, server_loop)
 from NetUtils import ClientStatus
 
-from . import VCDWorld, grants
+from . import VCDWorld, grants, traps
 from .saves import SaveManager
 from .items import ITEM_NAME_TO_ID, access_item_name
 from .levels import DISPLAY_BY_MAP, LEVELS
@@ -42,6 +42,12 @@ POLL_SECONDS = 1.0
 ACCESS_ID_TO_MAP: dict[int, str] = {
     ITEM_NAME_TO_ID[access_item_name(display)]: map_name
     for map_name, display, _title in LEVELS
+}
+
+# Received-item id to the trap type token the mod switches on.
+TRAP_ID_TO_TYPE: dict[int, str] = {
+    ITEM_NAME_TO_ID[name]: trap_type
+    for name, trap_type in traps.TRAP_TYPE_BY_NAME.items()
 }
 
 
@@ -141,6 +147,10 @@ class VCDContext(CommonContext):
         self.install_dir: "Path | None" = None
         self.unlocked_maps: set[str] = set()
         self.last_grants_written: "str | None" = None
+        self.last_traps_written: "str | None" = None
+        # Items already held when this session connected; traps at or below
+        # this index are never applied, so a connect cannot dump a backlog.
+        self.trap_baseline: "int | None" = None
         self.goal_location_ids: list[int] = []
         self.goal_need: int = 0
         self.last_seq: "str | None" = None
@@ -193,6 +203,7 @@ class VCDContext(CommonContext):
         self._isolate_saves()
         self.saves_ready = True
         self.write_grants_if_changed()
+        self.write_traps_if_changed()
         if not self.game_launched and bool(VCDWorld.settings.auto_launch_game):
             self.launch_game()
 
@@ -295,8 +306,14 @@ class VCDContext(CommonContext):
             self.unlocked_maps = set(slot_data.get("started_maps", []))
             self._set_goal(slot_data)
             self.saves_ready = False
+            self.trap_baseline = None
+            self.last_traps_written = None
             asyncio.create_task(self.setup_and_launch())
         elif cmd == "ReceivedItems":
+            # The first packet after connect (index 0) is the full resync list:
+            # everything in it predates this session, so it sets the trap baseline.
+            if self.trap_baseline is None and int(args.get("index", 0)) == 0:
+                self.trap_baseline = len(args.get("items", []))
             changed = False
             for item in args.get("items", []):
                 map_name = ACCESS_ID_TO_MAP.get(item.item)
@@ -305,6 +322,7 @@ class VCDContext(CommonContext):
                     changed = True
             if changed:
                 self.write_grants_if_changed()
+            self.write_traps_if_changed()
 
     def _set_goal(self, slot_data: dict) -> None:
         goal = slot_data.get("goal", "complete_levels")
@@ -334,6 +352,25 @@ class VCDContext(CommonContext):
             return
         self.last_grants_written = joined
         client_logger.info(f"Unlocked {len(ordered)} level(s).")
+
+    def write_traps_if_changed(self) -> None:
+        """Write the full trap queue (always on connect, even empty, so a stale
+        file from another seed is overwritten)."""
+        if not self.install_dir or not self.saves_ready or not self.seed_name:
+            return
+        seed_tag, baseline, queue = traps.queue_fields(
+            self.seed_name, self.trap_baseline,
+            [item.item for item in self.items_received], TRAP_ID_TO_TYPE)
+        payload = f"{seed_tag}|{baseline}|{queue}"
+        if payload == self.last_traps_written:
+            return
+        try:
+            traps.write(self.install_dir / "Saves" / "VCArchipelagoTraps.sav",
+                        seed_tag, baseline, queue)
+        except OSError as error:
+            client_logger.error(f"Could not write the traps file: {error}")
+            return
+        self.last_traps_written = payload
 
     async def apply_mod_state(self, state: dict[str, str]) -> None:
         """Map the current level's reported state (rungs, punch-out, speedrun) to

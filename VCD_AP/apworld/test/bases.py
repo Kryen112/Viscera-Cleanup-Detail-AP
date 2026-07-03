@@ -1,8 +1,34 @@
+import struct
+
 from test.bases import WorldTestBase
 
 from BaseClasses import CollectionState
 
 from .. import VCDWorld
+
+
+def read_fstring(data: bytes, offset: int) -> "tuple[str, int]":
+    """Decode one FString from .sav bytes: int32 length then ASCII ending in NUL."""
+    length = struct.unpack_from("<i", data, offset)[0]
+    offset += 4
+    raw = data[offset:offset + length]
+    return raw[:-1].decode("ascii"), offset + length
+
+
+def read_sav_properties(data: bytes) -> dict[str, str]:
+    """Decode a BasicSaveObject-layout .sav into its named string properties."""
+    offset = 8  # revision int plus the -1 marker
+    out: dict[str, str] = {}
+    while True:
+        name, offset = read_fstring(data, offset)
+        if name == "None":
+            break
+        type_name, offset = read_fstring(data, offset)
+        assert type_name == "StrProperty"
+        offset += 8  # property size plus array index
+        value, offset = read_fstring(data, offset)
+        out[name] = value
+    return out
 
 
 class VCDTestBase(WorldTestBase):

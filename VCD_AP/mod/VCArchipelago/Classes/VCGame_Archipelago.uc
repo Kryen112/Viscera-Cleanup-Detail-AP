@@ -31,6 +31,16 @@ var VCArchipelagoState APState;
 var int HighestReportedRung;
 var int LastPublishedPercent;
 
+// Janitors slowed by a trap, with the speeds to restore. Same-level references
+// only; the GameInfo and these arrays die with the level. The game itself never
+// writes GroundSpeed after defaults, so a halve-and-restore cannot be clobbered.
+var array<VCPawn> SlowedJanitors;
+var array<float> SlowedJanitorSpeeds;
+
+// Reused load target for the trap queue file, so the 5 second poll does not
+// pile up garbage objects between collections.
+var VCArchipelagoTraps TrapQueueFile;
+
 event InitGame(string Options, out string ErrorMessage)
 {
     super.InitGame(Options, ErrorMessage);
@@ -46,6 +56,7 @@ event InitGame(string Options, out string ErrorMessage)
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
     SetTimer(1.0, true, 'PublishCleanliness');
+    SetTimer(5.0, true, 'PollTraps');
     EnforceLevelGate();
 }
 
@@ -96,8 +107,9 @@ function BounceLockedLevel()
 {
     local VCGameViewportClient ViewportClient;
 
-    // Stop our timer so it does not fire against a level being torn down.
+    // Stop our timers so they do not fire against a level being torn down.
     ClearTimer('PublishCleanliness');
+    ClearTimer('PollTraps');
 
     // The trophy handler is persistent (it lives on the viewport client and
     // survives travel) and holds a reference to this level's punchout handler.
@@ -109,6 +121,189 @@ function BounceLockedLevel()
         ViewportClient.TrophyHandler.PunchoutHandler = None;
 
     ConsoleCommand("open VC_JanitorOffice");
+}
+
+// Applies traps from the client-written queue, one per poll so a burst spaces
+// itself out. The queue file is read fresh every time (config-style objects
+// cache at startup; BasicLoadObject does not). The applied counter lives in the
+// config state, never in memory alone, so a relaunch cannot replay traps.
+function PollTraps()
+{
+    local VCMapInfo MapInfo;
+    local array<string> Entries;
+    local int I, EntryIndex;
+    local string TrapType;
+
+    // Traps only fire in a cleanable gameplay level.
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo == None || MapInfo.bIsOfficeLevel || APState == None)
+        return;
+
+    if (TrapQueueFile == None)
+        TrapQueueFile = new class'VCArchipelagoTraps';
+    if (!class'Engine'.static.BasicLoadObject(TrapQueueFile, "..\\..\\Saves\\VCArchipelagoTraps.sav", true, 1))
+        return;
+
+    // A different seed's counter means this queue was never applied here. Start
+    // it at the client's baseline: everything the player already held when the
+    // session connected counts as applied, so no backlog is dumped.
+    if (TrapQueueFile.SeedTag != APState.APTrapSeed)
+    {
+        APState.APTrapSeed = TrapQueueFile.SeedTag;
+        APState.APTrapsApplied = int(TrapQueueFile.BaselineIndex);
+        APState.SaveConfig();
+        return;
+    }
+
+    // The baseline can rise after the seed is latched (a reconnect, or the
+    // client refining an early write). Raising the counter first means the
+    // freshly baselined backlog can never apply.
+    if (int(TrapQueueFile.BaselineIndex) > APState.APTrapsApplied)
+    {
+        APState.APTrapsApplied = int(TrapQueueFile.BaselineIndex);
+        APState.SaveConfig();
+    }
+
+    ParseStringIntoArray(TrapQueueFile.TrapQueue, Entries, ",", true);
+    for (I = 0; I < Entries.Length; I++)
+    {
+        EntryIndex = int(Left(Entries[I], InStr(Entries[I], ":")));
+        if (EntryIndex <= APState.APTrapsApplied)
+            continue;
+        TrapType = Mid(Entries[I], InStr(Entries[I], ":") + 1);
+        ApplyTrap(TrapType);
+        APState.APTrapsApplied = EntryIndex;
+        APState.SaveConfig();
+        return;
+    }
+}
+
+function ApplyTrap(string TrapType)
+{
+    `log("VCAP TRAP type="$TrapType);
+    if (TrapType ~= "MessDump")
+    {
+        SpawnMessDump();
+    }
+    else if (TrapType ~= "BucketSpill")
+    {
+        // A level with no bucket in play still owes a setback.
+        if (!SpillNearestBucket())
+            SpawnMessDump();
+    }
+    else if (TrapType ~= "Slowdown")
+    {
+        SlowJanitors();
+    }
+}
+
+// Sprays blood splats on the floor around the janitor. Splats spawn the same
+// way the game's own footprints and mop drips do (a plain Spawn on a downward
+// trace), and the live scan counts every VCSplat, so cleanliness drops
+// legitimately and mopping recovers it.
+function SpawnMessDump()
+{
+    local VCPawn Janitor;
+    local Vector Start, HitLocation, HitNormal, Offset;
+    local Actor Floor;
+    local Rotator SplatRotation;
+    local int I;
+
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+        break;
+    if (Janitor == None)
+        return;
+
+    for (I = 0; I < 10; I++)
+    {
+        Offset = VRand() * RandRange(48.0, 224.0);
+        Offset.Z = 0.0;
+        Start = Janitor.Location + Offset + vect(0, 0, 32);
+        // World-geometry-only trace, straight down.
+        Floor = Trace(HitLocation, HitNormal, Start - vect(0, 0, 512), Start, false);
+        if (Floor == None || IsSplatForbiddenAt(HitLocation))
+            continue;
+        SplatRotation = Rotator(-HitNormal);
+        SplatRotation.Roll = Rand(65536);
+        Spawn(class'VCSplat_BloodyMop',,, HitLocation + HitNormal * 6.0, SplatRotation,, true);
+    }
+}
+
+// Mirrors the game's own splat-placement checks: no splats in water or inside
+// a designated no-splat volume.
+function bool IsSplatForbiddenAt(Vector Point)
+{
+    local PhysicsVolume Volume;
+
+    foreach WorldInfo.AllActors(class'PhysicsVolume', Volume)
+    {
+        if ((Volume.bWaterVolume || VCNoSplatVolume(Volume) != None)
+            && Volume.ContainsPoint(Point))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Tips over the non-empty bucket nearest the janitor, using the bucket's own
+// Spill (it empties the bucket and sprays saturation-scaled splats itself).
+function bool SpillNearestBucket()
+{
+    local VCPawn Janitor;
+    local VCBucket Bucket, Nearest;
+    local float Distance, NearestDistance;
+
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+        break;
+    if (Janitor == None)
+        return false;
+
+    foreach DynamicActors(class'VCBucket', Bucket)
+    {
+        if (Bucket.bEmpty)
+            continue;
+        Distance = VSize(Bucket.Location - Janitor.Location);
+        if (Nearest == None || Distance < NearestDistance)
+        {
+            Nearest = Bucket;
+            NearestDistance = Distance;
+        }
+    }
+    if (Nearest == None)
+        return false;
+    Nearest.Spill();
+    return true;
+}
+
+// Halves every janitor's ground speed for thirty seconds. Another slowdown
+// while one is active restarts the clock without stacking the halving.
+function SlowJanitors()
+{
+    local VCPawn Janitor;
+
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+    {
+        if (SlowedJanitors.Find(Janitor) != -1)
+            continue;
+        SlowedJanitors.AddItem(Janitor);
+        SlowedJanitorSpeeds.AddItem(Janitor.GroundSpeed);
+        Janitor.GroundSpeed = Janitor.GroundSpeed * 0.5;
+    }
+    SetTimer(30.0, false, 'RestoreJanitorSpeeds');
+}
+
+function RestoreJanitorSpeeds()
+{
+    local int I;
+
+    for (I = 0; I < SlowedJanitors.Length; I++)
+    {
+        if (SlowedJanitors[I] != None)
+            SlowedJanitors[I].GroundSpeed = SlowedJanitorSpeeds[I];
+    }
+    SlowedJanitors.Length = 0;
+    SlowedJanitorSpeeds.Length = 0;
 }
 
 // The game's single legitimate punch-out path: the punch machine and the level
@@ -126,10 +321,11 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     if (bWasPunchingOut || !IsTimerActive('PunchoutDelay'))
         return;
 
-    // Catch the final cleanliness rungs, then stop the timer: the level is on
+    // Catch the final cleanliness rungs, then stop our timers: the level is on
     // its way out, and the handler's results are final now.
     PublishCleanliness();
     ClearTimer('PublishCleanliness');
+    ClearTimer('PollTraps');
 
     Handler = VCPunchoutHandler_General(PunchoutHandler);
     if (Handler == None || APState == None)
