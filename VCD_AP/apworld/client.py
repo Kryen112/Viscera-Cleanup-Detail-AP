@@ -113,7 +113,10 @@ def location_names_from_state(state: dict[str, str]) -> list[str]:
         return []
     names: list[str] = []
     for rung in parse_rungs(state.get("APMilestones", "")):
-        names.append(employee_of_the_month_name(display) if rung >= 100
+        # Exactly 100 is Employee of the Month; rungs past it are their own
+        # above_and_beyond milestones (rungs beyond the seed's ladder resolve
+        # to nothing and drop out downstream).
+        names.append(employee_of_the_month_name(display) if rung == 100
                      else milestone_name(display, rung))
     if state.get("APPunchedOut") == "1" and state.get("APFired") != "1":
         names.append(punch_out_name(display))

@@ -126,9 +126,11 @@ class VCDWorld(World):
     def _enabled_locations_for(self, map_name: str) -> list[str]:
         step = self._step()
         speedrunsanity = bool(self.options.speedrunsanity)
+        above_and_beyond = bool(self.options.above_and_beyond)
         return [
             name for name, loc_map in LOCATION_MAP.items()
-            if loc_map == map_name and location_enabled(name, step, speedrunsanity)
+            if loc_map == map_name
+            and location_enabled(name, step, speedrunsanity, above_and_beyond)
         ]
 
     def create_regions(self) -> None:
@@ -205,6 +207,7 @@ class VCDWorld(World):
             "goal": self.options.goal.current_key,
             "goal_amount": int(self.options.goal_amount.value),
             "milestone_step": self._step(),
+            "above_and_beyond": bool(self.options.above_and_beyond),
             "speedrunsanity": bool(self.options.speedrunsanity),
             "started_maps": sorted(self.started_maps),
             "pooled_maps": list(MAP_NAMES),

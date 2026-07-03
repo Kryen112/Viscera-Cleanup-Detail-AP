@@ -29,6 +29,14 @@ class TestLocationNamesFromState(unittest.TestCase):
             "Athena's Wrath - Employee of the Month",
         ])
 
+    def test_over_100_rungs_are_their_own_milestones(self) -> None:
+        state = {"APMap": "VC_Hall", "APMilestones": "100,105,110"}
+        self.assertEqual(location_names_from_state(state), [
+            "Athena's Wrath - Employee of the Month",
+            "Athena's Wrath - Clean 105%",
+            "Athena's Wrath - Clean 110%",
+        ])
+
     def test_punch_out_in_good_standing(self) -> None:
         state = {"APMap": "VC_Hall", "APPunchedOut": "1", "APFired": "0"}
         self.assertEqual(location_names_from_state(state),

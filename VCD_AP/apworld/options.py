@@ -22,6 +22,14 @@ class MilestoneStep(Choice):
     default = 5
 
 
+class AboveAndBeyond(Toggle):
+    """Extend each level's milestone ladder past 100 percent (levels overfill
+    via restorables and bonus points). The ladder tops out a full step under
+    the level's known maximum cleanliness, so the last rung stays attainable.
+    Off by default."""
+    display_name = "Above and beyond"
+
+
 class Speedrunsanity(Toggle):
     """Add a Speedrun check to every level: punch out at least 95 percent clean
     within 75 percent of the level's par time. Off by default, so seeds carry no
@@ -82,6 +90,7 @@ class StartingLevels(NamedRange):
 class VCDOptions(PerGameCommonOptions):
     start_inventory_from_pool: StartInventoryPool
     milestone_step: MilestoneStep
+    above_and_beyond: AboveAndBeyond
     speedrunsanity: Speedrunsanity
     trap_percentage: TrapPercentage
     goal: Goal

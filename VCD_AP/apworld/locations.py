@@ -3,23 +3,40 @@
 - a milestone ladder at every 5 percent (`Clean 5%` .. `Clean 95%`), each enabled
   only when it is a multiple of the seed's milestone step,
 - an Employee of the Month check (the 100 percent rung, enabled for every step),
+- an over-100 ladder topping out a full step under the level's known maximum,
+  enabled by the above_and_beyond option,
 - a Speedrun check (enabled by the speedrunsanity option),
 - the level's collectibles and Bob note, where it has them (always enabled),
 - and on the Digsite, the two Bob events (gates opened, Bob found).
 
 The full set of names and ids is static (the datapackage is shared across seeds);
-a seed enables a subset via the milestone step and speedrunsanity options.
+a seed enables a subset via the milestone step, speedrunsanity, and
+above_and_beyond options.
 """
 
 from __future__ import annotations
 
 from .collectibles import BOB_ALTAR_MAP, BOB_NOTES, COLLECTIBLES
-from .levels import DISPLAY_BY_MAP, LEVELS
+from .levels import DISPLAY_BY_MAP, LEVELS, MAX_CLEAN_PERCENT_BY_MAP
 
 LOCATION_ID_BASE = 0x5643_1_0000  # kept well clear of the item id range
 
 MILESTONE_STEP_CHOICES: tuple[int, ...] = (5, 10, 20, 25)
 CLEAN_RUNGS: list[int] = list(range(5, 100, 5))  # 5..95; 100 is Employee of the Month
+
+
+def top_rung(map_name: str, step: int) -> int:
+    """The highest above_and_beyond rung a level generates at a step: the
+    level's known maximum floored to the step, minus one more step, so a small
+    measurement error cannot strand the top check. At or below 100 the level
+    gets no over-100 rungs at that step."""
+    return int(MAX_CLEAN_PERCENT_BY_MAP[map_name] // step) * step - step
+
+
+def over_100_rungs(map_name: str) -> list[int]:
+    """Every over-100 rung the datapackage holds for a level (the finest step)."""
+    return list(range(105, top_rung(map_name, 5) + 1, 5))
+
 
 GROUP_PUNCH_OUT = "PunchOut"
 GROUP_MILESTONE = "Milestone"
@@ -90,6 +107,9 @@ for _map, _token in BOB_NOTES:
     _add(bob_note_name(DISPLAY_BY_MAP[_map]), _map, GROUP_BOB_NOTE)
 _add(DIGSITE_GATES_LOCATION, BOB_ALTAR_MAP, GROUP_BOB_EVENT)
 _add(FIND_BOB_LOCATION, BOB_ALTAR_MAP, GROUP_BOB_EVENT)
+for _map, _display, _title in LEVELS:
+    for _p in over_100_rungs(_map):
+        _add(milestone_name(_display, _p), _map, GROUP_MILESTONE, _p)
 
 COLLECTIBLE_LOCATION_NAMES: list[str] = [
     collectible_name(DISPLAY_BY_MAP[_m], _c) for _m, _t, _c in COLLECTIBLES
@@ -110,9 +130,16 @@ def milestone_enabled(location_name: str, step: int) -> bool:
     return percent % step == 0
 
 
-def location_enabled(location_name: str, step: int, speedrunsanity: bool) -> bool:
+def location_enabled(location_name: str, step: int, speedrunsanity: bool,
+                     above_and_beyond: bool) -> bool:
     """Whether a seed with the given options creates this location. Speedrun
-    checks exist only under speedrunsanity; the rest follows the milestone step."""
+    checks exist only under speedrunsanity; over-100 rungs only under
+    above_and_beyond, on the step, up to the level's top rung at that step; the
+    rest follows the milestone step."""
     if LOCATION_GROUP[location_name] == GROUP_SPEEDRUN:
         return speedrunsanity
+    percent = MILESTONE_PERCENT.get(location_name)
+    if percent is not None and percent > 100:
+        return (above_and_beyond and percent % step == 0
+                and percent <= top_rung(LOCATION_MAP[location_name], step))
     return milestone_enabled(location_name, step)

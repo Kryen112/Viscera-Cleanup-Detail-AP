@@ -13,8 +13,9 @@ from ..items import ITEM_NAME_TO_ID, access_item_name
 from ..levels import DISPLAY_BY_MAP, LEVELS, MAP_NAMES
 from ..locations import (DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION,
                          LOCATION_NAME_TO_ID, MILESTONE_PERCENT,
-                         collectible_name, milestone_enabled, punch_out_name,
-                         speedrun_name)
+                         collectible_name, milestone_enabled, milestone_name,
+                         over_100_rungs, punch_out_name, speedrun_name,
+                         top_rung)
 
 
 class TestDefault(VCDTestBase):
@@ -57,6 +58,30 @@ class TestSpeedrunsanity(VCDTestBase):
     def test_speedrun_locations_exist(self):
         for _map, display, _title in LEVELS:
             self.assert_location_exists(speedrun_name(display))
+
+
+class TestAboveAndBeyond(VCDTestBase):
+    options = {"above_and_beyond": True, "milestone_step": 10}
+
+    def test_over_100_rungs_exist_on_the_step_up_to_the_top(self):
+        # Athena's Wrath at step 10 tops at 140.
+        for percent in (110, 120, 130, 140):
+            self.assert_location_exists(milestone_name("Athena's Wrath", percent))
+        names = {loc.name for loc in self.multiworld.get_locations(self.player)}
+        self.assertNotIn(milestone_name("Athena's Wrath", 150), names)
+        # Off-step rungs stay out even though the datapackage holds them.
+        self.assertNotIn(milestone_name("Athena's Wrath", 105), names)
+        # Gravity Drive has no over-100 rung at step 10.
+        self.assertNotIn(milestone_name("Gravity Drive", 110), names)
+
+
+class TestNoOver100ByDefault(VCDTestBase):
+    options = {}
+
+    def test_over_100_rungs_absent(self):
+        names = {loc.name for loc in self.multiworld.get_locations(self.player)}
+        self.assertNotIn(milestone_name("Athena's Wrath", 105), names)
+        self.assertNotIn(milestone_name("Zilla Pagoda", 200), names)
 
 
 class TestTrapPercentage(VCDTestBase):
@@ -168,13 +193,23 @@ class TestData(unittest.TestCase):
         # plus the level's collectibles, its Bob note, and the Digsite events.
         from ..locations import LOCATION_MAP
         for _map, display, _title in LEVELS:
-            expected = 22
+            expected = 22 + len(over_100_rungs(_map))
             expected += sum(1 for m, _t, _c in COLLECTIBLES if m == _map)
             expected += sum(1 for m, _t in BOB_NOTES if m == _map)
             if _map == "VC_Digsite":
                 expected += 2
             count = sum(1 for m in LOCATION_MAP.values() if m == _map)
             self.assertEqual(count, expected, display)
+
+    def test_top_rung_floors_to_step_then_backs_off_one(self):
+        # Athena's Wrath peaks at 154.04 percent.
+        self.assertEqual(top_rung("VC_Hall", 5), 145)
+        self.assertEqual(top_rung("VC_Hall", 10), 140)
+        self.assertEqual(top_rung("VC_Hall", 25), 125)
+        # Gravity Drive peaks at 113.78: one over-100 rung at step 5, none wider.
+        self.assertEqual(top_rung("VC_ZeroG_New", 5), 105)
+        self.assertEqual(top_rung("VC_ZeroG_New", 10), 100)
+        self.assertEqual(over_100_rungs("VC_ZeroG_New"), [105])
 
     def test_collectible_tokens_unique(self):
         tokens = ([t for _m, t, _c in COLLECTIBLES] + [t for _m, t in BOB_NOTES])
