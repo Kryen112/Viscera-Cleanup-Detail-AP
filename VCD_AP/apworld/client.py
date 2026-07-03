@@ -460,7 +460,6 @@ class VCDContext(CommonContext):
             client_logger.error(f"Could not write the grants file: {error}")
             return
         self.last_grants_written = joined
-        client_logger.info(f"Unlocked {len(ordered)} level(s).")
 
     def write_traps_if_changed(self) -> None:
         """Write the full trap queue (always on connect, even empty, so a stale
