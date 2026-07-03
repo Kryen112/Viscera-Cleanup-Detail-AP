@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -54,8 +55,8 @@ def _mod_sources() -> "list[tuple[str, bytes]]":
     directly from a source checkout, or through importlib.resources when the
     world is zipimported from a packaged .apworld."""
     if MOD_DATA_DIR.is_dir():
-        return [(path.name, path.read_bytes())
-                for path in sorted(MOD_DATA_DIR.glob("*.uc"))]
+        return sorted((path.name, path.read_bytes())
+                      for path in MOD_DATA_DIR.glob("*.uc"))
     from importlib import resources
     root = resources.files(__package__) / "data" / "mod" / MOD_PACKAGE / "Classes"
     try:
@@ -110,6 +111,31 @@ def _add_line_to_section(path: Path, section: str, line: str,
         out.append(line)
     _write_ini_lines(path, out)
     return True
+
+
+def mod_is_current(install_dir: Path) -> bool:
+    """Whether the install already carries this apworld's mod: the deployed
+    source matches the packaged source byte for byte, and the compiled package
+    is no older than those sources (a deploy whose compile never landed reads
+    as stale). An apworld packaged without mod source counts as current, so it
+    can never trigger an install loop."""
+    install_dir = Path(install_dir)
+    sources = _mod_sources()
+    if not sources:
+        return True
+    source_dir = install_dir / "Development" / "Src" / MOD_PACKAGE / "Classes"
+    deployed = ({path.name: path for path in source_dir.glob("*.uc")}
+                if source_dir.is_dir() else {})
+    if sorted(deployed) != [name for name, _ in sources]:
+        return False
+    for name, content in sources:
+        if deployed[name].read_bytes() != content:
+            return False
+    package = install_dir / "UDKGame" / "Script" / f"{MOD_PACKAGE}.u"
+    if not package.is_file():
+        return False
+    newest_source = max(path.stat().st_mtime for path in deployed.values())
+    return package.stat().st_mtime >= newest_source
 
 
 def deploy(install_dir: Path) -> list[str]:
@@ -196,9 +222,10 @@ def _wire_generated_engine_ini(config: Path, log: "list[str]") -> None:
 
 
 def compile_mod(install_dir: Path, timeout_seconds: float = 120.0) -> tuple[bool, str]:
-    """Run UDK.exe make and report whether the package was rebuilt cleanly. The
-    make console sometimes never exits on its own, so it is stopped once the
-    timeout passes (the compile itself finishes long before)."""
+    """Run UDK.exe make windowless and report whether the package was rebuilt
+    cleanly. The engine's log window starts hidden and the unattended flags let
+    the run exit on its own (without them it waits on a keypress); the timeout
+    kill stays as a backstop."""
     install_dir = Path(install_dir)
     udk = install_dir / "Binaries" / "Win32" / "UDK.exe"
     package = install_dir / "UDKGame" / "Script" / f"{MOD_PACKAGE}.u"
@@ -207,7 +234,14 @@ def compile_mod(install_dir: Path, timeout_seconds: float = 120.0) -> tuple[bool
         return False, f"UDK.exe not found at {udk}."
 
     before = package.stat().st_mtime if package.is_file() else 0.0
-    process = subprocess.Popen([str(udk), "make"], cwd=str(udk.parent))
+    command = [str(udk), "make", "-unattended", "-nopause", "-silent", "-nosplash"]
+    popen_extras = {}
+    if sys.platform == "win32":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        popen_extras["startupinfo"] = startupinfo
+    process = subprocess.Popen(command, cwd=str(udk.parent), **popen_extras)
     try:
         process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:

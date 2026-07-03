@@ -271,7 +271,8 @@ class VCDContext(CommonContext):
 
     async def setup_and_launch(self) -> None:
         """On connect: make sure an install folder is known (picker on first run),
-        isolate this seed's saves, then auto-launch the game if that setting is on."""
+        bring the installed mod up to date, isolate this seed's saves, then
+        auto-launch the game if that setting is on."""
         if not self.install_dir:
             if gui_enabled:
                 await self.pick_install_dir()
@@ -281,12 +282,33 @@ class VCDContext(CommonContext):
                     "viscera_cleanup_detail_options -> install_folder in host.yaml.")
         if not self.install_dir:
             return
+        if bool(VCDWorld.settings.auto_install_mod):
+            await self.ensure_mod_current()
         self._isolate_saves()
         self.saves_ready = True
         self.write_grants_if_changed()
         self.write_traps_if_changed()
         if not self.game_launched and bool(VCDWorld.settings.auto_launch_game):
             self.launch_game()
+
+    async def ensure_mod_current(self) -> None:
+        """Install the packaged mod when the install carries a different one (on
+        connect, before the game launches). Quiet when nothing changed."""
+        try:
+            current = installer.mod_is_current(self.install_dir)
+        except OSError as error:
+            client_logger.warning(f"Could not check the installed mod: {error}")
+            return
+        if current:
+            return
+        if self.game_running():
+            client_logger.warning(
+                "This apworld carries a different mod than the install, but the "
+                "game is running. Close it and run /installmod, then relaunch.")
+            return
+        client_logger.info(
+            "This apworld carries a different mod than the install; updating it.")
+        await self.install_mod()
 
     def _isolate_saves(self) -> None:
         """Swap in this seed's own save set, unless disabled. Skipped if the game is

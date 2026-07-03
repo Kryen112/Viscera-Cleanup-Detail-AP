@@ -1,4 +1,5 @@
 """Tests for the mod installer's deploy step, against a throwaway install tree."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -141,7 +142,8 @@ class TestCompileMod(unittest.TestCase):
         self._tmp.cleanup()
 
     def _run(self, log_text: str, write_package: bool) -> "tuple[bool, str]":
-        def fake_popen(_cmd, cwd=None):
+        def fake_popen(cmd, cwd=None, **_extras):
+            self.command = cmd
             (self.install / "UDKGame" / "Logs" / "Launch.log").write_text(
                 log_text, encoding="utf-8")
             if write_package:
@@ -156,6 +158,12 @@ class TestCompileMod(unittest.TestCase):
         ok, message = self._run("Log: Success - 0 error(s), 0 warning(s)", True)
         self.assertTrue(ok)
         self.assertIn("compiled cleanly", message)
+
+    def test_make_runs_unattended(self) -> None:
+        # The unattended flags let the hidden make window exit on its own.
+        self._run("Log: Success - 0 error(s), 0 warning(s)", True)
+        self.assertIn("-unattended", self.command)
+        self.assertIn("-nopause", self.command)
 
     def test_error_with_stale_package_is_a_failure(self) -> None:
         # A failed compile leaves the old package untouched; the log decides.
@@ -174,6 +182,86 @@ class TestCompileMod(unittest.TestCase):
         ok, message = self._run("Log: Success - 0 error(s), 0 warning(s)", False)
         self.assertFalse(ok)
         self.assertIn("not produced", message)
+
+
+class TestModIsCurrent(unittest.TestCase):
+    """mod_is_current against hand-built deploy and compile outcomes."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.install = Path(self._tmp.name)
+        mod_data = self.install / "packaged" / "Classes"
+        mod_data.mkdir(parents=True)
+        (mod_data / "VCGame_Archipelago.uc").write_text("class;\n", encoding="ascii")
+        self._patch = mock.patch.object(installer, "MOD_DATA_DIR", mod_data)
+        self._patch.start()
+        self.source_dir = (self.install / "Development" / "Src" / "VCArchipelago"
+                           / "Classes")
+        self.package = self.install / "UDKGame" / "Script" / "VCArchipelago.u"
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+        self._tmp.cleanup()
+
+    def _deploy_and_compile(self) -> None:
+        self.source_dir.mkdir(parents=True)
+        (self.source_dir / "VCGame_Archipelago.uc").write_text(
+            "class;\n", encoding="ascii")
+        self.package.parent.mkdir(parents=True)
+        self.package.write_bytes(b"u")
+        source_time = (self.source_dir / "VCGame_Archipelago.uc").stat().st_mtime
+        os.utime(self.package, (source_time + 10, source_time + 10))
+
+    def test_matching_install_is_current(self) -> None:
+        self._deploy_and_compile()
+        self.assertTrue(installer.mod_is_current(self.install))
+
+    def test_name_order_matches_across_sort_styles(self) -> None:
+        # These two names sort differently as Path objects (case-insensitive on
+        # Windows) than as plain strings; a mismatch reads a fresh install as
+        # stale forever.
+        names = ("VCGameViewportClient_Archipelago.uc", "VCGame_Archipelago.uc")
+        for name in names:
+            (installer.MOD_DATA_DIR / name).write_text("class;\n", encoding="ascii")
+        self._deploy_and_compile()
+        for name in names:
+            (self.source_dir / name).write_text("class;\n", encoding="ascii")
+        source_time = max(path.stat().st_mtime
+                          for path in self.source_dir.glob("*.uc"))
+        os.utime(self.package, (source_time + 10, source_time + 10))
+        self.assertTrue(installer.mod_is_current(self.install))
+
+    def test_missing_deploy_is_stale(self) -> None:
+        self.assertFalse(installer.mod_is_current(self.install))
+
+    def test_changed_source_is_stale(self) -> None:
+        self._deploy_and_compile()
+        (self.source_dir / "VCGame_Archipelago.uc").write_text(
+            "class; // old\n", encoding="ascii")
+        source_time = (self.source_dir / "VCGame_Archipelago.uc").stat().st_mtime
+        os.utime(self.package, (source_time + 10, source_time + 10))
+        self.assertFalse(installer.mod_is_current(self.install))
+
+    def test_extra_deployed_file_is_stale(self) -> None:
+        self._deploy_and_compile()
+        (self.source_dir / "VCLeftover.uc").write_text("class;\n", encoding="ascii")
+        self.assertFalse(installer.mod_is_current(self.install))
+
+    def test_missing_package_is_stale(self) -> None:
+        self._deploy_and_compile()
+        self.package.unlink()
+        self.assertFalse(installer.mod_is_current(self.install))
+
+    def test_package_older_than_source_is_stale(self) -> None:
+        # A deploy whose compile never landed leaves a package behind the sources.
+        self._deploy_and_compile()
+        source_time = (self.source_dir / "VCGame_Archipelago.uc").stat().st_mtime
+        os.utime(self.package, (source_time - 10, source_time - 10))
+        self.assertFalse(installer.mod_is_current(self.install))
+
+    def test_apworld_without_mod_source_is_current(self) -> None:
+        with mock.patch.object(installer, "_mod_sources", return_value=[]):
+            self.assertTrue(installer.mod_is_current(self.install))
 
 
 if __name__ == "__main__":

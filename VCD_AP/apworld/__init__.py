@@ -68,9 +68,16 @@ class VCDSettings(settings.Group):
         connects. On by default. Bring your career saves back with the client's
         /restore command."""
 
+    class AutoInstallMod(settings.Bool):
+        """Compare the game mod packaged in this apworld against the install when
+        the client connects, and deploy and recompile it if it differs, before the
+        game launches. On by default. Set to false to manage the mod yourself with
+        the /installmod command."""
+
     install_folder: InstallFolder = InstallFolder("")
     auto_launch_game: Union[AutoLaunchGame, bool] = True
     isolate_saves: Union[IsolateSaves, bool] = True
+    auto_install_mod: Union[AutoInstallMod, bool] = True
 
 
 class VCDItem(Item):
