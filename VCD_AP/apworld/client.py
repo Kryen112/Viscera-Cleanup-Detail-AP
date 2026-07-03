@@ -213,8 +213,8 @@ class VCDCommandProcessor(ClientCommandProcessor):
         self.ctx.restore_saves()
 
     def _cmd_installmod(self) -> None:
-        """Install (or update) the VCArchipelago game mod into the install folder
-        and compile it. Close the game first."""
+        """Install (or update) the precompiled VCArchipelago game mod into the
+        install folder. Close the game first."""
         asyncio.create_task(self.ctx.install_mod())
 
 
@@ -292,25 +292,6 @@ class VCDContext(CommonContext):
         if not self.game_launched and bool(VCDWorld.settings.auto_launch_game):
             self.launch_game()
 
-    async def ensure_mod_current(self) -> None:
-        """Install the packaged mod when the install carries a different one (on
-        connect, before the game launches). Quiet when nothing changed."""
-        try:
-            current = installer.mod_is_current(self.install_dir)
-        except OSError as error:
-            client_logger.warning(f"Could not check the installed mod: {error}")
-            return
-        if current:
-            return
-        if self.game_running():
-            client_logger.warning(
-                "This apworld carries a different mod than the install, but the "
-                "game is running. Close it and run /installmod, then relaunch.")
-            return
-        client_logger.info(
-            "This apworld carries a different mod than the install; updating it.")
-        await self.install_mod()
-
     def _isolate_saves(self) -> None:
         """Swap in this seed's own save set, unless disabled. Skipped if the game is
         already running, so saves are never swapped under a live game."""
@@ -369,16 +350,17 @@ class VCDContext(CommonContext):
 
     def game_running(self) -> bool:
         # The client-launched process is authoritative, but a game the player
-        # started themselves must count too: swapping saves or recompiling
-        # under a live game corrupts state.
+        # started themselves must count too: swapping saves or replacing the
+        # mod package under a live game corrupts state.
         if self.game_process is not None and self.game_process.poll() is None:
             return True
         return game_process_running()
 
     async def install_mod(self) -> None:
-        """Deploy the packaged mod source into the install and compile it (via
-        /installmod). The compile blocks for up to two minutes, so it runs off
-        the event loop."""
+        """Copy the precompiled mod package into the install and wire it up (via
+        /installmod and the connect check). Nothing compiles: every player runs
+        the same package bytes, so the package GUID matches across installs and
+        co-op joins work."""
         if not self.install_dir:
             client_logger.warning("No install folder set. Use /install first.")
             return
@@ -390,13 +372,29 @@ class VCDContext(CommonContext):
             for line in installer.deploy(self.install_dir):
                 client_logger.info(line)
         except (OSError, ValueError) as error:
-            client_logger.error(f"Mod deploy failed: {error}")
+            client_logger.error(f"Mod install failed: {error}")
             return
-        client_logger.info("Compiling the mod (up to two minutes)...")
-        loop = asyncio.get_event_loop()
-        ok, message = await loop.run_in_executor(
-            None, installer.compile_mod, self.install_dir)
-        (client_logger.info if ok else client_logger.error)(message)
+        client_logger.info("Mod installed. Relaunch the game to load it.")
+
+    async def ensure_mod_current(self) -> None:
+        """Install the packaged mod when the install carries a different one (on
+        connect, before the game launches). Quiet when nothing changed. A failed
+        check only warns: the rest of the connect setup must still run."""
+        try:
+            current = installer.mod_is_current(self.install_dir)
+        except Exception as error:
+            client_logger.warning(f"Could not check the installed mod: {error}")
+            return
+        if current:
+            return
+        if self.game_running():
+            client_logger.warning(
+                "This apworld carries a different mod than the install, but the "
+                "game is running. Close it and run /installmod, then relaunch.")
+            return
+        client_logger.info(
+            "This apworld carries a different mod than the install; updating it.")
+        await self.install_mod()
 
     def restore_saves(self) -> None:
         """Move the career saves back and stop isolating (manual, via /restore)."""

@@ -1,26 +1,31 @@
 """Installs the VCArchipelago mod into a game install, from the client.
 
-The packaged apworld carries the mod source under ``data/mod`` (staged there by
-build_apworld.py). ``deploy`` copies it into the install's ``Development\\Src``
-tree, wires the package into the compile and load lists in DefaultEngine.ini
-(the only stock file it edits, backed up first), registers the Archipelago mode
-provider and the SaveConfig base as their own ini files, and wires the same
-lines into the generated UDKEngine.ini in place. The generated inis carry the
-player's saved settings (view bob, audio, and the rest), so they are edited,
-never cleared. ``compile_mod`` then runs ``UDK.exe make`` and reads the verdict
-from the fresh package file and Launch.log. Both are idempotent.
+The packaged apworld carries the mod under ``data/mod``: the source classes for
+reference and one canonical compiled ``VCArchipelago.u`` (staged and verified
+by build_apworld.py). ``deploy`` copies that package file into the install's
+``UDKGame\\Script``, wires the load list and the viewport swap into
+DefaultEngine.ini (the only stock file it edits, backed up first), registers
+the Archipelago mode provider and the SaveConfig base as their own ini files,
+and wires the same lines into the generated UDKEngine.ini in place. The
+generated inis carry the player's saved settings (view bob, audio, and the
+rest), so they are edited, never cleared.
+
+Nothing compiles on a player machine. Every install runs the same package
+bytes, so the package GUID matches everywhere and co-op joins work; a locally
+compiled package would carry its own GUID and split the players. Deploy
+therefore also removes the compile wiring an older installer left behind (the
+deployed source tree and the EditPackages lines), so the game can never offer
+to rebuild scripts locally and fork the GUID. Idempotent.
 """
 from __future__ import annotations
 
 import re
 import shutil
-import subprocess
-import sys
-import time
 from pathlib import Path
 
 MOD_PACKAGE = "VCArchipelago"
-MOD_DATA_DIR = Path(__file__).parent / "data" / "mod" / MOD_PACKAGE / "Classes"
+MOD_PACKAGE_DATA = (Path(__file__).parent / "data" / "mod" / MOD_PACKAGE
+                    / f"{MOD_PACKAGE}.u")
 BACKUP_DIR_NAME = "_archipelago_backup"
 
 SECTION_HEADER = re.compile(r"^\s*\[.+\]\s*$")
@@ -50,20 +55,19 @@ STATE_BASE_INI_LINES = [
 ]
 
 
-def _mod_sources() -> "list[tuple[str, bytes]]":
-    """The packaged mod source files as (name, bytes). Reads the data directory
-    directly from a source checkout, or through importlib.resources when the
-    world is zipimported from a packaged .apworld."""
-    if MOD_DATA_DIR.is_dir():
-        return sorted((path.name, path.read_bytes())
-                      for path in MOD_DATA_DIR.glob("*.uc"))
+def _packaged_module_bytes() -> "bytes | None":
+    """The canonical compiled package carried by the apworld. Reads the data
+    directory directly from a source checkout, or through importlib.resources
+    when the world is zipimported from a packaged .apworld."""
+    if MOD_PACKAGE_DATA.is_file():
+        return MOD_PACKAGE_DATA.read_bytes()
     from importlib import resources
-    root = resources.files(__package__) / "data" / "mod" / MOD_PACKAGE / "Classes"
+    entry = (resources.files(__package__) / "data" / "mod" / MOD_PACKAGE
+             / f"{MOD_PACKAGE}.u")
     try:
-        entries = [entry for entry in root.iterdir() if entry.name.endswith(".uc")]
+        return entry.read_bytes()
     except (FileNotFoundError, NotADirectoryError):
-        return []
-    return sorted(((entry.name, entry.read_bytes()) for entry in entries))
+        return None
 
 
 def _read_ini_lines(path: Path) -> list[str]:
@@ -113,56 +117,49 @@ def _add_line_to_section(path: Path, section: str, line: str,
     return True
 
 
-def mod_is_current(install_dir: Path) -> bool:
-    """Whether the install already carries this apworld's mod: the deployed
-    source matches the packaged source byte for byte, and the compiled package
-    is no older than those sources (a deploy whose compile never landed reads
-    as stale). An apworld packaged without mod source counts as current, so it
-    can never trigger an install loop."""
-    install_dir = Path(install_dir)
-    sources = _mod_sources()
-    if not sources:
-        return True
-    source_dir = install_dir / "Development" / "Src" / MOD_PACKAGE / "Classes"
-    deployed = ({path.name: path for path in source_dir.glob("*.uc")}
-                if source_dir.is_dir() else {})
-    if sorted(deployed) != [name for name, _ in sources]:
+def _remove_exact_line(path: Path, line: str) -> bool:
+    """Drop every occurrence of a line from an ini. Returns whether the file
+    changed."""
+    lines = _read_ini_lines(path)
+    kept = [existing for existing in lines if existing != line]
+    if len(kept) == len(lines):
         return False
-    for name, content in sources:
-        if deployed[name].read_bytes() != content:
-            return False
-    package = install_dir / "UDKGame" / "Script" / f"{MOD_PACKAGE}.u"
-    if not package.is_file():
-        return False
-    newest_source = max(path.stat().st_mtime for path in deployed.values())
-    return package.stat().st_mtime >= newest_source
+    _write_ini_lines(path, kept)
+    return True
 
 
 def deploy(install_dir: Path) -> list[str]:
-    """Deploy the mod source and config into the install. Returns log lines."""
+    """Deploy the compiled mod package and config into the install. Returns
+    log lines."""
     install_dir = Path(install_dir)
     config = install_dir / "UDKGame" / "Config"
     default_engine = config / "DefaultEngine.ini"
     if not default_engine.is_file():
         raise FileNotFoundError(f"{default_engine} not found; is this a Viscera install?")
-    sources = _mod_sources()
-    if not sources:
+    module_bytes = _packaged_module_bytes()
+    if module_bytes is None:
         raise FileNotFoundError(
-            "no mod source in the apworld package; it was packaged without data/mod")
+            "no compiled mod package in the apworld; it was packaged without data/mod")
 
     log: list[str] = []
-    source_dir = install_dir / "Development" / "Src" / MOD_PACKAGE / "Classes"
+    script_dir = install_dir / "UDKGame" / "Script"
+    script_dir.mkdir(parents=True, exist_ok=True)
+    target = script_dir / f"{MOD_PACKAGE}.u"
+    if not target.is_file() or target.read_bytes() != module_bytes:
+        target.write_bytes(module_bytes)
+        log.append("Copied the compiled mod package.")
+
+    # A leftover source tree plus compile wiring would let the game offer a
+    # local script rebuild, which forks the package GUID and breaks co-op.
+    source_dir = install_dir / "Development" / "Src" / MOD_PACKAGE
     if source_dir.is_dir():
         shutil.rmtree(source_dir)
-    source_dir.mkdir(parents=True)
-    for name, content in sources:
-        (source_dir / name).write_bytes(content)
-    log.append(f"Copied {len(sources)} mod source files.")
+        log.append("Removed the locally deployed mod source (the package ships "
+                   "compiled).")
 
     _backup_once(config, default_engine)
-    if _add_line_to_section(default_engine, "[UnrealEd.EditorEngine]",
-                            f"+EditPackages={MOD_PACKAGE}"):
-        log.append("Added the package to the compile list.")
+    if _remove_exact_line(default_engine, f"+EditPackages={MOD_PACKAGE}"):
+        log.append("Removed the package from the compile list.")
     if _add_line_to_section(default_engine, "[Engine.ScriptPackages]",
                             f"+NonNativePackages={MOD_PACKAGE}"):
         log.append("Added the package to the game load list.")
@@ -182,8 +179,8 @@ def deploy(install_dir: Path) -> list[str]:
         _write_ini_lines(state_base, STATE_BASE_INI_LINES)
     log.append("Registered the Archipelago mode and state file.")
 
-    # The generated UDKEngine.ini masks the Default arrays, so the package
-    # lines and the viewport swap must land in it too. It is edited in place:
+    # The generated UDKEngine.ini masks the Default arrays, so the load list
+    # and the viewport swap must land in it too. It is edited in place:
     # clearing it would also wipe the player's saved engine settings, and
     # UDKGame.ini (view bob and the other game settings) holds nothing of ours
     # and is never touched.
@@ -205,9 +202,7 @@ def _wire_generated_engine_ini(config: Path, log: "list[str]") -> None:
         log.append("Cleared an unrecognizable UDKEngine.ini (it regenerates "
                    "on launch).")
         return
-    changed = _add_line_to_section(generated, "[UnrealEd.EditorEngine]",
-                                   f"EditPackages={MOD_PACKAGE}",
-                                   create_section=True)
+    changed = _remove_exact_line(generated, f"EditPackages={MOD_PACKAGE}")
     changed = _add_line_to_section(generated, "[Engine.ScriptPackages]",
                                    f"NonNativePackages={MOD_PACKAGE}",
                                    create_section=True) or changed
@@ -221,47 +216,15 @@ def _wire_generated_engine_ini(config: Path, log: "list[str]") -> None:
         log.append("Wired the mod into the generated UDKEngine.ini in place.")
 
 
-def compile_mod(install_dir: Path, timeout_seconds: float = 120.0) -> tuple[bool, str]:
-    """Run UDK.exe make windowless and report whether the package was rebuilt
-    cleanly. The engine's log window starts hidden and the unattended flags let
-    the run exit on its own (without them it waits on a keypress); the timeout
-    kill stays as a backstop."""
-    install_dir = Path(install_dir)
-    udk = install_dir / "Binaries" / "Win32" / "UDK.exe"
-    package = install_dir / "UDKGame" / "Script" / f"{MOD_PACKAGE}.u"
-    launch_log = install_dir / "UDKGame" / "Logs" / "Launch.log"
-    if not udk.is_file():
-        return False, f"UDK.exe not found at {udk}."
-
-    before = package.stat().st_mtime if package.is_file() else 0.0
-    command = [str(udk), "make", "-unattended", "-nopause", "-silent", "-nosplash"]
-    popen_extras = {}
-    if sys.platform == "win32":
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
-        popen_extras["startupinfo"] = startupinfo
-    process = subprocess.Popen(command, cwd=str(udk.parent), **popen_extras)
+def mod_is_current(install_dir: Path) -> bool:
+    """Whether the install already runs this apworld's package, byte for byte.
+    An apworld packaged without a mod counts as current, so it can never
+    trigger an install loop."""
+    module_bytes = _packaged_module_bytes()
+    if module_bytes is None:
+        return True
+    installed = Path(install_dir) / "UDKGame" / "Script" / f"{MOD_PACKAGE}.u"
     try:
-        process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        process.kill()
-    time.sleep(0.5)
-
-    # The make run rewrites Launch.log, so the log verdict is authoritative: a
-    # failed compile leaves the old package file untouched, which on its own
-    # would look like "already compiled".
-    try:
-        log_text = launch_log.read_text(encoding="utf-8", errors="replace")
+        return installed.read_bytes() == module_bytes
     except OSError:
-        log_text = ""
-    # An up-to-date tree logs the no-work line instead of a success summary.
-    compiled_clean = ("Success - 0 error(s)" in log_text
-                      or "No scripts need recompiling" in log_text)
-    if not package.is_file():
-        return False, f"Compile failed: the mod package was not produced; check {launch_log}."
-    if not compiled_clean:
-        return False, f"Compile failed; check {launch_log}."
-    if package.stat().st_mtime <= before:
-        return True, "Mod already up to date."
-    return True, "Mod compiled cleanly. Relaunch the game to load it."
+        return False
