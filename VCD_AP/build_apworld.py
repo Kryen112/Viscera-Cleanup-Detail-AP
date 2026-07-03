@@ -4,8 +4,10 @@ Run from the repo root:
     py -3.12 VCD_AP/build_apworld.py
 
 Packaging only, no code generation. The apworld Python is committed source, not
-generated. This invokes Archipelago's native `Build APWorlds` Launcher to zip the
-world, then copies the result into the local custom_worlds dir(s).
+generated. This stages the mod source into apworld/data/mod (so the client's
+/installmod command can deploy it), then invokes Archipelago's native
+`Build APWorlds` Launcher to zip the world, then copies the result into the
+local custom_worlds dir(s).
 """
 
 from __future__ import annotations
@@ -35,6 +37,23 @@ APWORLD_INSTALL_DIRS = (
     else _DEFAULT_APWORLD_INSTALL_DIRS
 )
 # --- end LOCAL ONLY -------------------------------------------------------
+
+
+def stage_mod_source() -> None:
+    """Copy the mod source into the package data dir so the shipped apworld
+    carries it. The staged copy is a build artifact, not committed."""
+    source = VCD_AP_DIR / "mod" / "VCArchipelago" / "Classes"
+    staged = VCD_AP_DIR / "apworld" / "data" / "mod" / "VCArchipelago" / "Classes"
+    if staged.is_dir():
+        shutil.rmtree(staged)
+    staged.mkdir(parents=True)
+    count = 0
+    for unreal_file in sorted(source.glob("*.uc")):
+        shutil.copy2(unreal_file, staged / unreal_file.name)
+        count += 1
+    if count == 0:
+        raise FileNotFoundError(f"no mod source found under {source}")
+    print(f"Staged {count} mod source files into apworld/data/mod")
 
 
 def build_apworld_zip() -> "Path | None":
@@ -71,6 +90,7 @@ def install_apworld(zip_path: Path) -> None:
 
 
 def main() -> int:
+    stage_mod_source()
     zip_path = build_apworld_zip()
     if zip_path is None:
         return 1

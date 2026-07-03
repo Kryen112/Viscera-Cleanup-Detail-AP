@@ -24,7 +24,7 @@ from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser
                           gui_enabled, server_loop)
 from NetUtils import ClientStatus
 
-from . import VCDWorld, grants, traps
+from . import VCDWorld, grants, installer, traps
 from .saves import SaveManager
 from .collectibles import BOB_NOTE_MAP_BY_TOKEN, COLLECTIBLE_BY_TOKEN
 from .items import ITEM_NAME_TO_ID, access_item_name
@@ -164,6 +164,11 @@ class VCDCommandProcessor(ClientCommandProcessor):
         game first."""
         self.ctx.restore_saves()
 
+    def _cmd_installmod(self) -> None:
+        """Install (or update) the VCArchipelago game mod into the install folder
+        and compile it. Close the game first."""
+        asyncio.create_task(self.ctx.install_mod())
+
 
 class VCDContext(CommonContext):
     game = "Viscera Cleanup Detail"
@@ -291,6 +296,29 @@ class VCDContext(CommonContext):
 
     def game_running(self) -> bool:
         return self.game_process is not None and self.game_process.poll() is None
+
+    async def install_mod(self) -> None:
+        """Deploy the packaged mod source into the install and compile it (via
+        /installmod). The compile blocks for up to two minutes, so it runs off
+        the event loop."""
+        if not self.install_dir:
+            client_logger.warning("No install folder set. Use /install first.")
+            return
+        if self.game_running():
+            client_logger.warning(
+                "The game is running. Close it first, then run /installmod.")
+            return
+        try:
+            for line in installer.deploy(self.install_dir):
+                client_logger.info(line)
+        except (OSError, ValueError) as error:
+            client_logger.error(f"Mod deploy failed: {error}")
+            return
+        client_logger.info("Compiling the mod (up to two minutes)...")
+        loop = asyncio.get_event_loop()
+        ok, message = await loop.run_in_executor(
+            None, installer.compile_mod, self.install_dir)
+        (client_logger.info if ok else client_logger.error)(message)
 
     def restore_saves(self) -> None:
         """Move the career saves back and stop isolating (manual, via /restore)."""

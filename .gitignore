@@ -30,3 +30,7 @@ Thumbs.db
 # The generated options template, copied to the repo root for inspection after
 # every yaml-affecting change. Regenerated, never committed.
 /Viscera Cleanup Detail.yaml
+
+# Mod source staged into the package by build_apworld.py. The canonical source
+# is VCD_AP/mod.
+/VCD_AP/apworld/data/

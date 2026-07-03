@@ -31,6 +31,12 @@ var VCArchipelagoState APState;
 var int HighestReportedRung;
 var int LastPublishedPercent;
 
+// Scans in a row that saw no percent movement. The cleanliness probe is a full
+// mess scan, so after enough idle scans it backs off to a slower cadence and
+// snaps back to per-second the moment the percent moves again.
+var int UnchangedScans;
+var bool bScanBackedOff;
+
 // Janitors slowed by a trap, with the speeds to restore. Same-level references
 // only; the GameInfo and these arrays die with the level. The game itself never
 // writes GroundSpeed after defaults, so a halve-and-restore cannot be clobbered.
@@ -58,6 +64,8 @@ event InitGame(string Options, out string ErrorMessage)
     APState.APFoundBob = 0;
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
+    UnchangedScans = 0;
+    bScanBackedOff = false;
     SetTimer(1.0, true, 'PublishCleanliness');
     SetTimer(5.0, true, 'PollTraps');
     EnforceLevelGate();
@@ -454,6 +462,11 @@ function PublishCleanliness()
         APState.APCleanPct = percent;
         APState.APMap = WorldInfo.GetMapName(true);
         changed = true;
+        UnchangedScans = 0;
+    }
+    else
+    {
+        UnchangedScans += 1;
     }
 
     // Publish each newly crossed five percent rung, so a jump does not skip one.
@@ -472,6 +485,20 @@ function PublishCleanliness()
     {
         APState.APSeq = APState.APSeq + 1;
         APState.SaveConfig();
+    }
+
+    // Back off to a five second cadence after thirty idle scans; return to
+    // per-second the moment the percent moves. Rung publication is unaffected
+    // beyond the added latency, and the punch-out hook runs its own final scan.
+    if (!bScanBackedOff && UnchangedScans >= 30)
+    {
+        bScanBackedOff = true;
+        SetTimer(5.0, true, 'PublishCleanliness');
+    }
+    else if (bScanBackedOff && UnchangedScans == 0)
+    {
+        bScanBackedOff = false;
+        SetTimer(1.0, true, 'PublishCleanliness');
     }
 }
 
