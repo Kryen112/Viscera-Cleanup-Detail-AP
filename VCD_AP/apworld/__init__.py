@@ -4,8 +4,9 @@ Items, locations, levels, and options live in this directory. There is no
 code-generation step; build_apworld.py only packages the world.
 
 v1 shape: level-access unlock items gate each level; per-level checks are a
-milestone cleanliness ladder plus a punch-out completion and a speedrun.
-Collectible and Bob-chain checks are TODO. See V1_PLAN.md and CLAUDE.md.
+milestone cleanliness ladder plus a punch-out completion, and a speedrun when
+the speedrunsanity option is on. Collectible and Bob-chain checks are TODO. See
+V1_PLAN.md and CLAUDE.md.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from .items import (FILLER_NAMES, ITEM_GROUPS, ITEM_NAME_TO_ID,
                     LEVEL_ACCESS_ITEMS, access_item_name)
 from .levels import LEVELS, MAP_NAMES
 from .locations import (LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
-                        employee_of_the_month_name, milestone_enabled,
+                        employee_of_the_month_name, location_enabled,
                         punch_out_name)
 from .options import VCDOptions
 
@@ -110,9 +111,10 @@ class VCDWorld(World):
 
     def _enabled_locations_for(self, map_name: str) -> list[str]:
         step = self._step()
+        speedrunsanity = bool(self.options.speedrunsanity)
         return [
             name for name, loc_map in LOCATION_MAP.items()
-            if loc_map == map_name and milestone_enabled(name, step)
+            if loc_map == map_name and location_enabled(name, step, speedrunsanity)
         ]
 
     def create_regions(self) -> None:
@@ -173,6 +175,7 @@ class VCDWorld(World):
             "goal": self.options.goal.current_key,
             "goal_amount": int(self.options.goal_amount.value),
             "milestone_step": self._step(),
+            "speedrunsanity": bool(self.options.speedrunsanity),
             "started_maps": sorted(self.started_maps),
             "pooled_maps": list(MAP_NAMES),
         }

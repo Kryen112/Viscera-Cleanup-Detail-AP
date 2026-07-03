@@ -10,11 +10,24 @@ from .bases import VCDTestBase
 from ..items import ITEM_NAME_TO_ID
 from ..levels import LEVELS, MAP_NAMES
 from ..locations import (LOCATION_NAME_TO_ID, MILESTONE_PERCENT,
-                         milestone_enabled, punch_out_name)
+                         milestone_enabled, punch_out_name, speedrun_name)
 
 
 class TestDefault(VCDTestBase):
     options = {}
+
+    def test_speedrun_locations_absent_by_default(self):
+        names = {loc.name for loc in self.multiworld.get_locations(self.player)}
+        for _map, display, _title in LEVELS:
+            self.assertNotIn(speedrun_name(display), names)
+
+
+class TestSpeedrunsanity(VCDTestBase):
+    options = {"speedrunsanity": True}
+
+    def test_speedrun_locations_exist(self):
+        for _map, display, _title in LEVELS:
+            self.assert_location_exists(speedrun_name(display))
 
 
 class TestStep25(VCDTestBase):

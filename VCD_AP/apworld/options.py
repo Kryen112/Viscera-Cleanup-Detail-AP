@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from Options import Choice, NamedRange, PerGameCommonOptions, StartInventoryPool
+from Options import (Choice, NamedRange, PerGameCommonOptions,
+                     StartInventoryPool, Toggle)
 
 
 class MilestoneStep(Choice):
@@ -19,6 +20,13 @@ class MilestoneStep(Choice):
     option_20 = 20
     option_25 = 25
     default = 5
+
+
+class Speedrunsanity(Toggle):
+    """Add a Speedrun check to every level: punch out at least 95 percent clean
+    within 75 percent of the level's par time. Off by default, so seeds carry no
+    speed pressure unless asked for."""
+    display_name = "Speedrunsanity"
 
 
 class Goal(Choice):
@@ -64,6 +72,7 @@ class StartingLevels(NamedRange):
 class VCDOptions(PerGameCommonOptions):
     start_inventory_from_pool: StartInventoryPool
     milestone_step: MilestoneStep
+    speedrunsanity: Speedrunsanity
     goal: Goal
     goal_amount: GoalAmount
     starting_levels: StartingLevels

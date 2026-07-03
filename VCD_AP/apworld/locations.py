@@ -3,11 +3,11 @@
 - a milestone ladder at every 5 percent (`Clean 5%` .. `Clean 95%`), each enabled
   only when it is a multiple of the seed's milestone step,
 - an Employee of the Month check (the 100 percent rung, enabled for every step),
-- a Speedrun check (always enabled).
+- a Speedrun check (enabled by the speedrunsanity option).
 
 The full set of names and ids is static (the datapackage is shared across seeds);
-a seed enables a subset via the milestone step option. Collectible and Bob-chain
-checks are TODO and land with the collectibles module.
+a seed enables a subset via the milestone step and speedrunsanity options.
+Collectible and Bob-chain checks are TODO and land with the collectibles module.
 """
 
 from __future__ import annotations
@@ -74,8 +74,16 @@ for _name, _group in LOCATION_GROUP.items():
 
 def milestone_enabled(location_name: str, step: int) -> bool:
     """A milestone or Employee-of-the-Month rung is enabled when its percent is a
-    multiple of the seed's step. Punch Out and Speedrun are always enabled."""
+    multiple of the seed's step. Non-milestone checks are always enabled."""
     percent = MILESTONE_PERCENT.get(location_name)
     if percent is None:
         return True
     return percent % step == 0
+
+
+def location_enabled(location_name: str, step: int, speedrunsanity: bool) -> bool:
+    """Whether a seed with the given options creates this location. Speedrun
+    checks exist only under speedrunsanity; the rest follows the milestone step."""
+    if LOCATION_GROUP[location_name] == GROUP_SPEEDRUN:
+        return speedrunsanity
+    return milestone_enabled(location_name, step)
