@@ -3,9 +3,10 @@
 The mod and this client talk through two files in the game install (the mod cannot
 open a socket). The mod writes its state to
 ``UDKGame\\Config\\UDKVCArchipelago.ini`` whenever it changes; this client polls
-that file, maps the cleanliness rungs it reports to location checks, and sends
-them. In the other direction this client writes the unlocked-level set to
-``Saves\\VCArchipelagoGrants.sav``, which the mod reads to gate levels.
+that file, maps the state it reports (cleanliness rungs, punch-out, speedrun) to
+location checks, and sends them. In the other direction this client writes the
+unlocked-level set to ``Saves\\VCArchipelagoGrants.sav``, which the mod reads to
+gate levels.
 
 State the client recovers from the framework, never from memory: checked locations
 (so reconnecting re-derives what to send) and received items (so the grants file is
@@ -28,7 +29,7 @@ from .saves import SaveManager
 from .items import ITEM_NAME_TO_ID, access_item_name
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (LOCATION_NAME_TO_ID, employee_of_the_month_name,
-                        milestone_name, punch_out_name)
+                        milestone_name, punch_out_name, speedrun_name)
 
 # Player-facing lines go to the "Client" logger, or they do not show in the client
 # window.
@@ -73,6 +74,25 @@ def parse_rungs(milestones: str) -> list[int]:
         if part.isdigit():
             rungs.append(int(part))
     return rungs
+
+
+def location_names_from_state(state: dict[str, str]) -> list[str]:
+    """The location names a mod state snapshot implies. Policy lives here: each
+    reported rung is a milestone (100 is Employee of the Month), a punch-out in
+    good standing (not fired) is the Punch Out check, and the speedrun flag is
+    the Speedrun check. Unknown maps yield nothing."""
+    display = DISPLAY_BY_MAP.get(state.get("APMap", ""))
+    if not display:
+        return []
+    names: list[str] = []
+    for rung in parse_rungs(state.get("APMilestones", "")):
+        names.append(employee_of_the_month_name(display) if rung >= 100
+                     else milestone_name(display, rung))
+    if state.get("APPunchedOut") == "1" and state.get("APFired") != "1":
+        names.append(punch_out_name(display))
+        if state.get("APSpeedrun") == "1":
+            names.append(speedrun_name(display))
+    return names
 
 
 def looks_like_install(path: Path) -> bool:
@@ -316,17 +336,12 @@ class VCDContext(CommonContext):
         client_logger.info(f"Unlocked {len(ordered)} level(s).")
 
     async def apply_mod_state(self, state: dict[str, str]) -> None:
-        """Map the current level's reported rungs to location checks and send the
-        ones this seed actually has."""
+        """Map the current level's reported state (rungs, punch-out, speedrun) to
+        location checks and send the ones this seed actually has."""
         if not self.slot:
             return
-        display = DISPLAY_BY_MAP.get(state.get("APMap", ""))
-        if not display:
-            return
         new_ids: list[int] = []
-        for rung in parse_rungs(state.get("APMilestones", "")):
-            name = (employee_of_the_month_name(display) if rung >= 100
-                    else milestone_name(display, rung))
+        for name in location_names_from_state(state):
             loc_id = LOCATION_NAME_TO_ID.get(name)
             if loc_id is not None and loc_id in self.missing_locations:
                 new_ids.append(loc_id)

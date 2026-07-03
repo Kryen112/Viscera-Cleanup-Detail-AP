@@ -14,9 +14,12 @@
 // hides locked levels from the list) is the front door, and EnforceLevelGate here
 // refuses a locked level that is reached some other way.
 //
-// TODO: detect punch-out, speedrun, and collectibles as checks; make detection
-// event-driven where the game gives an event; throttle the mess scan (calling
-// ProcessMapState every second is a full scan).
+// Punch-out is event-driven: PunchoutFromGame below wraps the game's own flow
+// and publishes the verdict (punched out, fired, speedrun) exactly once.
+//
+// TODO: detect collectibles as checks; make detection event-driven where the
+// game gives an event; throttle the mess scan (calling ProcessMapState every
+// second is a full scan).
 class VCGame_Archipelago extends VCGame;
 
 // The published state object. Not named "State": that is a reserved UnrealScript
@@ -37,6 +40,9 @@ event InitGame(string Options, out string ErrorMessage)
     // own rungs from its own cleanliness instead of inheriting the last level's.
     APState.APMilestones = "";
     APState.APCleanPct = 0;
+    APState.APPunchedOut = 0;
+    APState.APFired = 0;
+    APState.APSpeedrun = 0;
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
     SetTimer(1.0, true, 'PublishCleanliness');
@@ -103,6 +109,48 @@ function BounceLockedLevel()
         ViewportClient.TrophyHandler.PunchoutHandler = None;
 
     ConsoleCommand("open VC_JanitorOffice");
+}
+
+// The game's single legitimate punch-out path: the punch machine and the level
+// time limit both land here, and the flow inside super arms the PunchoutDelay
+// travel timer only when a punch-out actually proceeds. So the timer turning
+// active across the super call marks exactly one real punch-out, after
+// CalculateResults has filled JobStatus and before the level travels away.
+function PunchoutFromGame(VCPunchMachine PunchoutMachine)
+{
+    local VCPunchoutHandler_General Handler;
+    local bool bWasPunchingOut;
+
+    bWasPunchingOut = IsTimerActive('PunchoutDelay');
+    super.PunchoutFromGame(PunchoutMachine);
+    if (bWasPunchingOut || !IsTimerActive('PunchoutDelay'))
+        return;
+
+    // Catch the final cleanliness rungs, then stop the timer: the level is on
+    // its way out, and the handler's results are final now.
+    PublishCleanliness();
+    ClearTimer('PublishCleanliness');
+
+    Handler = VCPunchoutHandler_General(PunchoutHandler);
+    if (Handler == None || APState == None)
+        return;
+
+    APState.APMap = WorldInfo.GetMapName(true);
+    APState.APPunchedOut = 1;
+    if (Handler.JobStatus.bStatus)
+        APState.APFired = 1;
+    // The game's own speedrun standard, evaluated here because Archipelago is
+    // its own mode: status bit 1 or 2 (at least 95 percent clean) inside 75
+    // percent of the map's par time, dilated for player count.
+    if ((Handler.JobStatus.StatusCode & 3) != 0
+        && Handler.CleanupTimeLimitGamePar > 0.0
+        && Handler.CleanupTimeDilated <= 0.75 * Handler.CleanupTimeLimitGamePar)
+    {
+        APState.APSpeedrun = 1;
+    }
+    APState.APSeq = APState.APSeq + 1;
+    APState.SaveConfig();
+    `log("VCAP PUNCHOUT map="$APState.APMap$" fired="$APState.APFired$" speedrun="$APState.APSpeedrun);
 }
 
 function PublishCleanliness()
