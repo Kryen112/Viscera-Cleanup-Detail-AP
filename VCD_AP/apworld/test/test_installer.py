@@ -19,6 +19,28 @@ GameViewportClientClassName=VisceraGame.VCGameViewportClient
 +NonNativePackages=VisceraGame
 """
 
+# A generated mirror: full arrays, no + syntax, plus a player engine setting.
+GENERATED_ENGINE = """[URL]
+Protocol=unreal
+
+[UnrealEd.EditorEngine]
+EditPackages=Core
+EditPackages=VisceraGame
+
+[Engine.Engine]
+GameViewportClientClassName=VisceraGame.VCGameViewportClient
+Console=VisceraGame.VCConsole
+
+[Engine.ScriptPackages]
+NonNativePackages=VisceraGame
+"""
+
+# Player game settings, view bob disabled.
+GENERATED_GAME = """[RSGCore.RSPawn]
+Bob=0.000000
+bWeaponBob=true
+"""
+
 
 class TestDeploy(unittest.TestCase):
     def setUp(self) -> None:
@@ -27,7 +49,8 @@ class TestDeploy(unittest.TestCase):
         self.config = self.install / "UDKGame" / "Config"
         self.config.mkdir(parents=True)
         (self.config / "DefaultEngine.ini").write_text(DEFAULT_ENGINE, encoding="ascii")
-        (self.config / "UDKEngine.ini").write_text("generated\n", encoding="ascii")
+        (self.config / "UDKEngine.ini").write_text(GENERATED_ENGINE, encoding="ascii")
+        (self.config / "UDKGame.ini").write_text(GENERATED_GAME, encoding="ascii")
         mod_data = Path(self._tmp.name) / "data" / "VCArchipelago" / "Classes"
         mod_data.mkdir(parents=True)
         (mod_data / "VCGame_Archipelago.uc").write_text("class;\n", encoding="ascii")
@@ -49,7 +72,27 @@ class TestDeploy(unittest.TestCase):
                          / "Classes" / "VCGame_Archipelago.uc").is_file())
         self.assertTrue((self.config / "VCArchipelagoProviders.ini").is_file())
         self.assertTrue((self.config / "DefaultVCArchipelago.ini").is_file())
-        # The generated mirror is backed up, then cleared.
+
+    def test_generated_engine_ini_is_wired_in_place(self) -> None:
+        installer.deploy(self.install)
+        generated = (self.config / "UDKEngine.ini").read_text(encoding="ascii")
+        self.assertIn("EditPackages=VCArchipelago", generated)
+        self.assertIn("NonNativePackages=VCArchipelago", generated)
+        self.assertIn(installer.VIEWPORT_ARCHIPELAGO, generated)
+        # The player's engine setting survives, and a backup exists.
+        self.assertIn("Console=VisceraGame.VCConsole", generated)
+        self.assertTrue((self.install / installer.BACKUP_DIR_NAME
+                         / "UDKEngine.ini").is_file())
+
+    def test_game_settings_are_left_alone(self) -> None:
+        installer.deploy(self.install)
+        self.assertEqual(
+            (self.config / "UDKGame.ini").read_text(encoding="ascii"),
+            GENERATED_GAME)
+
+    def test_unrecognizable_generated_engine_ini_is_cleared(self) -> None:
+        (self.config / "UDKEngine.ini").write_text("generated\n", encoding="ascii")
+        installer.deploy(self.install)
         self.assertFalse((self.config / "UDKEngine.ini").exists())
         self.assertTrue((self.install / installer.BACKUP_DIR_NAME
                          / "UDKEngine.ini").is_file())
@@ -57,10 +100,14 @@ class TestDeploy(unittest.TestCase):
     def test_deploy_is_idempotent(self) -> None:
         installer.deploy(self.install)
         first = (self.config / "DefaultEngine.ini").read_text(encoding="ascii")
+        first_generated = (self.config / "UDKEngine.ini").read_text(encoding="ascii")
         installer.deploy(self.install)
         second = (self.config / "DefaultEngine.ini").read_text(encoding="ascii")
+        second_generated = (self.config / "UDKEngine.ini").read_text(encoding="ascii")
         self.assertEqual(first, second)
+        self.assertEqual(first_generated, second_generated)
         self.assertEqual(first.count("+EditPackages=VCArchipelago"), 1)
+        self.assertEqual(first_generated.count("EditPackages=VCArchipelago"), 1)
 
     def test_added_lines_land_inside_their_sections(self) -> None:
         installer.deploy(self.install)
