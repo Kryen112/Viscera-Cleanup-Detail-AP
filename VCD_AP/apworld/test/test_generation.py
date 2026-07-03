@@ -254,9 +254,88 @@ class TestPoolOptionErrors(unittest.TestCase):
             self._generate({"level_pool": {"Cryogenesis", "Gravity Drive"},
                             "goal": "collect_collectibles", "goal_amount": 5})
 
+    def test_collectible_goal_without_collectible_levels_raises(self):
+        # Splatter Station holds no collectibles at all.
+        with self.assertRaises(OptionError):
+            self._generate({"level_pool": {"Splatter Station"},
+                            "goal": "collect_collectibles", "goal_amount": 1})
+
+    def test_randomized_pool_cannot_rescue_an_impossible_goal(self):
+        # The draw only picks from the candidates, so a candidate set without
+        # collectibles still fails the collectible goal.
+        with self.assertRaises(OptionError):
+            self._generate({"level_pool": {"Splatter Station"},
+                            "randomize_level_pool": True,
+                            "goal": "collect_collectibles", "goal_amount": 1})
+
     def test_empty_pool_raises(self):
         with self.assertRaises(OptionError):
             self._generate({"level_pool": set(), "goal_amount": 1})
+
+
+class TestRandomizedPoolLevelGoal(VCDTestBase):
+    options = {"randomize_level_pool": True, "goal": "complete_levels",
+               "goal_amount": 4}
+
+    def test_pool_is_large_enough_for_the_goal(self):
+        self.assertGreaterEqual(len(self.world.pooled_maps), 4)
+        self.assertTrue(set(self.world.pooled_maps).issubset(MAP_NAMES))
+
+    def test_option_value_reflects_the_drawn_pool(self):
+        self.assertEqual({DISPLAY_BY_MAP[m] for m in self.world.pooled_maps},
+                         self.world.options.level_pool.value)
+
+
+class TestRandomizedPoolEmployeeGoal(VCDTestBase):
+    options = {"randomize_level_pool": True, "goal": "employee_of_the_month",
+               "goal_amount": 6}
+
+    def test_pool_is_large_enough_for_the_goal(self):
+        self.assertGreaterEqual(len(self.world.pooled_maps), 6)
+
+
+class TestRandomizedPoolCollectiblesGoal(VCDTestBase):
+    options = {"randomize_level_pool": True, "goal": "collect_collectibles",
+               "goal_amount": 5}
+
+    def test_pool_carries_enough_collectibles(self):
+        pooled = set(self.world.pooled_maps)
+        chain_present = pooled.issuperset(BOB_NOTE_MAPS + ["VC_Digsite"])
+        countable = sum(1 for m, t, _ in COLLECTIBLES if m in pooled
+                        and (chain_present or t not in GATED_COLLECTIBLE_TOKENS))
+        self.assertGreaterEqual(countable, 5)
+
+
+class TestRandomizedPoolAllCollectibles(VCDTestBase):
+    options = {"randomize_level_pool": True, "goal": "collect_collectibles",
+               "goal_amount": 39}
+
+    def test_the_gate_chain_is_forced_in(self):
+        # 39 needs the gate-locked Red Keycard, so the whole chain joins.
+        pooled = set(self.world.pooled_maps)
+        self.assertTrue(pooled.issuperset(BOB_NOTE_MAPS + ["VC_Digsite"]))
+
+
+class TestRandomizedPoolFindBob(VCDTestBase):
+    options = {"randomize_level_pool": True, "goal": "find_bob"}
+
+    def test_pool_holds_the_bob_chain(self):
+        for map_name in BOB_NOTE_MAPS + ["VC_Digsite"]:
+            self.assertIn(map_name, self.world.pooled_maps)
+        self.assert_location_exists(FIND_BOB_LOCATION)
+
+
+class TestRandomizedPoolFromCandidates(VCDTestBase):
+    options = {"randomize_level_pool": True,
+               "level_pool": {"Splatter Station", "Cryogenesis", "Gravity Drive",
+                              "Frostbite", "Penumbra"},
+               "goal": "complete_levels", "goal_amount": 2}
+
+    def test_pool_stays_inside_the_candidates_and_fits_the_goal(self):
+        candidates = {"VC_SplatterStation", "VC_Cryo", "VC_ZeroG_New",
+                      "VC_IceStation", "VC_Darkening"}
+        self.assertTrue(set(self.world.pooled_maps).issubset(candidates))
+        self.assertGreaterEqual(len(self.world.pooled_maps), 2)
 
 
 class TestCompleteFew(VCDTestBase):

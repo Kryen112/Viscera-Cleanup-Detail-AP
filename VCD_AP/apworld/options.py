@@ -53,7 +53,8 @@ class TrapPercentage(Range):
 class LevelPool(OptionSet):
     """The levels the seed plays, keyed by display name. Every level is a valid
     key; the default is all of them. A level left out generates no checks and
-    no access item. The find_bob goal forces the Digsite and the six note
+    no access item. With randomize_level_pool on, this is the set the random
+    draw picks from. The find_bob goal forces the Digsite and the six note
     levels into the pool. The Digsite's gate-locked checks (Open the Digsite
     Gates, Find Bob, the Red Keycard) only exist when the pool holds the
     Digsite and every note level."""
@@ -61,6 +62,15 @@ class LevelPool(OptionSet):
     valid_keys = frozenset(d for _, d, _ in LEVELS)
     # An ordered default keeps the generated template yaml stable.
     default = tuple(d for _, d, _ in LEVELS)
+
+
+class RandomizeLevelPool(Toggle):
+    """Play a random subset of level_pool instead of the whole set. Each seed
+    draws the subset size at random, from the smallest set the goal allows
+    (goal_amount levels for the level goals, enough collectible-holding levels
+    for collect_collectibles, the Bob chain for find_bob) up to the whole
+    pool. Off by default."""
+    display_name = "Randomize level pool"
 
 
 class Goal(Choice):
@@ -106,6 +116,7 @@ class StartingLevels(NamedRange):
 class VCDOptions(PerGameCommonOptions):
     start_inventory_from_pool: StartInventoryPool
     level_pool: LevelPool
+    randomize_level_pool: RandomizeLevelPool
     milestone_step: MilestoneStep
     above_and_beyond: AboveAndBeyond
     speedrunsanity: Speedrunsanity

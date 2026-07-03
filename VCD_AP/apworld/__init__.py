@@ -98,33 +98,77 @@ class VCDWorld(World):
     pooled_maps: ClassVar[list[str]]
     bob_chain_pooled: ClassVar[bool]
 
+    @staticmethod
+    def _countable_collectibles(maps: set[str]) -> int:
+        """How many collectible checks the given levels carry. The gate-locked
+        ones count only when the whole Bob chain is present."""
+        chain_present = maps.issuperset(BOB_NOTE_MAPS + [BOB_ALTAR_MAP])
+        return sum(1 for m, t, _ in COLLECTIBLES if m in maps
+                   and (chain_present or t not in GATED_COLLECTIBLE_TOKENS))
+
+    def _random_pool(self, candidates: list[str], goal: str,
+                     amount: int) -> list[str]:
+        """A random subset of the candidate levels that still carries the goal.
+        The size is drawn from the smallest set the goal allows up to the whole
+        candidate set; the goal's must-have levels are forced in."""
+        chain = set(BOB_NOTE_MAPS) | {BOB_ALTAR_MAP}
+        forced: set[str] = set()
+        if goal == "find_bob":
+            forced |= chain
+        if goal == "collect_collectibles":
+            open_area = sum(1 for m, t, _ in COLLECTIBLES if m in candidates
+                            and t not in GATED_COLLECTIBLE_TOKENS)
+            if amount > open_area:
+                # Only the gate-locked collectibles close the gap, and counting
+                # them needs the whole Bob chain.
+                forced |= chain
+        minimum = max(len(forced), 1)
+        if goal in ("complete_levels", "employee_of_the_month"):
+            minimum = max(minimum, amount)
+        size = self.random.randint(minimum, len(candidates))
+        loose = [m for m in candidates if m not in forced]
+        pool = forced | set(self.random.sample(loose, size - len(forced)))
+        if goal == "collect_collectibles":
+            carriers = [m for m in loose if m not in pool
+                        and any(cm == m and t not in GATED_COLLECTIBLE_TOKENS
+                                for cm, t, _ in COLLECTIBLES)]
+            self.random.shuffle(carriers)
+            # Exhausting the carriers puts every open-area collectible level in
+            # the pool, and the only gated collectible sits on a chain map, so
+            # the count reaches the candidate cap and the pop cannot underrun.
+            while self._countable_collectibles(pool) < amount:
+                pool.add(carriers.pop())
+        return [m for m in candidates if m in pool]
+
     def generate_early(self) -> None:
         goal = self.options.goal.current_key
+        amount = int(self.options.goal_amount.value)
         if goal == "find_bob":
             # The goal needs the note levels and the Digsite; force them in.
             self.options.level_pool.value |= {
                 DISPLAY_BY_MAP[m] for m in BOB_NOTE_MAPS + [BOB_ALTAR_MAP]}
         chosen = self.options.level_pool.value
-        self.pooled_maps = [m for m, d, _ in LEVELS if d in chosen]
-        if not self.pooled_maps:
+        candidates = [m for m, d, _ in LEVELS if d in chosen]
+        if not candidates:
             raise OptionError(f"{self.player_name}: level_pool holds no levels.")
-        pooled = set(self.pooled_maps)
-        self.bob_chain_pooled = pooled.issuperset(BOB_NOTE_MAPS + [BOB_ALTAR_MAP])
-        start_n = min(int(self.options.starting_levels.value), len(self.pooled_maps))
-        self.started_maps = set(self.random.sample(self.pooled_maps, start_n))
-        # The goal cannot need more than the pool holds: levels for the level
+        # The goal cannot need more than the pool can hold: levels for the level
         # goals, collectibles the pooled levels carry for the collectible goal.
-        if goal == "collect_collectibles":
-            cap = sum(1 for m, t, _ in COLLECTIBLES if m in pooled
-                      and (self.bob_chain_pooled
-                           or t not in GATED_COLLECTIBLE_TOKENS))
-        else:
-            cap = len(self.pooled_maps)
-        if goal != "find_bob" and int(self.options.goal_amount.value) > cap:
+        cap = (self._countable_collectibles(set(candidates))
+               if goal == "collect_collectibles" else len(candidates))
+        if goal != "find_bob" and amount > cap:
             raise OptionError(
-                f"{self.player_name}: goal_amount "
-                f"{int(self.options.goal_amount.value)} needs more than the "
-                f"level pool holds ({cap}).")
+                f"{self.player_name}: goal_amount {amount} needs more than "
+                f"the level pool holds ({cap}).")
+        if self.options.randomize_level_pool:
+            candidates = self._random_pool(candidates, goal, amount)
+            # The spoiler shows the drawn pool, not just the candidate set.
+            self.options.level_pool.value = {
+                DISPLAY_BY_MAP[m] for m in candidates}
+        self.pooled_maps = candidates
+        pooled = set(candidates)
+        self.bob_chain_pooled = pooled.issuperset(BOB_NOTE_MAPS + [BOB_ALTAR_MAP])
+        start_n = min(int(self.options.starting_levels.value), len(candidates))
+        self.started_maps = set(self.random.sample(candidates, start_n))
 
     def create_item(self, name: str) -> VCDItem:
         if name in PROGRESSION_ITEM_NAMES:
