@@ -32,6 +32,12 @@ read-only: you never edit files. You read the diff, check it against
   holding the required collectibles).
 - Item classification wrong for the mode (level-access must be progression).
 - A behavior change with no added or updated `WorldTestBase` test.
+- A player-visible change (options and their defaults, checks, goals, client
+  commands or messages, install or connect flow, save isolation, traps, supply
+  drops) with no matching update under `VCD_AP/docs`.
+- An options change without a regenerated `Viscera Cleanup Detail.template.yaml`
+  at the repo root, or any write to `Viscera Cleanup Detail.yaml` (the player's
+  own settings).
 - Item/location ids that are not unique or drift for an existing name (breaks
   the datapackage).
 - Guessing a map name or display name instead of deriving it from the game

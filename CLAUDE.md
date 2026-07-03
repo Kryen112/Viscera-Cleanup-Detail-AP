@@ -3,9 +3,9 @@
 This file is the source of truth for code-quality standards across the Viscera
 Cleanup Detail Archipelago project: the apworld Python (`VCD_AP/apworld/`), the
 `VCArchipelago` UnrealScript mod (`.uc`), and, later, a tracker pack. The
-`code-reviewer` subagent enforces these rules. A `Stop` hook makes that review
-run automatically before any turn that changed apworld Python or mod source
-finishes.
+`code-reviewer` subagent enforces these rules. A `Stop` hook holds open any
+turn that changed apworld Python or mod source until the review and the docs
+pass have happened.
 
 `V1_PLAN.md` holds the design and the current build state. Read it before
 starting work. `NEXT_APWORLD_PLAYBOOK.md` holds the process and the Unreal mod
@@ -16,8 +16,11 @@ patterns (Appendix B is UE3/UDK).
 - `.claude/agents/code-reviewer.md` is a read-only reviewer. It reads the diff,
   checks it against this file, and returns findings with a `file:line` and a
   severity. It never edits code.
-- The `Stop` hook fires the reviewer whenever a turn touched `VCD_AP/apworld/*.py`
-  or `VCD_AP/mod/**/*.uc`. Address blockers before committing.
+- The `Stop` hook (`.claude/settings.json` plus
+  `.claude/hooks/check-docs-review.sh`) blocks the first stop of any turn that
+  edited `VCD_AP/apworld/*.py` or `VCD_AP/mod/**/*.uc`, with instructions to
+  run the reviewer and do the documentation pass. Address blockers before
+  committing.
 - Other agents and workflows can call the reviewer directly via
   `subagent_type: code-reviewer` (Agent tool) or `agentType: 'code-reviewer'`
   (Workflow), so a verify stage reuses the same standards.
@@ -46,6 +49,26 @@ patterns (Appendix B is UE3/UDK).
   identity; the message describes the change.
 - Commit directly to `main`. Do not create a feature branch first. Do not push
   unless asked.
+
+## Documentation stays in sync
+
+Before ending any turn that changed the apworld, the mod, or the client, check
+whether the docs still match and update them in the same turn, unprompted. The
+reviewer treats a missed update as a blocker.
+
+- Player docs live in `VCD_AP/docs`: `PLAYER_SETUP.md` (install and first run)
+  and `RELEASE_NOTES.md` (a dated build log, newest entry first).
+- A docs pass is required for every player-visible change: options and their
+  defaults, checks and goals, client commands and messages, the install and
+  connect flow, save isolation, traps and supply drops. Internal refactors
+  need none.
+- `RELEASE_NOTES.md` gets a new dated entry for a player-visible change, or
+  extends the entry for today's date if one exists.
+- After any options change, rebuild the apworld and regenerate the options
+  template into `Viscera Cleanup Detail.template.yaml` at the repo root. Never
+  write to `Viscera Cleanup Detail.yaml`; it holds the player's own settings.
+- When a roadmap item lands or its status changes, update the build state in
+  `plans/V1_PLAN.md`.
 
 ## apworld Python: AP-framework invariants
 
