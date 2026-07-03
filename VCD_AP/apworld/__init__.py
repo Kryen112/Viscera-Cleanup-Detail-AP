@@ -70,10 +70,10 @@ class VCDSettings(settings.Group):
         /restore command."""
 
     class AutoInstallMod(settings.Bool):
-        """Compare the game mod packaged in this apworld against the install when
-        the client connects, and deploy and recompile it if it differs, before the
-        game launches. On by default. Set to false to manage the mod yourself with
-        the /installmod command."""
+        """Compare the precompiled mod packaged in this apworld against the install
+        when the client connects, and copy it in if it differs, before the game
+        launches. On by default. Set to false to manage the mod yourself with the
+        /installmod command."""
 
     install_folder: InstallFolder = InstallFolder("")
     auto_launch_game: Union[AutoLaunchGame, bool] = True
