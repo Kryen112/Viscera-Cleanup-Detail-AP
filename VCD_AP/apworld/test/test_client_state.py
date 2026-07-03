@@ -1,8 +1,9 @@
 """Tests for the client's mod-state parsing: the state file snapshot maps to
-location names, with the punch-out and speedrun policy applied."""
+location names, with the punch-out and speedrun policy applied, and only a
+snapshot stamped with the connected seed counts."""
 import unittest
 
-from ..client import location_names_from_state, parse_rungs
+from ..client import location_names_from_state, parse_rungs, state_is_current
 
 
 class TestParseRungs(unittest.TestCase):
@@ -14,6 +15,24 @@ class TestParseRungs(unittest.TestCase):
 
     def test_empty_is_empty(self) -> None:
         self.assertEqual(parse_rungs(""), [])
+
+
+class TestStateIsCurrent(unittest.TestCase):
+    def test_matching_seed_counts(self) -> None:
+        self.assertTrue(state_is_current({"APSeedTag": "seed_1"}, "seed_1"))
+
+    def test_foreign_seed_is_ignored(self) -> None:
+        # The exact stale-state hazard: a new seed must never replay the last
+        # session's leftovers.
+        self.assertFalse(state_is_current({"APSeedTag": "seed_1"}, "seed_2"))
+
+    def test_unstamped_state_is_ignored(self) -> None:
+        self.assertFalse(state_is_current({"APMilestones": "5,10"}, "seed_1"))
+        self.assertFalse(state_is_current({"APSeedTag": ""}, "seed_1"))
+
+    def test_unknown_seed_name_is_ignored(self) -> None:
+        self.assertFalse(state_is_current({"APSeedTag": "seed_1"}, None))
+        self.assertFalse(state_is_current({"APSeedTag": ""}, ""))
 
 
 class TestLocationNamesFromState(unittest.TestCase):

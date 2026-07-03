@@ -10,6 +10,11 @@ class VCArchipelagoState extends Object
 // Monotonic write counter. Bumped on every SaveConfig.
 var config int APSeq;
 
+// The seed this state belongs to, copied from the client-written traps file at
+// level start. The client ignores state stamped for another seed (or not
+// stamped at all), so a new seed can never replay a previous seed's leftovers.
+var config string APSeedTag;
+
 // The map currently being cleaned, and its live cleanliness percent (0 to 100+).
 var config string APMap;
 var config int APCleanPct;

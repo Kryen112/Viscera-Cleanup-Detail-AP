@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 import Utils
@@ -25,7 +26,7 @@ from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser
 from NetUtils import ClientStatus
 
 from . import VCDWorld, grants, installer, traps
-from .saves import SaveManager
+from .saves import SaveManager, seed_folder_name
 from .collectibles import BOB_NOTE_MAP_BY_TOKEN, COLLECTIBLE_BY_TOKEN
 from .items import ITEM_NAME_TO_ID, access_item_name
 from .levels import DISPLAY_BY_MAP, LEVELS
@@ -128,6 +129,30 @@ def location_names_from_state(state: dict[str, str]) -> list[str]:
     if state.get("APFoundBob") == "1":
         names.append(FIND_BOB_LOCATION)
     return names
+
+
+def state_is_current(state: dict[str, str], seed_name: "str | None") -> bool:
+    """Whether a state snapshot belongs to the connected seed. The mod stamps
+    the state with the seed tag it reads from the traps file; a missing or
+    foreign tag means the file is another seed's leftovers and must not send
+    checks."""
+    return bool(seed_name) and state.get("APSeedTag") == seed_name
+
+
+def game_process_running() -> bool:
+    """Whether any UDK.exe runs, including one the client did not launch."""
+    if sys.platform != "win32":
+        return False
+    try:
+        # A short timeout: this runs on the event loop, and tasklist answers in
+        # well under a second when healthy.
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq UDK.exe", "/NH"],
+            capture_output=True, text=True, timeout=3,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return "UDK.exe" in result.stdout
 
 
 def looks_like_install(path: Path) -> bool:
@@ -248,7 +273,10 @@ class VCDContext(CommonContext):
             return
         if not self.seed_name:
             return
-        if self.game_running() and not self.save_manager.is_isolated():
+        already_on_seed = (
+            self.save_manager.is_isolated()
+            and self.save_manager.active_seed() == seed_folder_name(self.seed_name))
+        if self.game_running() and not already_on_seed:
             client_logger.warning(
                 "The game is already running, so save isolation was skipped. Close "
                 "the game and reconnect to isolate this seed's saves.")
@@ -295,7 +323,12 @@ class VCDContext(CommonContext):
         client_logger.info("Launched Viscera Cleanup Detail.")
 
     def game_running(self) -> bool:
-        return self.game_process is not None and self.game_process.poll() is None
+        # The client-launched process is authoritative, but a game the player
+        # started themselves must count too: swapping saves or recompiling
+        # under a live game corrupts state.
+        if self.game_process is not None and self.game_process.poll() is None:
+            return True
+        return game_process_running()
 
     async def install_mod(self) -> None:
         """Deploy the packaged mod source into the install and compile it (via
@@ -358,7 +391,14 @@ class VCDContext(CommonContext):
         await self.send_connect()
 
     def on_package(self, cmd: str, args: dict) -> None:
-        if cmd == "Connected":
+        if cmd == "RoomInfo":
+            # The framework only compares seed_name, it never sets it; save
+            # isolation and the trap queue both key on it. Set it only while
+            # unset, mirroring the framework's own mismatch guard, so a
+            # rejected foreign-server connect cannot adopt the wrong seed.
+            if not self.seed_name:
+                self.seed_name = args.get("seed_name")
+        elif cmd == "Connected":
             slot_data = args.get("slot_data", {})
             self.unlocked_maps = set(slot_data.get("started_maps", []))
             self._set_goal(slot_data)
@@ -438,6 +478,8 @@ class VCDContext(CommonContext):
         """Map the current level's reported state (rungs, punch-out, speedrun) to
         location checks and send the ones this seed actually has."""
         if not self.slot:
+            return
+        if not state_is_current(state, self.seed_name):
             return
         new_ids: list[int] = []
         for name in location_names_from_state(state):

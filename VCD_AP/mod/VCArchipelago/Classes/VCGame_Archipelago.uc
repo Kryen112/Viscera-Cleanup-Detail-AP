@@ -62,6 +62,7 @@ event InitGame(string Options, out string ErrorMessage)
     APState.APTrunkFinds = "";
     APState.APDigsiteGates = 0;
     APState.APFoundBob = 0;
+    StampSeedTag();
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
     UnchangedScans = 0;
@@ -134,6 +135,20 @@ function BounceLockedLevel()
     ConsoleCommand("open VC_JanitorOffice");
 }
 
+// Copies the connected seed's tag from the client-written traps file into the
+// published state, so the client can tell this seed's state from another
+// seed's leftovers. With no traps file the tag empties, which the client also
+// ignores.
+function StampSeedTag()
+{
+    if (TrapQueueFile == None)
+        TrapQueueFile = new class'VCArchipelagoTraps';
+    if (class'Engine'.static.BasicLoadObject(TrapQueueFile, "..\\..\\Saves\\VCArchipelagoTraps.sav", true, 1))
+        APState.APSeedTag = TrapQueueFile.SeedTag;
+    else
+        APState.APSeedTag = "";
+}
+
 // Applies traps from the client-written queue, one per poll so a burst spaces
 // itself out. The queue file is read fresh every time (config-style objects
 // cache at startup; BasicLoadObject does not). The applied counter lives in the
@@ -154,6 +169,12 @@ function PollTraps()
         TrapQueueFile = new class'VCArchipelagoTraps';
     if (!class'Engine'.static.BasicLoadObject(TrapQueueFile, "..\\..\\Saves\\VCArchipelagoTraps.sav", true, 1))
         return;
+
+    // A client that connected mid-level rewrites the traps file. Adopt its tag
+    // only when the level started without one: an already-stamped level keeps
+    // its own seed, so switching seeds mid-level cannot cross-credit checks.
+    if (APState.APSeedTag == "" && TrapQueueFile.SeedTag != "")
+        APState.APSeedTag = TrapQueueFile.SeedTag;
 
     // A different seed's counter means this queue was never applied here. Start
     // it at the client's baseline: everything the player already held when the

@@ -26,6 +26,8 @@ VIEWPORT_STOCK = "GameViewportClientClassName=VisceraGame.VCGameViewportClient"
 VIEWPORT_ARCHIPELAGO = (
     "GameViewportClientClassName=VCArchipelago.VCGameViewportClient_Archipelago")
 
+# No ValidTitles line: an empty list passes the menu's title filter, so the
+# Archipelago mode exists under every title (base game and all the DLC).
 PROVIDER_INI_LINES = [
     "[VCGame_Archipelago VCUIDataProvider_GameInfo]",
     'GameClass="VCArchipelago.VCGame_Archipelago"',
@@ -34,7 +36,6 @@ PROVIDER_INI_LINES = [
     'PreviewImageMarkup=""',
     "GamePicAspectRatio=1.0",
     "SortOrder=350",
-    "ValidTitles=Viscera",
 ]
 
 STATE_BASE_INI_LINES = [

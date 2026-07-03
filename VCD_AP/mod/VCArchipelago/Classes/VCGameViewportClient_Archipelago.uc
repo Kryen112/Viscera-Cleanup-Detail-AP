@@ -67,6 +67,10 @@ function CurateMapProviders()
         if (InStr(","$unlocked$",", ","$MapProvider.MapName$",") != -1)
         {
             MapProvider.bHideFromMenu = false;
+            // An empty ValidTitles passes the menu's title filter, so a granted
+            // DLC map lists under whatever title is active. In-memory only;
+            // nothing saves the providers back to config.
+            MapProvider.ValidTitles.Length = 0;
             shown++;
         }
         else
