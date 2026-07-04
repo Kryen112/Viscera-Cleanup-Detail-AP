@@ -1,11 +1,18 @@
-// The Archipelago HUD: the stock HUD plus a live cleanliness readout and the
-// Archipelago toast feed.
+// The Archipelago HUD: the stock HUD plus a live cleanliness readout, timed
+// trap countdowns, and the Archipelago toast feed.
 //
 // The cleanliness readout draws in the top-right corner, below the band the
 // multiplayer net-actors warning uses. It runs on the host and on co-op guests
 // alike; the value arrives through the replicated GRI. The game's speedrun
 // timer shares that corner but only draws in speedrun mode, which Archipelago
 // never sets.
+//
+// Timed trap countdowns draw at the top-center (a band the speedrun clock
+// also leaves free outside speedrun mode): a "Slowdown 0:27" line over an
+// orange bar that empties with the remaining time and blinks through the
+// final seconds. The slots arrive through the replicated GRI, so guests see
+// them too; remaining time reads off locally stamped end times, so expiry
+// hides a slot without waiting on the server.
 //
 // Toasts show what Archipelago is doing: check sends, item receives, goal and
 // connection lines. The feed file is written by this machine's own client and
@@ -23,6 +30,12 @@ const MessagePollInterval  = 1.0;
 const ToastPromoteInterval = 0.15;
 const ToastLifetime        = 5.0;
 const MaxVisibleToasts     = 8;
+
+// Countdown block geometry (pre-ratio units) and the blink window.
+const TimedEffectTextSize     = 18.0;
+const TimedEffectBarWidth     = 200.0;
+const TimedEffectBarHeight    = 8.0;
+const TimedEffectBlinkSeconds = 5.0;
 
 // Reused load target for the feed file, so the poll does not pile up garbage
 // objects between collections.
@@ -61,13 +74,79 @@ function DrawHUD()
     DrawToasts();
 
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(VCGRI);
-    if (ReplicatedInfo == None || !ReplicatedInfo.bCleanlinessSampled)
+    if (ReplicatedInfo == None)
+        return;
+
+    DrawTimedEffects(ReplicatedInfo);
+
+    if (!ReplicatedInfo.bCleanlinessSampled)
         return;
 
     Canvas.SetDrawColor(255, 255, 255, 255);
     DrawTextEx(FormatCleanliness(ReplicatedInfo.CleanlinessHundredths),
         float(Canvas.SizeX - 4), 40.0 * RatioY, 24.0 * RatioY, VCDFont,
         HA_Right, VA_Top, true);
+}
+
+// Draws a countdown for every active timed trap effect, stacked downward from
+// the top-center: a white label with the remaining minutes and seconds over a
+// dim backing bar whose orange fill empties left to right and blinks through
+// the final seconds. The text stays solid so the number remains readable.
+function DrawTimedEffects(VCGameReplicationInfo_Archipelago ReplicatedInfo)
+{
+    local float Remaining, DrawY, BarLeft, BarY, FillFraction;
+    local int SlotIndex, WholeSeconds;
+    local bool bBlinkHidden;
+
+    DrawY = 8.0 * RatioY;
+    for (SlotIndex = 0; SlotIndex < ArrayCount(ReplicatedInfo.TimedEffectTypes); SlotIndex++)
+    {
+        if (ReplicatedInfo.TimedEffectTypes[SlotIndex]
+            == class'VCGameReplicationInfo_Archipelago'.const.TimedEffectNone)
+        {
+            continue;
+        }
+        Remaining = ReplicatedInfo.TimedEffectEndTimes[SlotIndex] - WorldInfo.TimeSeconds;
+        if (Remaining <= 0.0)
+            continue;
+
+        WholeSeconds = FCeil(Remaining);
+        Canvas.SetDrawColor(255, 255, 255, 255);
+        DrawTextEx(TimedEffectLabel(ReplicatedInfo.TimedEffectTypes[SlotIndex])
+            $ " " $ (WholeSeconds / 60) $ ":" $ GetDualDigit(WholeSeconds % 60),
+            float(Canvas.SizeX) / 2.0, DrawY, TimedEffectTextSize * RatioY, VCDFont,
+            HA_Center, VA_Top, true);
+
+        BarLeft = float(Canvas.SizeX) / 2.0 - (TimedEffectBarWidth / 2.0) * RatioY;
+        BarY = DrawY + (TimedEffectTextSize + 6.0) * RatioY;
+        Canvas.SetDrawColor(0, 0, 0, 96);
+        Canvas.SetPos(BarLeft, BarY);
+        Canvas.DrawTile(Canvas.DefaultTexture, TimedEffectBarWidth * RatioY,
+            TimedEffectBarHeight * RatioY, 0.0, 0.0, 32.0, 32.0);
+
+        bBlinkHidden = Remaining < TimedEffectBlinkSeconds
+            && WorldInfo.TimeSeconds % 0.4 >= 0.2;
+        if (!bBlinkHidden && ReplicatedInfo.TimedEffectDurations[SlotIndex] > 0.0)
+        {
+            FillFraction = FClamp(
+                Remaining / ReplicatedInfo.TimedEffectDurations[SlotIndex], 0.0, 1.0);
+            Canvas.SetDrawColor(255, 128, 0, 255);
+            Canvas.SetPos(BarLeft, BarY);
+            Canvas.DrawTile(Canvas.DefaultTexture,
+                TimedEffectBarWidth * RatioY * FillFraction,
+                TimedEffectBarHeight * RatioY, 0.0, 0.0, 32.0, 32.0);
+        }
+
+        DrawY += (TimedEffectTextSize + 6.0 + TimedEffectBarHeight + 8.0) * RatioY;
+    }
+}
+
+// The display name for a timed effect type; an unknown type still counts down.
+function string TimedEffectLabel(byte EffectType)
+{
+    if (EffectType == class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSlowdown)
+        return "Slowdown";
+    return "Trap";
 }
 
 // "32.12% cleaned": floored whole percent, a point, two floored decimals.

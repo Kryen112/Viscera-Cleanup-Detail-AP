@@ -44,6 +44,10 @@ var bool bScanBackedOff;
 var array<VCPawn> SlowedJanitors;
 var array<float> SlowedJanitorSpeeds;
 
+// Seconds a slowdown lasts; the HUD countdown shares this value through the
+// replicated GRI slot.
+const SlowdownDurationSeconds = 30.0;
+
 // Reused load target for the trap queue file, so the 5 second poll does not
 // pile up garbage objects between collections.
 var VCArchipelagoTraps TrapQueueFile;
@@ -329,11 +333,13 @@ function bool SpillNearestBucket()
     return true;
 }
 
-// Halves every janitor's ground speed for thirty seconds. Another slowdown
-// while one is active restarts the clock without stacking the halving.
+// Halves every janitor's ground speed for the slowdown duration and registers
+// the countdown the HUD draws. Another slowdown while one is active restarts
+// the clock without stacking the halving.
 function SlowJanitors()
 {
     local VCPawn Janitor;
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
 
     foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
     {
@@ -343,12 +349,20 @@ function SlowJanitors()
         SlowedJanitorSpeeds.AddItem(Janitor.GroundSpeed);
         Janitor.GroundSpeed = Janitor.GroundSpeed * 0.5;
     }
-    SetTimer(30.0, false, 'RestoreJanitorSpeeds');
+    SetTimer(SlowdownDurationSeconds, false, 'RestoreJanitorSpeeds');
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None)
+    {
+        ReplicatedInfo.StartTimedEffect(
+            class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSlowdown,
+            SlowdownDurationSeconds);
+    }
 }
 
 function RestoreJanitorSpeeds()
 {
     local int I;
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
 
     for (I = 0; I < SlowedJanitors.Length; I++)
     {
@@ -357,6 +371,12 @@ function RestoreJanitorSpeeds()
     }
     SlowedJanitors.Length = 0;
     SlowedJanitorSpeeds.Length = 0;
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None)
+    {
+        ReplicatedInfo.ClearTimedEffect(
+            class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSlowdown);
+    }
 }
 
 // Drops a supply item on the floor near the janitor. A plain spawn is exactly
