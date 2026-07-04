@@ -277,6 +277,13 @@ just the UE3 one.
 
 ### A.4 UScript language gotchas
 - Array dimensions must be an integer literal, not a `const` or enum value.
+- Instance `SaveConfig()` writes the ini but never updates the class default
+  object, and the CDO reads the ini once, at launch. A per-level `new`'d
+  config object therefore starts from launch-time values, not the last saved
+  ones. Mirror fields that must persist across level loads into
+  `class'X'.default.*` before saving; a relaunch still recovers from the ini
+  through the CDO load. (Class defaults holding ints and strings are safe; the
+  A.5 hazard applies only to actor references.)
 - Widen this list per game as you hit new ones, and record each in the memory
   log so the next game does not rediscover it.
 

@@ -104,9 +104,13 @@ The reviewer treats a violation of any of these as a correctness blocker.
   "index:Type" queue keyed by received-item position). The mod stores the last
   applied index in its config state, applies one entry per poll, only in
   cleanable levels, and never replays another seed's queue or a pre-connect
-  backlog. A trap must never softlock, block a required check, or corrupt a
-  save. Supply drops reuse the game's own dispenser spawns (a plain VCBucket or
-  VCBin) so they score exactly like vended equipment.
+  backlog. The slot's applied high-water mark also lives in server data
+  storage (`vcd_traps_applied_{team}_{slot}`, written with an atomic `max`
+  op); the client folds it into BaselineIndex so a new co-op host never
+  replays entries, and holds the traps file write until the connect-time
+  storage read answers. A trap must never softlock, block a required check, or
+  corrupt a save. Supply drops reuse the game's own dispenser spawns (a plain
+  VCBucket or VCBin) so they score exactly like vended equipment.
 - Game logic lives in one boolean-predicate access-rule module. Read changes
   there as logic, not plumbing.
 - The apworld is hand-maintained. There is no generator and no `data/*.yaml`
@@ -186,9 +190,9 @@ Standing rules:
   reads `setup.cfg`), unprompted.
 - Every change adds or updates `WorldTestBase` tests for the changed behavior,
   unprompted.
-- The pre-commit gate (`VCD_AP/.pre-commit-config.yaml`) runs hygiene, flake8,
+- The pre-commit gate (`.pre-commit-config.yaml` at the repo root) runs hygiene, flake8,
   and the world tests on changed `apworld/*.py`. Tests run via
-  `VCD_AP/run_world_tests.py`, which uses the sibling Archipelago checkout
+  `VCD_AP/scripts/run_world_tests.py`, which uses the sibling Archipelago checkout
   (override with `AP_ROOT`, default `..\Archipelago`).
 - Run the fill fuzzer across many seeds before trusting the default of one open
   starting level.

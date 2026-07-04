@@ -6,8 +6,10 @@ for the byte layout):
 - ``SeedTag``: the connected seed, so a stale file from another seed is never
   replayed.
 - ``BaselineIndex``: how many items the player already held when this session
-  connected. Entries at or below the baseline are treated as already applied,
-  so a fresh connect never dumps a backlog into the level.
+  connected, raised to the slot's shared applied counter from server data
+  storage. Entries at or below the baseline are treated as already applied, so
+  a fresh connect never dumps a backlog and a new co-op host never replays
+  what another host already applied.
 - ``TrapQueue``: the full ordered queue as ``index:Type`` entries, e.g.
   ``"3:MessDump,7:CleanBucket"``. Indexes are 1-based positions in the
   framework's received-item list, so the queue is rebuilt identically on every
@@ -53,13 +55,18 @@ def build_queue(received_item_ids: "list[int]", queue_id_to_type: "dict[int, str
 
 def queue_fields(seed_name: str, trap_baseline: "int | None",
                  received_item_ids: "list[int]",
-                 queue_id_to_type: "dict[int, str]") -> "tuple[str, int, str]":
+                 queue_id_to_type: "dict[int, str]",
+                 applied_floor: "int | None" = None) -> "tuple[str, int, str]":
     """The (seed tag, baseline, queue) triple the traps file carries. Before the
     resync packet fixes the baseline, every item known so far counts into it, so
     the queue and baseline written together are always consistent and a connect
-    can never replay a backlog."""
+    can never replay a backlog. ``applied_floor`` is the slot's shared applied
+    counter from server data storage; folding it into the baseline keeps a new
+    co-op host from replaying entries another host already applied."""
     baseline = (trap_baseline if trap_baseline is not None
                 else len(received_item_ids))
+    if applied_floor is not None:
+        baseline = max(baseline, applied_floor)
     return seed_name, baseline, build_queue(received_item_ids, queue_id_to_type)
 
 

@@ -70,6 +70,28 @@ class TestQueueFields(unittest.TestCase):
         self.assertEqual(traps.queue_fields("seed_1", None, [], QUEUE_ID_TO_TYPE),
                          ("seed_1", 0, ""))
 
+    def test_applied_floor_below_baseline_keeps_baseline(self) -> None:
+        _, baseline, _ = traps.queue_fields(
+            "seed_1", 5, [FILLER, MESS_DUMP], QUEUE_ID_TO_TYPE, applied_floor=3)
+        self.assertEqual(baseline, 5)
+
+    def test_applied_floor_above_baseline_raises_it(self) -> None:
+        # Another co-op host already applied past this client's connect
+        # baseline; the fold keeps those entries from replaying here.
+        _, baseline, _ = traps.queue_fields(
+            "seed_1", 1, [FILLER, MESS_DUMP], QUEUE_ID_TO_TYPE, applied_floor=2)
+        self.assertEqual(baseline, 2)
+
+    def test_no_applied_floor_leaves_baseline_alone(self) -> None:
+        _, baseline, _ = traps.queue_fields(
+            "seed_1", 1, [FILLER, MESS_DUMP], QUEUE_ID_TO_TYPE, applied_floor=None)
+        self.assertEqual(baseline, 1)
+
+    def test_applied_floor_folds_into_unknown_baseline_too(self) -> None:
+        _, baseline, _ = traps.queue_fields(
+            "seed_1", None, [FILLER, MESS_DUMP], QUEUE_ID_TO_TYPE, applied_floor=4)
+        self.assertEqual(baseline, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

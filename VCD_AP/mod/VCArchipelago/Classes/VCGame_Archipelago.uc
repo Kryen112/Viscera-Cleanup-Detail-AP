@@ -149,6 +149,17 @@ function StampSeedTag()
         APState.APSeedTag = "";
 }
 
+// Saves the published state, mirroring the fields that persist across levels
+// into class defaults first: a new'd config object copies the class default
+// object, and an instance SaveConfig never updates it.
+function SaveAPState()
+{
+    class'VCArchipelagoState'.default.APSeq = APState.APSeq;
+    class'VCArchipelagoState'.default.APTrapSeed = APState.APTrapSeed;
+    class'VCArchipelagoState'.default.APTrapsApplied = APState.APTrapsApplied;
+    APState.SaveConfig();
+}
+
 // Applies entries from the client-written queue (traps and useful supply
 // drops), one per poll so a burst spaces itself out. The queue file is read
 // fresh every time (config-style objects cache at startup; BasicLoadObject does
@@ -184,7 +195,7 @@ function PollTraps()
     {
         APState.APTrapSeed = TrapQueueFile.SeedTag;
         APState.APTrapsApplied = int(TrapQueueFile.BaselineIndex);
-        APState.SaveConfig();
+        SaveAPState();
         return;
     }
 
@@ -194,7 +205,7 @@ function PollTraps()
     if (int(TrapQueueFile.BaselineIndex) > APState.APTrapsApplied)
     {
         APState.APTrapsApplied = int(TrapQueueFile.BaselineIndex);
-        APState.SaveConfig();
+        SaveAPState();
     }
 
     ParseStringIntoArray(TrapQueueFile.TrapQueue, Entries, ",", true);
@@ -206,7 +217,7 @@ function PollTraps()
         QueueType = Mid(Entries[I], InStr(Entries[I], ":") + 1);
         ApplyQueueEntry(QueueType);
         APState.APTrapsApplied = EntryIndex;
-        APState.SaveConfig();
+        SaveAPState();
         return;
     }
 }
@@ -424,7 +435,7 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
         APState.APSpeedrun = 1;
     }
     APState.APSeq = APState.APSeq + 1;
-    APState.SaveConfig();
+    SaveAPState();
     `log("VCAP PUNCHOUT map="$APState.APMap$" fired="$APState.APFired$" speedrun="$APState.APSpeedrun);
 }
 
@@ -483,7 +494,7 @@ function GlobalStatChanged(string KeyName, string NewValue)
         APState.APDigsiteGates = 1;
         APState.APMap = WorldInfo.GetMapName(true);
         APState.APSeq = APState.APSeq + 1;
-        APState.SaveConfig();
+        SaveAPState();
         `log("VCAP BOB event=DigsiteGates");
     }
     else if (KeyName ~= "bFoundBob" && APState.APFoundBob == 0)
@@ -491,7 +502,7 @@ function GlobalStatChanged(string KeyName, string NewValue)
         APState.APFoundBob = 1;
         APState.APMap = WorldInfo.GetMapName(true);
         APState.APSeq = APState.APSeq + 1;
-        APState.SaveConfig();
+        SaveAPState();
         `log("VCAP BOB event=FoundBob");
     }
 }
@@ -546,7 +557,7 @@ function PublishCleanliness()
     if (changed)
     {
         APState.APSeq = APState.APSeq + 1;
-        APState.SaveConfig();
+        SaveAPState();
     }
 
     // Back off to a five second cadence after thirty idle scans; return to

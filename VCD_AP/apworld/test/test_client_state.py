@@ -4,7 +4,7 @@ snapshot stamped with the connected seed counts."""
 import unittest
 
 from ..client import (goal_locations_from_slot_data, location_names_from_state,
-                      parse_rungs, state_is_current)
+                      parse_rungs, state_is_current, traps_applied_to_push)
 from ..levels import LEVELS
 from ..locations import LOCATION_NAME_TO_ID
 
@@ -96,6 +96,38 @@ class TestLocationNamesFromState(unittest.TestCase):
             "Unearthly Excavation - Open the Digsite Gates",
             "Unearthly Excavation - Find Bob",
         ])
+
+
+class TestTrapsAppliedToPush(unittest.TestCase):
+    def test_advance_on_the_connected_seed_pushes(self) -> None:
+        state = {"APTrapSeed": "seed_1", "APTrapsApplied": "7"}
+        self.assertEqual(traps_applied_to_push(state, "seed_1", 5), 7)
+
+    def test_foreign_seed_pushes_nothing(self) -> None:
+        # A leftover counter from another seed must never move this room's mark.
+        state = {"APTrapSeed": "seed_1", "APTrapsApplied": "7"}
+        self.assertIsNone(traps_applied_to_push(state, "seed_2", 0))
+
+    def test_unknown_seed_name_pushes_nothing(self) -> None:
+        state = {"APTrapSeed": "seed_1", "APTrapsApplied": "7"}
+        self.assertIsNone(traps_applied_to_push(state, None, 0))
+        self.assertIsNone(traps_applied_to_push(state, "", 0))
+
+    def test_missing_fields_push_nothing(self) -> None:
+        self.assertIsNone(traps_applied_to_push({}, "seed_1", 0))
+        self.assertIsNone(traps_applied_to_push({"APTrapSeed": "seed_1"},
+                                                "seed_1", 0))
+
+    def test_non_numeric_counter_pushes_nothing(self) -> None:
+        state = {"APTrapSeed": "seed_1", "APTrapsApplied": "junk"}
+        self.assertIsNone(traps_applied_to_push(state, "seed_1", 0))
+        state["APTrapsApplied"] = "-3"
+        self.assertIsNone(traps_applied_to_push(state, "seed_1", 0))
+
+    def test_no_progress_pushes_nothing(self) -> None:
+        state = {"APTrapSeed": "seed_1", "APTrapsApplied": "5"}
+        self.assertIsNone(traps_applied_to_push(state, "seed_1", 5))
+        self.assertIsNone(traps_applied_to_push(state, "seed_1", 6))
 
 
 class TestGoalLocationsFromSlotData(unittest.TestCase):

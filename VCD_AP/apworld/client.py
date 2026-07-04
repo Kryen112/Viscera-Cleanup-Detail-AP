@@ -77,6 +77,21 @@ def read_mod_state(install_dir: Path) -> dict[str, str]:
     return out
 
 
+def traps_applied_to_push(state: dict[str, str], seed_name: "str | None",
+                          last_pushed: int) -> "int | None":
+    """The mod's applied trap counter when it is worth pushing to server data
+    storage: it belongs to the connected seed and exceeds what this client
+    already pushed. None otherwise."""
+    if not seed_name or state.get("APTrapSeed") != seed_name:
+        return None
+    applied = state.get("APTrapsApplied", "")
+    if not applied.isdigit():
+        return None
+    if int(applied) <= last_pushed:
+        return None
+    return int(applied)
+
+
 def parse_rungs(milestones: str) -> list[int]:
     """Turn the mod's "5,10,15" rung string into a list of ints."""
     rungs: list[int] = []
@@ -233,6 +248,13 @@ class VCDContext(CommonContext):
         # Items already held when this session connected; traps at or below
         # this index are never applied, so a connect cannot dump a backlog.
         self.trap_baseline: "int | None" = None
+        # The slot's shared applied counter from server data storage. None until
+        # the connect-time Get answers; the traps file is not written before
+        # then, so a too-low baseline can never reach the mod. The counter only
+        # ever rises (the server folds writes with max), so a new co-op host
+        # skips everything another host already applied.
+        self.storage_traps_applied: "int | None" = None
+        self.last_traps_pushed: int = 0
         self.goal_location_ids: list[int] = []
         self.goal_need: int = 0
         self.last_seq: "str | None" = None
@@ -448,7 +470,24 @@ class VCDContext(CommonContext):
             self.saves_ready = False
             self.trap_baseline = None
             self.last_traps_written = None
+            self.storage_traps_applied = None
+            self.last_traps_pushed = 0
+            # Subscribe to the slot's shared applied counter and fetch it; the
+            # Retrieved answer releases the traps-file write gate.
+            key = self.traps_applied_storage_key()
+            asyncio.create_task(self.send_msgs([
+                {"cmd": "SetNotify", "keys": [key]},
+                {"cmd": "Get", "keys": [key]},
+            ]))
             asyncio.create_task(self.setup_and_launch())
+        elif cmd == "Retrieved":
+            keys = args.get("keys", {})
+            storage_key = self.traps_applied_storage_key()
+            if storage_key in keys:
+                self._fold_storage_traps_applied(keys[storage_key])
+        elif cmd == "SetReply":
+            if args.get("key") == self.traps_applied_storage_key():
+                self._fold_storage_traps_applied(args.get("value"))
         elif cmd == "ReceivedItems":
             # The first packet after connect (index 0) is the full resync list:
             # everything in it predates this session, so it sets the trap baseline.
@@ -463,6 +502,22 @@ class VCDContext(CommonContext):
             if changed:
                 self.write_grants_if_changed()
             self.write_traps_if_changed()
+
+    def traps_applied_storage_key(self) -> str:
+        # Data storage is room-scoped, so the seed never goes in the key.
+        return f"vcd_traps_applied_{self.team}_{self.slot}"
+
+    def _fold_storage_traps_applied(self, value: object) -> None:
+        """Fold a data-storage reading into the applied floor (a missing key
+        reads as 0) and rewrite the traps file if the baseline rose."""
+        try:
+            number = int(value or 0)
+        except (TypeError, ValueError):
+            number = 0
+        if self.storage_traps_applied is not None:
+            number = max(number, self.storage_traps_applied)
+        self.storage_traps_applied = number
+        self.write_traps_if_changed()
 
     def _set_goal(self, slot_data: dict) -> None:
         self.goal_location_ids, self.goal_need = goal_locations_from_slot_data(
@@ -484,12 +539,17 @@ class VCDContext(CommonContext):
 
     def write_traps_if_changed(self) -> None:
         """Write the full trap queue (always on connect, even empty, so a stale
-        file from another seed is overwritten)."""
+        file from another seed is overwritten). Held until the shared applied
+        counter arrives from data storage, so a too-low baseline can never
+        reach a mod that is already hosting a level."""
         if not self.install_dir or not self.saves_ready or not self.seed_name:
+            return
+        if self.storage_traps_applied is None:
             return
         seed_tag, baseline, queue = traps.queue_fields(
             self.seed_name, self.trap_baseline,
-            [item.item for item in self.items_received], QUEUE_ID_TO_TYPE)
+            [item.item for item in self.items_received], QUEUE_ID_TO_TYPE,
+            self.storage_traps_applied)
         payload = f"{seed_tag}|{baseline}|{queue}"
         if payload == self.last_traps_written:
             return
@@ -545,6 +605,17 @@ async def vcd_bridge_loop(ctx: VCDContext) -> None:
         if not ctx.install_dir or not ctx.slot:
             continue
         state = read_mod_state(ctx.install_dir)
+        # The applied trap counter is checked before the APSeq gate: the mod
+        # saves it without bumping APSeq. The server-side max op is atomic, so
+        # concurrent pushes from two clients can never regress the mark.
+        push = traps_applied_to_push(state, ctx.seed_name, ctx.last_traps_pushed)
+        if push is not None:
+            ctx.last_traps_pushed = push
+            await ctx.send_msgs([{
+                "cmd": "Set", "key": ctx.traps_applied_storage_key(),
+                "default": 0, "want_reply": False,
+                "operations": [{"operation": "max", "value": push}],
+            }])
         seq = state.get("APSeq")
         if not seq or seq == ctx.last_seq:
             continue
