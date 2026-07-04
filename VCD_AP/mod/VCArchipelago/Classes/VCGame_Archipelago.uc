@@ -3,8 +3,9 @@
 // A VCGame subclass selected through a VCUIDataProvider_GameInfo entry whose
 // GameClass is this class, so a level launches with
 // ?Game=VCArchipelago.VCGame_Archipelago and this runs in place of VCGame. It
-// watches the level's cleanliness and publishes state for the Archipelago client
-// (see VCArchipelagoState).
+// watches the level's cleanliness, publishes state for the Archipelago client
+// (see VCArchipelagoState), and mirrors the live value into the replicated GRI
+// for the on-screen readout (see VCHUD_Archipelago).
 //
 // Cleanliness is the game's own value: 1 - FinalPenalty / StartingCleanupScore,
 // where the punchout handler's ProcessMapState recomputes FinalPenalty. Every
@@ -511,6 +512,7 @@ function PublishCleanliness()
 {
     local VCPunchoutHandler_General Handler;
     local VCMapInfo MapInfo;
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
     local float clean;
     local int percent, rung;
     local bool changed;
@@ -527,6 +529,15 @@ function PublishCleanliness()
     Handler.ProcessMapState(self, None);
     clean = 1.0 - (Handler.FinalPenalty / Handler.StartingCleanupScore);
     percent = int(clean * 100.0);
+
+    // Hundredths for the on-screen readout, floored so the display never
+    // overstates cleanliness. Rides the GRI so co-op guests see it too.
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None)
+    {
+        ReplicatedInfo.CleanlinessHundredths = FFloor(clean * 10000.0);
+        ReplicatedInfo.bCleanlinessSampled = true;
+    }
 
     changed = false;
     if (percent != LastPublishedPercent)
@@ -577,4 +588,6 @@ function PublishCleanliness()
 
 defaultproperties
 {
+    HUDType=Class'VCArchipelago.VCHUD_Archipelago'
+    GameReplicationInfoClass=Class'VCArchipelago.VCGameReplicationInfo_Archipelago'
 }
