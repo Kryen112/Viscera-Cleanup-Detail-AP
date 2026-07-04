@@ -17,6 +17,7 @@ var bool bCleanlinessSampled;
 // dynamic arrays do not replicate; the None type marks an empty slot.
 const TimedEffectNone     = 0;
 const TimedEffectSlowdown = 1;
+const TimedEffectSpeedup  = 2;
 
 var byte  TimedEffectTypes[4];
 var float TimedEffectRemaining[4];

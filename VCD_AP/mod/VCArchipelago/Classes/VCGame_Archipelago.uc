@@ -38,15 +38,20 @@ var int LastPublishedPercent;
 var int UnchangedScans;
 var bool bScanBackedOff;
 
-// Janitors slowed by a trap, with the speeds to restore. Same-level references
-// only; the GameInfo and these arrays die with the level. The game itself never
-// writes GroundSpeed after defaults, so a halve-and-restore cannot be clobbered.
-var array<VCPawn> SlowedJanitors;
-var array<float> SlowedJanitorSpeeds;
+// Janitors under a timed speed effect, with the base speeds to restore.
+// Same-level references only; the GameInfo and these arrays die with the
+// level. The game itself never writes GroundSpeed after defaults, so a
+// scale-and-restore cannot be clobbered.
+var array<VCPawn> SpeedAffectedJanitors;
+var array<float> SpeedAffectedBaseSpeeds;
 
-// Seconds a slowdown lasts; the HUD countdown shares this value through the
-// replicated GRI slot.
-const SlowdownDurationSeconds = 30.0;
+// The GRI effect type of the running speed effect; TimedEffectNone when the
+// speeds are at base.
+var byte ActiveSpeedEffectType;
+
+// Seconds a speed effect lasts; the HUD countdown shares this value through
+// the replicated GRI slot.
+const SpeedEffectDurationSeconds = 30.0;
 
 // Reused load target for the trap queue file, so the 5 second poll does not
 // pile up garbage objects between collections.
@@ -242,7 +247,13 @@ function ApplyQueueEntry(string QueueType)
     }
     else if (QueueType ~= "Slowdown")
     {
-        SlowJanitors();
+        ScaleJanitorSpeeds(0.5,
+            class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSlowdown);
+    }
+    else if (QueueType ~= "Speedup")
+    {
+        ScaleJanitorSpeeds(2.0,
+            class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSpeedup);
     }
     else if (QueueType ~= "CleanBucket")
     {
@@ -333,30 +344,40 @@ function bool SpillNearestBucket()
     return true;
 }
 
-// Halves every janitor's ground speed for the slowdown duration and registers
-// the countdown the HUD draws. Another slowdown while one is active restarts
-// the clock without stacking the halving.
-function SlowJanitors()
+// Scales every janitor's ground speed off its stored base for the effect
+// duration and registers the countdown the HUD draws. Slowdown and speedup
+// share one clock: a new effect rescales from the base speeds and replaces
+// whichever is active, so multipliers never stack.
+function ScaleJanitorSpeeds(float Multiplier, byte EffectType)
 {
     local VCPawn Janitor;
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local int Index;
 
     foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
     {
-        if (SlowedJanitors.Find(Janitor) != -1)
-            continue;
-        SlowedJanitors.AddItem(Janitor);
-        SlowedJanitorSpeeds.AddItem(Janitor.GroundSpeed);
-        Janitor.GroundSpeed = Janitor.GroundSpeed * 0.5;
+        Index = SpeedAffectedJanitors.Find(Janitor);
+        if (Index == -1)
+        {
+            SpeedAffectedJanitors.AddItem(Janitor);
+            SpeedAffectedBaseSpeeds.AddItem(Janitor.GroundSpeed);
+            Index = SpeedAffectedJanitors.Length - 1;
+        }
+        Janitor.GroundSpeed = SpeedAffectedBaseSpeeds[Index] * Multiplier;
     }
-    SetTimer(SlowdownDurationSeconds, false, 'RestoreJanitorSpeeds');
+    SetTimer(SpeedEffectDurationSeconds, false, 'RestoreJanitorSpeeds');
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
     if (ReplicatedInfo != None)
     {
-        ReplicatedInfo.StartTimedEffect(
-            class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSlowdown,
-            SlowdownDurationSeconds);
+        if (ActiveSpeedEffectType != EffectType
+            && ActiveSpeedEffectType
+                != class'VCGameReplicationInfo_Archipelago'.const.TimedEffectNone)
+        {
+            ReplicatedInfo.ClearTimedEffect(ActiveSpeedEffectType);
+        }
+        ReplicatedInfo.StartTimedEffect(EffectType, SpeedEffectDurationSeconds);
     }
+    ActiveSpeedEffectType = EffectType;
 }
 
 function RestoreJanitorSpeeds()
@@ -364,19 +385,21 @@ function RestoreJanitorSpeeds()
     local int I;
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
 
-    for (I = 0; I < SlowedJanitors.Length; I++)
+    for (I = 0; I < SpeedAffectedJanitors.Length; I++)
     {
-        if (SlowedJanitors[I] != None)
-            SlowedJanitors[I].GroundSpeed = SlowedJanitorSpeeds[I];
+        if (SpeedAffectedJanitors[I] != None)
+            SpeedAffectedJanitors[I].GroundSpeed = SpeedAffectedBaseSpeeds[I];
     }
-    SlowedJanitors.Length = 0;
-    SlowedJanitorSpeeds.Length = 0;
+    SpeedAffectedJanitors.Length = 0;
+    SpeedAffectedBaseSpeeds.Length = 0;
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
-    if (ReplicatedInfo != None)
+    if (ReplicatedInfo != None
+        && ActiveSpeedEffectType
+            != class'VCGameReplicationInfo_Archipelago'.const.TimedEffectNone)
     {
-        ReplicatedInfo.ClearTimedEffect(
-            class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSlowdown);
+        ReplicatedInfo.ClearTimedEffect(ActiveSpeedEffectType);
     }
+    ActiveSpeedEffectType = class'VCGameReplicationInfo_Archipelago'.const.TimedEffectNone;
 }
 
 // Drops a supply item on the floor near the janitor. A plain spawn is exactly

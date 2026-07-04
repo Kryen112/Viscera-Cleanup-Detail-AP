@@ -146,6 +146,8 @@ function string TimedEffectLabel(byte EffectType)
 {
     if (EffectType == class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSlowdown)
         return "Slowdown";
+    if (EffectType == class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSpeedup)
+        return "Speedup";
     return "Trap";
 }
 

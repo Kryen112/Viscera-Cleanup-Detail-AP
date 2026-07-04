@@ -41,9 +41,9 @@ class Speedrunsanity(Toggle):
 
 class TrapPercentage(Range):
     """The share of filler items that become traps: a mess dump near the
-    janitor, a spilled bucket, or thirty seconds of slow walking. Traps arrive
-    from the multiworld while cleaning; they are never required by logic. 0
-    disables traps."""
+    janitor, a spilled bucket, or thirty seconds of walking at half or double
+    speed. Traps arrive from the multiworld while cleaning; they are never
+    required by logic. 0 disables traps."""
     display_name = "Trap percentage"
     range_start = 0
     range_end = 100

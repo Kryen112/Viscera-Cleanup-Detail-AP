@@ -21,11 +21,23 @@ LEVEL_ACCESS_ITEMS: list[str] = [access_item_name(d) for _, d, _ in LEVELS]
 # Generic filler. VCD has no item economy, so filler is flavor only.
 FILLER_NAMES: list[str] = ["Overtime Pay", "Coffee Break", "Spare Bucket"]
 
-# Ids are assigned in list order, so new kinds append after the existing names
-# and earlier ids stay stable.
+# Ids are assigned in list order. The tail below is frozen: a name added later
+# appends at the end no matter which group it belongs to, so every existing id
+# stays stable even for a seed generated with an older version.
+_ID_ORDERED_NAMES: list[str] = LEVEL_ACCESS_ITEMS + FILLER_NAMES + [
+    "Mess Dump Trap",
+    "Bucket Spill Trap",
+    "Slowdown Trap",
+    "Clean Water Bucket",
+    "Empty Bin",
+    "Speedup Trap",
+]
+assert sorted(_ID_ORDERED_NAMES) == sorted(
+    LEVEL_ACCESS_ITEMS + FILLER_NAMES + TRAP_NAMES + USEFUL_NAMES)
+
 ITEM_NAME_TO_ID: dict[str, int] = {}
 _next = ITEM_ID_BASE
-for _name in LEVEL_ACCESS_ITEMS + FILLER_NAMES + TRAP_NAMES + USEFUL_NAMES:
+for _name in _ID_ORDERED_NAMES:
     ITEM_NAME_TO_ID[_name] = _next
     _next += 1
 

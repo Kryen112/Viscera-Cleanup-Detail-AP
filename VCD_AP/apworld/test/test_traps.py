@@ -5,7 +5,7 @@ import unittest
 
 from .bases import read_sav_properties
 from .. import grants, traps
-from ..items import ITEM_NAME_TO_ID
+from ..items import ITEM_ID_BASE, ITEM_NAME_TO_ID
 
 QUEUE_ID_TO_TYPE = {
     ITEM_NAME_TO_ID[name]: queue_type
@@ -13,6 +13,7 @@ QUEUE_ID_TO_TYPE = {
 }
 MESS_DUMP = ITEM_NAME_TO_ID["Mess Dump Trap"]
 SLOWDOWN = ITEM_NAME_TO_ID["Slowdown Trap"]
+SPEEDUP = ITEM_NAME_TO_ID["Speedup Trap"]
 CLEAN_BUCKET = ITEM_NAME_TO_ID["Clean Water Bucket"]
 EMPTY_BIN = ITEM_NAME_TO_ID["Empty Bin"]
 FILLER = ITEM_NAME_TO_ID["Overtime Pay"]
@@ -49,8 +50,28 @@ class TestBuildQueue(unittest.TestCase):
         self.assertEqual(traps.build_queue(received, QUEUE_ID_TO_TYPE),
                          "1:MessDump,2:CleanBucket,4:EmptyBin")
 
+    def test_speedup_rides_the_queue_with_its_own_token(self) -> None:
+        received = [SLOWDOWN, FILLER, SPEEDUP]
+        self.assertEqual(traps.build_queue(received, QUEUE_ID_TO_TYPE),
+                         "1:Slowdown,3:Speedup")
+
     def test_no_queued_items_is_empty(self) -> None:
         self.assertEqual(traps.build_queue([FILLER, FILLER], QUEUE_ID_TO_TYPE), "")
+
+
+class TestItemIdStability(unittest.TestCase):
+    def test_new_names_append_after_the_frozen_tail(self) -> None:
+        # A seed generated before the speedup trap existed keeps its ids: the
+        # older names hold their positions and the new name appends after them.
+        # The absolute anchor (26 level-access items plus 3 filler names ahead
+        # of the first trap) catches a shift of the whole tail too.
+        self.assertEqual(ITEM_NAME_TO_ID["Mess Dump Trap"], ITEM_ID_BASE + 29)
+        self.assertEqual(ITEM_NAME_TO_ID["Clean Water Bucket"],
+                         ITEM_NAME_TO_ID["Slowdown Trap"] + 1)
+        self.assertEqual(ITEM_NAME_TO_ID["Empty Bin"],
+                         ITEM_NAME_TO_ID["Clean Water Bucket"] + 1)
+        self.assertEqual(ITEM_NAME_TO_ID["Speedup Trap"],
+                         ITEM_NAME_TO_ID["Empty Bin"] + 1)
 
 
 class TestQueueFields(unittest.TestCase):
