@@ -6,7 +6,7 @@ open a socket). The mod writes its state to
 that file, maps the state it reports (cleanliness rungs, punch-out, speedrun) to
 location checks, and sends them. In the other direction this client writes the
 unlocked-level set to ``Saves\\VCArchipelagoGrants.sav``, which the mod reads to
-gate levels.
+gate levels, plus the spawn queue (traps.py) and the toast feed (messages.py).
 
 State the client recovers from the framework, never from memory: checked locations
 (so reconnecting re-derives what to send) and received items (so the grants file is
@@ -25,7 +25,7 @@ from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser
                           gui_enabled, server_loop)
 from NetUtils import ClientStatus
 
-from . import VCDWorld, grants, installer, traps
+from . import VCDWorld, grants, installer, messages, traps
 from .saves import SaveManager, seed_folder_name
 from .collectibles import BOB_NOTE_MAP_BY_TOKEN, COLLECTIBLE_BY_TOKEN
 from .items import ITEM_NAME_TO_ID, access_item_name
@@ -147,6 +147,53 @@ def location_names_from_state(state: dict[str, str]) -> list[str]:
     return names
 
 
+def print_json_relevant(args: dict, slot_concerns_self, team: "int | None",
+                        ) -> bool:
+    """True when a PrintJSON packet is an item transfer involving this slot:
+    an ItemSend (or same-team ItemCheat) this slot receives or sends."""
+    if args.get("type") not in ("ItemSend", "ItemCheat"):
+        return False
+    if args.get("type") == "ItemCheat" and args.get("team") != team:
+        return False
+    item = args.get("item")
+    return item is not None and (slot_concerns_self(args.get("receiving", -1))
+                                 or slot_concerns_self(item.player))
+
+
+def message_segments(parts: "list[dict]", ctx: "VCDContext",
+                     ) -> "list[tuple[str, str]]":
+    """Colored (hex, text) segments for a PrintJSON part list, mirroring the
+    text client's palette and name resolution."""
+    segments: list[tuple[str, str]] = []
+    for part in parts:
+        part_type = part.get("type", "text")
+        text = part.get("text", "")
+        if part_type == "player_id":
+            player = int(text)
+            color = (messages.OWN_PLAYER_COLOR if ctx.slot_concerns_self(player)
+                     else messages.OTHER_PLAYER_COLOR)
+            segments.append((color, ctx.player_names[player]))
+        elif part_type == "player_name":
+            segments.append((messages.OTHER_PLAYER_COLOR, text))
+        elif part_type == "item_id":
+            name = ctx.item_names.lookup_in_slot(int(text), part.get("player"))
+            segments.append((messages.item_color(int(part.get("flags", 0))), name))
+        elif part_type == "item_name":
+            segments.append((messages.item_color(int(part.get("flags", 0))), text))
+        elif part_type == "location_id":
+            name = ctx.location_names.lookup_in_slot(int(text), part.get("player"))
+            segments.append((messages.LOCATION_COLOR, name))
+        elif part_type == "location_name":
+            segments.append((messages.LOCATION_COLOR, text))
+        elif part_type == "entrance_name":
+            segments.append((messages.ENTRANCE_COLOR, text))
+        elif part_type == "color":
+            segments.append((messages.named_color(part.get("color", "")), text))
+        else:
+            segments.append((messages.WHITE, text))
+    return segments
+
+
 def goal_locations_from_slot_data(slot_data: dict) -> "tuple[list[int], int]":
     """The location ids whose checks count toward the goal, and how many are
     needed. Level goals count only the pooled levels. The collectible goal
@@ -255,6 +302,12 @@ class VCDContext(CommonContext):
         # skips everything another host already applied.
         self.storage_traps_applied: "int | None" = None
         self.last_traps_pushed: int = 0
+        # The toast feed the mod's HUD shows in game. The tag rotates per
+        # connect, so the mod replays only this session's unseen entries.
+        self.message_tag: "str | None" = None
+        self.message_index: int = 0
+        self.message_entries: list[str] = []
+        self.last_messages_written: "str | None" = None
         self.goal_location_ids: list[int] = []
         self.goal_need: int = 0
         self.last_seq: "str | None" = None
@@ -311,6 +364,7 @@ class VCDContext(CommonContext):
         self.saves_ready = True
         self.write_grants_if_changed()
         self.write_traps_if_changed()
+        self.write_messages_if_changed()
         if not self.game_launched and bool(VCDWorld.settings.auto_launch_game):
             self.launch_game()
 
@@ -472,6 +526,11 @@ class VCDContext(CommonContext):
             self.last_traps_written = None
             self.storage_traps_applied = None
             self.last_traps_pushed = 0
+            self.message_tag = messages.session_tag(self.seed_name)
+            self.message_index = 0
+            self.message_entries = []
+            self.last_messages_written = None
+            self.enqueue_message([(messages.WHITE, "Archipelago connected.")])
             # Subscribe to the slot's shared applied counter and fetch it; the
             # Retrieved answer releases the traps-file write gate.
             key = self.traps_applied_storage_key()
@@ -502,6 +561,50 @@ class VCDContext(CommonContext):
             if changed:
                 self.write_grants_if_changed()
             self.write_traps_if_changed()
+
+    def on_print_json(self, args: dict) -> None:
+        super().on_print_json(args)
+        if not self.slot:
+            return
+        if not print_json_relevant(args, self.slot_concerns_self, self.team):
+            return
+        self.enqueue_message(message_segments(args.get("data", []), self))
+
+    async def disconnect(self, allow_autoreconnect: bool = False) -> None:
+        # Skipped during shutdown: the game is closing and the save restore may
+        # already have swapped the career saves back in.
+        if self.slot and not self.exit_event.is_set():
+            self.enqueue_message([(messages.WHITE, "Archipelago disconnected.")])
+        await super().disconnect(allow_autoreconnect)
+
+    def enqueue_message(self, segments: "list[tuple[str, str]]") -> None:
+        """Append one toast line to the feed and flush it to the game. A line
+        with no visible text after sanitizing is dropped, never queued blank."""
+        if not self.message_tag:
+            return
+        if not any(messages.sanitize(text).strip() for _, text in segments):
+            return
+        self.message_index += 1
+        self.message_entries.append(
+            messages.encode_entry(self.message_index, segments))
+        del self.message_entries[:-messages.MAX_ENTRIES]
+        self.write_messages_if_changed()
+
+    def write_messages_if_changed(self) -> None:
+        """Write the toast feed (always fresh on connect, even empty, so a
+        stale file from another seed or session is overwritten)."""
+        if not self.install_dir or not self.saves_ready or not self.message_tag:
+            return
+        payload = f"{self.message_tag}|{self.message_index}|{len(self.message_entries)}"
+        if payload == self.last_messages_written:
+            return
+        try:
+            messages.write(self.install_dir / "Saves" / "VCArchipelagoMessages.sav",
+                           self.message_tag, self.message_entries)
+        except OSError as error:
+            client_logger.error(f"Could not write the messages file: {error}")
+            return
+        self.last_messages_written = payload
 
     def traps_applied_storage_key(self) -> str:
         # Data storage is room-scoped, so the seed never goes in the key.
@@ -586,6 +689,8 @@ class VCDContext(CommonContext):
             await self.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
             self.finished_game = True
             client_logger.info("Goal complete. The shift is over.")
+            self.enqueue_message([
+                (messages.LOCATION_COLOR, "Goal complete. The shift is over.")])
 
     def run_gui(self) -> None:
         from kvui import GameManager

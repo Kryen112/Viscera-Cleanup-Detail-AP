@@ -168,6 +168,15 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   state) to a config ini the mod reads. Level gating is IN-ENGINE: the mod
   refuses to start a level not in that set. Do not gate by rewriting the shared
   `VCProviders.ini` map list.
+- The toast feed travels client to mod via `Saves\VCArchipelagoMessages.sav`
+  (a per-connect SessionTag plus newline-joined "index:segments" entries,
+  segments tab-joined with a six-hex RRGGBB prefix; text sanitized to
+  printable ASCII). The client is the only writer and rewrites it fresh on
+  every connect. The HUD polls the file on its own machine (never the
+  GameInfo, so shared-slot co-op guests get their own toasts), advances a
+  shown index persisted through a config object with the class-defaults
+  mirror, and a changed SessionTag resets that index, so toasts never replay
+  within a session and never leak across seeds.
 - Office and save isolation is client-side: on AP connect, back up the whole
   `Saves\` directory and swap in a fresh (or per-seed) Office; restore the
   player's saves on disconnect. AP needs a fresh Office so collectibles, the

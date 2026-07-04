@@ -1,10 +1,18 @@
-"""Tests for the client's mod-state parsing: the state file snapshot maps to
-location names, with the punch-out and speedrun policy applied, and only a
-snapshot stamped with the connected seed counts."""
+"""Tests for the client's mod-state parsing and its toast feed: the state file
+snapshot maps to location names (with the punch-out and speedrun policy, and
+only a seed-stamped snapshot counting), and PrintJSON traffic filters and
+encodes into the messages file."""
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
-from ..client import (goal_locations_from_slot_data, location_names_from_state,
-                      parse_rungs, state_is_current, traps_applied_to_push)
+from .bases import read_sav_properties
+from .. import messages
+from ..client import (VCDContext, goal_locations_from_slot_data,
+                      location_names_from_state, message_segments, parse_rungs,
+                      print_json_relevant, state_is_current,
+                      traps_applied_to_push)
 from ..levels import LEVELS
 from ..locations import LOCATION_NAME_TO_ID
 
@@ -150,6 +158,139 @@ class TestGoalLocationsFromSlotData(unittest.TestCase):
         ids, need = goal_locations_from_slot_data({"goal": "find_bob"})
         self.assertEqual(len(ids), 1)
         self.assertEqual(need, 1)
+
+
+def _segments_context() -> SimpleNamespace:
+    """A stand-in for the connected context: slot 1 is us, with fixed name and
+    id lookups."""
+    return SimpleNamespace(
+        slot_concerns_self=lambda slot: slot == 1,
+        player_names={1: "Janitor", 2: "Alice"},
+        item_names=SimpleNamespace(
+            lookup_in_slot=lambda code, slot=None: f"Item{code}"),
+        location_names=SimpleNamespace(
+            lookup_in_slot=lambda code, slot=None: f"Location{code}"),
+    )
+
+
+class TestMessageSegments(unittest.TestCase):
+    def test_item_send_parts_resolve_names_and_colors(self) -> None:
+        parts = [
+            {"type": "player_id", "text": "1"},
+            {"type": "text", "text": " sent "},
+            {"type": "item_id", "text": "42", "flags": 1, "player": 2},
+            {"type": "text", "text": " to "},
+            {"type": "player_id", "text": "2"},
+        ]
+        self.assertEqual(message_segments(parts, _segments_context()), [
+            ("EE00EE", "Janitor"),
+            ("FFFFFF", " sent "),
+            ("AF99EF", "Item42"),
+            ("FFFFFF", " to "),
+            ("FAFAD2", "Alice"),
+        ])
+
+    def test_location_and_entrance_and_color_parts(self) -> None:
+        parts = [
+            {"type": "location_id", "text": "9", "player": 1},
+            {"type": "entrance_name", "text": "Vanilla"},
+            {"type": "color", "color": "red", "text": "alert"},
+            {"type": "color", "color": "unknown", "text": "plain"},
+        ]
+        self.assertEqual(message_segments(parts, _segments_context()), [
+            ("00FF7F", "Location9"),
+            ("6495ED", "Vanilla"),
+            ("EE0000", "alert"),
+            ("FFFFFF", "plain"),
+        ])
+
+    def test_trap_flags_color_salmon(self) -> None:
+        parts = [{"type": "item_id", "text": "7", "flags": 4, "player": 1}]
+        self.assertEqual(message_segments(parts, _segments_context()),
+                         [("FA8072", "Item7")])
+
+    def test_untyped_parts_default_to_white_text(self) -> None:
+        self.assertEqual(message_segments([{"text": "hello"}],
+                                          _segments_context()),
+                         [("FFFFFF", "hello")])
+
+
+def _concerns_slot_one(slot: int) -> bool:
+    return slot == 1
+
+
+class TestPrintJsonRelevant(unittest.TestCase):
+    def test_own_receive_and_own_send_are_relevant(self) -> None:
+        receive = {"type": "ItemSend", "receiving": 1,
+                   "item": SimpleNamespace(player=2)}
+        self.assertTrue(print_json_relevant(receive, _concerns_slot_one, 0))
+        send = {"type": "ItemSend", "receiving": 2,
+                "item": SimpleNamespace(player=1)}
+        self.assertTrue(print_json_relevant(send, _concerns_slot_one, 0))
+
+    def test_self_find_is_relevant_once(self) -> None:
+        found = {"type": "ItemSend", "receiving": 1,
+                 "item": SimpleNamespace(player=1)}
+        self.assertTrue(print_json_relevant(found, _concerns_slot_one, 0))
+
+    def test_unrelated_traffic_is_dropped(self) -> None:
+        other = {"type": "ItemSend", "receiving": 2,
+                 "item": SimpleNamespace(player=3)}
+        self.assertFalse(print_json_relevant(other, _concerns_slot_one, 0))
+        chat = {"type": "Chat", "receiving": 1,
+                "item": SimpleNamespace(player=1)}
+        self.assertFalse(print_json_relevant(chat, _concerns_slot_one, 0))
+        self.assertFalse(print_json_relevant(
+            {"type": "ItemSend", "receiving": 1}, _concerns_slot_one, 0))
+
+    def test_item_cheat_needs_the_own_team(self) -> None:
+        cheat = {"type": "ItemCheat", "receiving": 1,
+                 "item": SimpleNamespace(player=0), "team": 1}
+        self.assertFalse(print_json_relevant(cheat, _concerns_slot_one, 0))
+        self.assertTrue(print_json_relevant(cheat, _concerns_slot_one, 1))
+
+
+def _feed_context(install_dir: "Path | None") -> VCDContext:
+    """A context carrying only the toast-feed state, skipping __init__ so no
+    framework plumbing is needed."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.message_tag = "seed_1-1a2b3c4d"
+    ctx.message_index = 0
+    ctx.message_entries = []
+    ctx.last_messages_written = None
+    ctx.install_dir = install_dir
+    ctx.saves_ready = install_dir is not None
+    return ctx
+
+
+class TestEnqueueMessage(unittest.TestCase):
+    def test_enqueued_lines_land_in_the_feed_file(self) -> None:
+        # The client-authored connect and goal lines ride this exact path.
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _feed_context(Path(tmp))
+            ctx.enqueue_message([(messages.WHITE, "Archipelago connected.")])
+            ctx.enqueue_message([
+                (messages.LOCATION_COLOR, "Goal complete. The shift is over.")])
+            data = (Path(tmp) / "Saves" / "VCArchipelagoMessages.sav").read_bytes()
+            properties = read_sav_properties(data)
+            self.assertEqual(properties["SessionTag"], "seed_1-1a2b3c4d")
+            self.assertEqual(properties["Messages"].split("\n"), [
+                "1:FFFFFFArchipelago connected.",
+                "2:00FF7FGoal complete. The shift is over.",
+            ])
+
+    def test_blank_lines_never_queue(self) -> None:
+        ctx = _feed_context(None)
+        ctx.enqueue_message([(messages.WHITE, "\t\n")])
+        ctx.enqueue_message([])
+        self.assertEqual(ctx.message_index, 0)
+        self.assertEqual(ctx.message_entries, [])
+
+    def test_without_a_session_tag_nothing_queues(self) -> None:
+        ctx = _feed_context(None)
+        ctx.message_tag = None
+        ctx.enqueue_message([(messages.WHITE, "line")])
+        self.assertEqual(ctx.message_entries, [])
 
 
 if __name__ == "__main__":
