@@ -4,8 +4,9 @@
 // GameClass is this class, so a level launches with
 // ?Game=VCArchipelago.VCGame_Archipelago and this runs in place of VCGame. It
 // watches the level's cleanliness, publishes state for the Archipelago client
-// (see VCArchipelagoState), and mirrors the live value into the replicated GRI
-// for the on-screen readout (see VCHUD_Archipelago).
+// (see VCArchipelagoState), and mirrors the live value and the level's next
+// remaining milestone into the replicated GRI for the on-screen readout
+// (see VCHUD_Archipelago).
 //
 // Cleanliness is the game's own value: 1 - FinalPenalty / StartingCleanupScore,
 // where the punchout handler's ProcessMapState recomputes FinalPenalty. Every
@@ -57,6 +58,9 @@ const SpeedEffectDurationSeconds = 30.0;
 // pile up garbage objects between collections.
 var VCArchipelagoTraps TrapQueueFile;
 
+// Reused load target for the client-written milestones file.
+var VCArchipelagoMilestones MilestoneFile;
+
 event InitGame(string Options, out string ErrorMessage)
 {
     super.InitGame(Options, ErrorMessage);
@@ -79,6 +83,7 @@ event InitGame(string Options, out string ErrorMessage)
     bScanBackedOff = false;
     SetTimer(1.0, true, 'PublishCleanliness');
     SetTimer(5.0, true, 'PollTraps');
+    SetTimer(1.0, true, 'PollMilestones');
     EnforceLevelGate();
 }
 
@@ -132,6 +137,7 @@ function BounceLockedLevel()
     // Stop our timers so they do not fire against a level being torn down.
     ClearTimer('PublishCleanliness');
     ClearTimer('PollTraps');
+    ClearTimer('PollMilestones');
 
     // The trophy handler is persistent (it lives on the viewport client and
     // survives travel) and holds a reference to this level's punchout handler.
@@ -263,6 +269,60 @@ function ApplyQueueEntry(string QueueType)
     {
         SpawnSupplyNearJanitor(class'VCBin');
     }
+}
+
+// Mirrors the next milestone from the client-written milestones file into the
+// replicated GRI for the HUD, so co-op guests see it too. Server-confirmed
+// data only: the file lists, per level, the percents whose check the server
+// has not confirmed, so the indicator never runs ahead of the server.
+function PollMilestones()
+{
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None)
+        ReplicatedInfo.NextMilestonePercent = ReadNextMilestonePercent();
+}
+
+// The lowest percent the server still misses for the current map: Unknown
+// without trustworthy same-seed data (no connected seed, no file, another
+// seed's file, or a map absent from it), Cleared when the map is listed with
+// nothing remaining.
+function int ReadNextMilestonePercent()
+{
+    local array<string> MapEntries, PercentTexts;
+    local string Remaining;
+    local int I, J, ColonAt, Percent, Lowest;
+
+    if (APState == None || APState.APSeedTag == "")
+        return class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneUnknown;
+    if (MilestoneFile == None)
+        MilestoneFile = new class'VCArchipelagoMilestones';
+    if (!class'Engine'.static.BasicLoadObject(MilestoneFile,
+        "..\\..\\Saves\\VCArchipelagoMilestones.sav", true, 1)
+        || MilestoneFile.SeedTag != APState.APSeedTag)
+    {
+        return class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneUnknown;
+    }
+
+    ParseStringIntoArray(MilestoneFile.RemainingByMap, MapEntries, ",", true);
+    for (I = 0; I < MapEntries.Length; I++)
+    {
+        ColonAt = InStr(MapEntries[I], ":");
+        if (ColonAt == -1 || Left(MapEntries[I], ColonAt) != WorldInfo.GetMapName(true))
+            continue;
+        Remaining = Mid(MapEntries[I], ColonAt + 1);
+        ParseStringIntoArray(Remaining, PercentTexts, " ", true);
+        Lowest = class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneCleared;
+        for (J = 0; J < PercentTexts.Length; J++)
+        {
+            Percent = int(PercentTexts[J]);
+            if (Percent > 0 && (Lowest <= 0 || Percent < Lowest))
+                Lowest = Percent;
+        }
+        return Lowest;
+    }
+    return class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneUnknown;
 }
 
 // Sprays blood splats on the floor around the janitor. Splats spawn the same
@@ -449,8 +509,10 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     if (bWasPunchingOut || !IsTimerActive('PunchoutDelay'))
         return;
 
-    // Catch the final cleanliness rungs, then stop our timers: the level is on
-    // its way out, and the handler's results are final now.
+    // Catch the final cleanliness rungs, then stop the probe and trap timers:
+    // the level is on its way out, and the handler's results are final now.
+    // The milestone poll keeps running so the indicator can still flip once
+    // the server confirms the final rungs before the travel.
     PublishCleanliness();
     ClearTimer('PublishCleanliness');
     ClearTimer('PollTraps');

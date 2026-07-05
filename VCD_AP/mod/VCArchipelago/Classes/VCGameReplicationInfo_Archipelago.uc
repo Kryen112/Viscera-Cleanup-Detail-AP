@@ -13,6 +13,16 @@ class VCGameReplicationInfo_Archipelago extends VCGameReplicationInfo;
 var int CleanlinessHundredths;
 var bool bCleanlinessSampled;
 
+// The next milestone for the current level, mirrored from the client-written
+// milestones file: the lowest percent whose check the server has not
+// confirmed. Unknown until trustworthy same-seed data arrives; Cleared once
+// every percent check for the level is confirmed. Server state only, so the
+// indicator never runs ahead of the server.
+const NextMilestoneUnknown = -1;
+const NextMilestoneCleared = 0;
+
+var int NextMilestonePercent;
+
 // Timed trap effects for the on-screen countdown. Fixed slots because
 // dynamic arrays do not replicate; the None type marks an empty slot.
 const TimedEffectNone     = 0;
@@ -36,8 +46,9 @@ var float TimedEffectEndTimes[4];
 replication
 {
     if (bNetDirty)
-        CleanlinessHundredths, bCleanlinessSampled, TimedEffectTypes,
-        TimedEffectRemaining, TimedEffectDurations, TimedEffectCounter;
+        CleanlinessHundredths, bCleanlinessSampled, NextMilestonePercent,
+        TimedEffectTypes, TimedEffectRemaining, TimedEffectDurations,
+        TimedEffectCounter;
 }
 
 simulated event ReplicatedEvent(name VarName)
@@ -136,4 +147,9 @@ function RefreshTimedEffects()
         return;
     }
     TimedEffectCounter++;
+}
+
+defaultproperties
+{
+    NextMilestonePercent=-1
 }

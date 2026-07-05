@@ -1,10 +1,12 @@
-// The Archipelago HUD: the stock HUD plus a live cleanliness readout, timed
-// trap countdowns, and the Archipelago toast feed.
+// The Archipelago HUD: the stock HUD plus a live cleanliness readout with a
+// next-milestone line, timed trap countdowns, and the Archipelago toast feed.
 //
 // The cleanliness readout draws in the top-right corner, below the band the
-// multiplayer net-actors warning uses. It runs on the host and on co-op guests
-// alike; the value arrives through the replicated GRI. The game's speedrun
-// timer shares that corner but only draws in speedrun mode, which Archipelago
+// multiplayer net-actors warning uses, with the level's next remaining
+// milestone on a second line. Both turn green once every milestone on the
+// level is confirmed checked. It runs on the host and on co-op guests alike;
+// the values arrive through the replicated GRI. The game's speedrun timer
+// shares that corner but only draws in speedrun mode, which Archipelago
 // never sets.
 //
 // Timed trap countdowns draw at the top-center (a band the speedrun clock
@@ -82,10 +84,31 @@ function DrawHUD()
     if (!ReplicatedInfo.bCleanlinessSampled)
         return;
 
-    Canvas.SetDrawColor(255, 255, 255, 255);
+    // Both lines share the Archipelago location green once every milestone on
+    // the level is confirmed checked; white otherwise.
+    if (ReplicatedInfo.NextMilestonePercent
+        == class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneCleared)
+        Canvas.SetDrawColor(0, 255, 127, 255);
+    else
+        Canvas.SetDrawColor(255, 255, 255, 255);
     DrawTextEx(FormatCleanliness(ReplicatedInfo.CleanlinessHundredths),
         float(Canvas.SizeX - 4), 40.0 * RatioY, 24.0 * RatioY, VCDFont,
         HA_Right, VA_Top, true);
+    DrawTextEx(NextMilestoneLine(ReplicatedInfo.NextMilestonePercent),
+        float(Canvas.SizeX - 4), 70.0 * RatioY, 24.0 * RatioY, VCDFont,
+        HA_Right, VA_Top, true);
+}
+
+// The line under the readout: the lowest percent the server still misses for
+// this level, a question mark before trustworthy same-seed data arrives, or
+// the cleared text once every milestone is confirmed checked.
+function string NextMilestoneLine(int NextPercent)
+{
+    if (NextPercent == class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneCleared)
+        return "All milestones cleared!";
+    if (NextPercent == class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneUnknown)
+        return "Next milestone: ?";
+    return "Next milestone: " $ NextPercent $ "%";
 }
 
 // Draws a countdown for every active timed trap effect, stacked downward from

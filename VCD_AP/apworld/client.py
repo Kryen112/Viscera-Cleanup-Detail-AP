@@ -6,7 +6,8 @@ open a socket). The mod writes its state to
 that file, maps the state it reports (cleanliness rungs, punch-out, speedrun) to
 location checks, and sends them. In the other direction this client writes the
 unlocked-level set to ``Saves\\VCArchipelagoGrants.sav``, which the mod reads to
-gate levels, plus the spawn queue (traps.py) and the toast feed (messages.py).
+gate levels, plus the spawn queue (traps.py), the toast feed (messages.py), and
+the remaining milestone percents (milestones.py).
 
 State the client recovers from the framework, never from memory: checked locations
 (so reconnecting re-derives what to send) and received items (so the grants file is
@@ -25,7 +26,7 @@ from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser
                           gui_enabled, server_loop)
 from NetUtils import ClientStatus
 
-from . import VCDWorld, grants, installer, messages, traps
+from . import VCDWorld, grants, installer, messages, milestones, traps
 from .saves import SaveManager, seed_folder_name
 from .collectibles import BOB_NOTE_MAP_BY_TOKEN, COLLECTIBLE_BY_TOKEN
 from .items import ITEM_NAME_TO_ID, access_item_name
@@ -308,6 +309,7 @@ class VCDContext(CommonContext):
         self.message_index: int = 0
         self.message_entries: list[str] = []
         self.last_messages_written: "str | None" = None
+        self.last_milestones_written: "str | None" = None
         self.goal_location_ids: list[int] = []
         self.goal_need: int = 0
         self.last_seq: "str | None" = None
@@ -365,6 +367,7 @@ class VCDContext(CommonContext):
         self.write_grants_if_changed()
         self.write_traps_if_changed()
         self.write_messages_if_changed()
+        self.write_milestones_if_changed()
         if not self.game_launched and bool(VCDWorld.settings.auto_launch_game):
             self.launch_game()
 
@@ -530,6 +533,7 @@ class VCDContext(CommonContext):
             self.message_index = 0
             self.message_entries = []
             self.last_messages_written = None
+            self.last_milestones_written = None
             self.enqueue_message([(messages.WHITE, "Archipelago connected.")])
             # Subscribe to the slot's shared applied counter and fetch it; the
             # Retrieved answer releases the traps-file write gate.
@@ -547,6 +551,10 @@ class VCDContext(CommonContext):
         elif cmd == "SetReply":
             if args.get("key") == self.traps_applied_storage_key():
                 self._fold_storage_traps_applied(args.get("value"))
+        elif cmd == "RoomUpdate":
+            # The framework has already folded the packet's checked locations
+            # into the sets, so this write carries the server-confirmed view.
+            self.write_milestones_if_changed()
         elif cmd == "ReceivedItems":
             # The first packet after connect (index 0) is the full resync list:
             # everything in it predates this session, so it sets the trap baseline.
@@ -663,6 +671,27 @@ class VCDContext(CommonContext):
             client_logger.error(f"Could not write the traps file: {error}")
             return
         self.last_traps_written = payload
+
+    def write_milestones_if_changed(self) -> None:
+        """Write the per-level remaining milestone percents (always on connect,
+        even fully cleared, so a stale file from another seed is overwritten).
+        Server-confirmed state only: the file is rebuilt from the missing set,
+        so the in-game indicator never runs ahead of the server."""
+        if not self.install_dir or not self.saves_ready or not self.seed_name:
+            return
+        encoded = milestones.encode_remaining(milestones.remaining_percents_by_map(
+            self.missing_locations, self.server_locations))
+        payload = f"{self.seed_name}|{encoded}"
+        if payload == self.last_milestones_written:
+            return
+        try:
+            milestones.write(
+                self.install_dir / "Saves" / "VCArchipelagoMilestones.sav",
+                self.seed_name, encoded)
+        except OSError as error:
+            client_logger.error(f"Could not write the milestones file: {error}")
+            return
+        self.last_milestones_written = payload
 
     async def apply_mod_state(self, state: dict[str, str]) -> None:
         """Map the current level's reported state (rungs, punch-out, speedrun) to

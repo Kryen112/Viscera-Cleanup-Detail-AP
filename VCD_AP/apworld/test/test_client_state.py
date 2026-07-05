@@ -1,14 +1,15 @@
 """Tests for the client's mod-state parsing and its toast feed: the state file
 snapshot maps to location names (with the punch-out and speedrun policy, and
-only a seed-stamped snapshot counting), and PrintJSON traffic filters and
-encodes into the messages file."""
+only a seed-stamped snapshot counting), PrintJSON traffic filters and encodes
+into the messages file, and the missing-locations set encodes into the
+milestones file that drives the in-game next-milestone indicator."""
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 from .bases import read_sav_properties
-from .. import messages
+from .. import messages, milestones
 from ..client import (VCDContext, goal_locations_from_slot_data,
                       location_names_from_state, message_segments, parse_rungs,
                       print_json_relevant, state_is_current,
@@ -291,6 +292,105 @@ class TestEnqueueMessage(unittest.TestCase):
         ctx.message_tag = None
         ctx.enqueue_message([(messages.WHITE, "line")])
         self.assertEqual(ctx.message_entries, [])
+
+
+def _ids(*names: str) -> set[int]:
+    return {LOCATION_NAME_TO_ID[name] for name in names}
+
+
+class TestRemainingPercentsByMap(unittest.TestCase):
+    def test_missing_percents_sort_ascending_per_level(self) -> None:
+        created = _ids("Athena's Wrath - Clean 25%", "Athena's Wrath - Clean 50%",
+                       "Athena's Wrath - Clean 75%",
+                       "Athena's Wrath - Employee of the Month")
+        missing = _ids("Athena's Wrath - Clean 75%", "Athena's Wrath - Clean 25%",
+                       "Athena's Wrath - Employee of the Month")
+        self.assertEqual(milestones.remaining_percents_by_map(missing, created),
+                         {"VC_Hall": [25, 75, 100]})
+
+    def test_fully_checked_level_lists_empty(self) -> None:
+        # Known-cleared must stay distinct from unknown: the HUD turns the
+        # readout green only for a level listed with nothing remaining.
+        created = _ids("Athena's Wrath - Employee of the Month")
+        self.assertEqual(milestones.remaining_percents_by_map(set(), created),
+                         {"VC_Hall": []})
+
+    def test_levels_outside_the_seed_never_appear(self) -> None:
+        created = _ids("Athena's Wrath - Employee of the Month")
+        self.assertNotIn("VC_Cryo",
+                         milestones.remaining_percents_by_map(created, created))
+
+    def test_over_100_rungs_count(self) -> None:
+        created = _ids("Athena's Wrath - Clean 105%")
+        self.assertEqual(milestones.remaining_percents_by_map(created, created),
+                         {"VC_Hall": [105]})
+
+    def test_non_milestone_locations_are_ignored(self) -> None:
+        created = _ids("Athena's Wrath - Punch Out", "Athena's Wrath - Speedrun")
+        self.assertEqual(milestones.remaining_percents_by_map(created, created),
+                         {})
+
+
+class TestEncodeRemaining(unittest.TestCase):
+    def test_levels_encode_in_table_order(self) -> None:
+        encoded = milestones.encode_remaining(
+            {"VC_Hall": [85, 100], "VC_Cryo": [5]})
+        self.assertEqual(encoded, "VC_Cryo:5,VC_Hall:85 100")
+
+    def test_cleared_level_keeps_its_entry(self) -> None:
+        self.assertEqual(milestones.encode_remaining({"VC_Hall": []}),
+                         "VC_Hall:")
+
+    def test_empty_is_empty(self) -> None:
+        self.assertEqual(milestones.encode_remaining({}), "")
+
+
+def _milestones_context(install_dir: "Path | None") -> VCDContext:
+    """A context carrying only the milestones-file state, skipping __init__ so
+    no framework plumbing is needed."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.install_dir = install_dir
+    ctx.saves_ready = install_dir is not None
+    ctx.seed_name = "seed_1"
+    ctx.missing_locations = _ids("Athena's Wrath - Clean 50%",
+                                 "Athena's Wrath - Employee of the Month")
+    ctx.server_locations = ctx.missing_locations | _ids(
+        "Athena's Wrath - Clean 25%", "Cryogenesis - Employee of the Month")
+    ctx.last_milestones_written = None
+    return ctx
+
+
+class TestWriteMilestonesIfChanged(unittest.TestCase):
+    def test_written_file_carries_seed_and_remaining(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _milestones_context(Path(tmp))
+            ctx.write_milestones_if_changed()
+            data = (Path(tmp) / "Saves"
+                    / "VCArchipelagoMilestones.sav").read_bytes()
+            properties = read_sav_properties(data)
+            self.assertEqual(properties["SeedTag"], "seed_1")
+            self.assertEqual(properties["RemainingByMap"],
+                             "VC_Cryo:,VC_Hall:50 100")
+
+    def test_unchanged_state_writes_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _milestones_context(Path(tmp))
+            ctx.write_milestones_if_changed()
+            path = Path(tmp) / "Saves" / "VCArchipelagoMilestones.sav"
+            path.unlink()
+            ctx.write_milestones_if_changed()
+            self.assertFalse(path.exists())
+
+    def test_holds_until_saves_and_seed_are_ready(self) -> None:
+        ctx = _milestones_context(None)
+        ctx.write_milestones_if_changed()
+        self.assertIsNone(ctx.last_milestones_written)
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _milestones_context(Path(tmp))
+            ctx.seed_name = None
+            ctx.write_milestones_if_changed()
+            self.assertFalse(
+                (Path(tmp) / "Saves" / "VCArchipelagoMilestones.sav").exists())
 
 
 if __name__ == "__main__":
