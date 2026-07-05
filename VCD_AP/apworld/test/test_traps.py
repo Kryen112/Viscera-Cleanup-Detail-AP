@@ -63,8 +63,9 @@ class TestItemIdStability(unittest.TestCase):
     def test_new_names_append_after_the_frozen_tail(self) -> None:
         # A seed generated before the speedup trap existed keeps its ids: the
         # older names hold their positions and the new name appends after them.
-        # The absolute anchor (26 level-access items plus 3 filler names ahead
-        # of the first trap) catches a shift of the whole tail too.
+        # The absolute anchor (26 level-access items, 2 filler names, and the
+        # retired Spare Bucket slot ahead of the first trap) catches a shift
+        # of the whole tail too.
         self.assertEqual(ITEM_NAME_TO_ID["Mess Dump Trap"], ITEM_ID_BASE + 29)
         self.assertEqual(ITEM_NAME_TO_ID["Clean Water Bucket"],
                          ITEM_NAME_TO_ID["Slowdown Trap"] + 1)
@@ -72,6 +73,13 @@ class TestItemIdStability(unittest.TestCase):
                          ITEM_NAME_TO_ID["Clean Water Bucket"] + 1)
         self.assertEqual(ITEM_NAME_TO_ID["Speedup Trap"],
                          ITEM_NAME_TO_ID["Empty Bin"] + 1)
+
+    def test_retired_names_hold_their_id_slot_but_leave_the_table(self) -> None:
+        # The retired Spare Bucket keeps its slot as a gap, so the ids behind
+        # it never shift and the name never reaches the datapackage.
+        self.assertNotIn("Spare Bucket", ITEM_NAME_TO_ID)
+        self.assertNotIn(ITEM_ID_BASE + 28, ITEM_NAME_TO_ID.values())
+        self.assertEqual(ITEM_NAME_TO_ID["Coffee Break"], ITEM_ID_BASE + 27)
 
 
 class TestQueueFields(unittest.TestCase):
