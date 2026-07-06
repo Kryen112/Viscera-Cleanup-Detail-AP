@@ -131,6 +131,11 @@ struct DisposalVolumeLockInfo
 };
 var array<DisposalVolumeLockInfo> DisposalVolumeLocks;
 
+// Shark pools whose sharks are despawned while the incinerator group is
+// locked, so they can be respawned on unlock. The sharks eat within a
+// fraction of a second, too fast to intercept by clearing targets on a poll.
+var array<VCSharkDisposalVolume> SharkVolumesDespawned;
+
 event InitGame(string Options, out string ErrorMessage)
 {
     super.InitGame(Options, ErrorMessage);
@@ -639,7 +644,8 @@ function EnforceToolLocks()
         && BinDispensorLocks.Length == 0
         && BucketDispensorLocks.Length == 0
         && IncineratorLocks.Length == 0
-        && DisposalVolumeLocks.Length == 0)
+        && DisposalVolumeLocks.Length == 0
+        && SharkVolumesDespawned.Length == 0)
     {
         return;
     }
@@ -666,6 +672,7 @@ function ApplyMachineLocks(int Mask)
     local VCDisposalVolume Volume;
     local VCWoodChipper Chipper;
     local VCSharkDisposalVolume SharkVolume;
+    local array<VCShark> DoomedSharks;
     local array<VCDebris> Contents;
     local int CacheIndex, I;
     local bool bLocked;
@@ -779,31 +786,48 @@ function ApplyMachineLocks(int Mask)
             DisposalVolumeLocks.Remove(CacheIndex, 1);
         }
     }
+    // The woodchipper's consume ignores its own in-flag: it destroys an object
+    // once that object's consume timer reaches four seconds near the intake.
+    // Removing the entry does not stop it, so pin every entry's timer to zero
+    // each pass; a one-second pass keeps it well under the four-second mark.
     if (bLocked)
     {
-        // The woodchipper has no rate to zero; unregistering its tracked
-        // debris every second keeps anything from shredding.
         foreach AllActors(class'VCWoodChipper', Chipper)
         {
-            for (I = Chipper.DebrisObjects.Length - 1; I >= 0; I--)
+            for (I = 0; I < Chipper.DebrisObjects.Length; I++)
+                Chipper.DebrisObjects[I].ConsumeTime = 0.0;
+        }
+    }
+
+    // The shark pool eats what swims in within a fraction of a second, too
+    // fast to intercept by clearing targets on a poll, so despawn the sharks
+    // while locked and respawn them on unlock. The pool spawns its sharks once
+    // and never maintains a count, so a cleared list stays cleared.
+    foreach AllActors(class'VCSharkDisposalVolume', SharkVolume)
+    {
+        CacheIndex = SharkVolumesDespawned.Find(SharkVolume);
+        if (bLocked)
+        {
+            if (CacheIndex == -1)
             {
-                if (Chipper.DebrisObjects[I].Object != None)
-                    Chipper.RemoveObject(Chipper.DebrisObjects[I].Object);
+                // Clear the pool's lists before destroying, so a shark's
+                // UnTouch firing synchronously during Destroy never reads a
+                // half-cleared Sharks array.
+                DoomedSharks = SharkVolume.Sharks;
+                SharkVolume.Sharks.Length = 0;
+                SharkVolume.PendingTargets.Length = 0;
+                for (I = 0; I < DoomedSharks.Length; I++)
+                {
+                    if (DoomedSharks[I] != None)
+                        DoomedSharks[I].Destroy();
+                }
+                SharkVolumesDespawned.AddItem(SharkVolume);
             }
         }
-        // The shark pool eats what swims into it; clearing the queue and any
-        // shark already homing on debris starves it.
-        foreach AllActors(class'VCSharkDisposalVolume', SharkVolume)
+        else if (CacheIndex != -1)
         {
-            SharkVolume.PendingTargets.Length = 0;
-            for (I = 0; I < SharkVolume.Sharks.Length; I++)
-            {
-                if (SharkVolume.Sharks[I] != None
-                    && VCDebris(SharkVolume.Sharks[I].TargetMeal) != None)
-                {
-                    SharkVolume.Sharks[I].SetMeal(None);
-                }
-            }
+            SharkVolume.SpawnSharks();
+            SharkVolumesDespawned.Remove(CacheIndex, 1);
         }
     }
 }
