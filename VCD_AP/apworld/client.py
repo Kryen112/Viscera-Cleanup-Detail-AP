@@ -771,13 +771,16 @@ class VCDContext(CommonContext):
             return
         encoded = milestones.encode_remaining(milestones.remaining_percents_by_map(
             self.missing_locations, self.server_locations))
-        payload = f"{self.seed_name}|{encoded}"
+        speedrun_maps = milestones.encode_speedrun_maps(
+            milestones.speedrun_outstanding_maps(
+                self.missing_locations, self.server_locations))
+        payload = f"{self.seed_name}|{encoded}|{speedrun_maps}"
         if payload == self.last_milestones_written:
             return
         try:
             milestones.write(
                 self.install_dir / "Saves" / "VCArchipelagoMilestones.sav",
-                self.seed_name, encoded)
+                self.seed_name, encoded, speedrun_maps)
         except OSError as error:
             client_logger.error(f"Could not write the milestones file: {error}")
             return

@@ -27,8 +27,8 @@ var config string APMilestones;
 
 // Punch-out result for the current map, all cleared on level start. APPunchedOut
 // becomes 1 on a legitimate punch-out; APFired mirrors the game's fired verdict;
-// APSpeedrun becomes 1 when the run also met the game's own speedrun standard
-// (at least 95 percent clean, inside 75 percent of the map's par time).
+// APSpeedrun becomes 1 when the run also met the Speedrun check: at least 95
+// percent clean and under the map's par time (dilated for player count).
 var config int APPunchedOut;
 var config int APFired;
 var config int APSpeedrun;

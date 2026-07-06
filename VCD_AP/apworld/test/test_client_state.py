@@ -15,7 +15,42 @@ from ..client import (VCDContext, goal_locations_from_slot_data,
                       print_json_relevant, state_is_current,
                       traps_applied_to_push)
 from ..levels import LEVELS
-from ..locations import LOCATION_NAME_TO_ID
+from ..locations import LOCATION_NAME_TO_ID, speedrun_name
+
+
+class TestSpeedrunOutstandingMaps(unittest.TestCase):
+    """The milestones file's speedrun list drives the HUD timer: a map appears
+    only while its Speedrun check exists in the seed and is still missing."""
+
+    def test_lists_only_created_and_missing_speedrun_maps(self) -> None:
+        hall = LOCATION_NAME_TO_ID[speedrun_name("Athena's Wrath")]
+        cryo = LOCATION_NAME_TO_ID[speedrun_name("Cryogenesis")]
+        sewer = LOCATION_NAME_TO_ID[speedrun_name("Waste Disposal")]
+        # Hall and Cryo exist in the seed; only Hall is still missing. Sewer's
+        # speedrun location was not created (speedrunsanity off for it here).
+        created = {hall, cryo}
+        missing = {hall, sewer}
+        out = milestones.speedrun_outstanding_maps(missing, created)
+        self.assertEqual(out, ["VC_Hall"])
+
+    def test_empty_when_no_speedrun_locations_created(self) -> None:
+        # Speedrunsanity off: no speedrun location is created, so nothing lists.
+        self.assertEqual(
+            milestones.speedrun_outstanding_maps({1, 2, 3}, set()), [])
+
+    def test_write_carries_the_speedrun_property(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "VCArchipelagoMilestones.sav"
+            milestones.write(path, "seed_1", "VC_Hall:90 100", "VC_Hall,VC_Cryo")
+            properties = read_sav_properties(path.read_bytes())
+        self.assertEqual(properties["SpeedrunOutstandingMaps"], "VC_Hall,VC_Cryo")
+
+    def test_write_defaults_speedrun_property_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "VCArchipelagoMilestones.sav"
+            milestones.write(path, "seed_1", "VC_Hall:90 100")
+            properties = read_sav_properties(path.read_bytes())
+        self.assertEqual(properties["SpeedrunOutstandingMaps"], "")
 
 
 class TestParseRungs(unittest.TestCase):

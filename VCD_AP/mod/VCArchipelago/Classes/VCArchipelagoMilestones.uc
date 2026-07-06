@@ -15,3 +15,8 @@ var string SeedTag;
 // percents has every milestone confirmed checked; a map absent from the list
 // has no data in this seed, which the HUD shows as unknown.
 var string RemainingByMap;
+
+// Comma-joined internal map names whose Speedrun check exists in this seed and
+// the server has not confirmed yet. Drives the HUD speedrun timer. Empty when
+// speedrunsanity is off or every Speedrun check is done.
+var string SpeedrunOutstandingMaps;

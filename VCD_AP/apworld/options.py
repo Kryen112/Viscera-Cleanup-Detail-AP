@@ -37,8 +37,8 @@ class AboveAndBeyond(Toggle):
 
 class Speedrunsanity(Toggle):
     """Add a Speedrun check to every level: punch out at least 95 percent clean
-    within 75 percent of the level's par time. Off by default, so seeds carry no
-    speed pressure unless asked for."""
+    within the level's par time. Off by default, so seeds carry no speed
+    pressure unless asked for."""
     display_name = "Speedrunsanity"
 
 

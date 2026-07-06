@@ -1,7 +1,7 @@
 """The remaining-milestones file the client writes and the mod reads. It
 drives the HUD's next-milestone indicator under the cleanliness readout.
 
-``Saves\\VCArchipelagoMilestones.sav`` holds two string properties (see
+``Saves\\VCArchipelagoMilestones.sav`` holds three string properties (see
 grants.py for the byte layout):
 - ``SeedTag``: the connected seed, so a stale file from another seed never
   drives the indicator.
@@ -11,6 +11,10 @@ grants.py for the byte layout):
   absent from the list has no data in this seed, which the HUD shows as
   unknown. Server state only: the file advances when the server confirms a
   check, never on a local guess.
+- ``SpeedrunOutstandingMaps``: comma-joined internal map names whose Speedrun
+  check exists in this seed and the server has not confirmed yet. Drives the
+  HUD speedrun timer (shown only while the level's Speedrun check is unearned).
+  Empty when speedrunsanity is off or every Speedrun check is done.
 """
 from __future__ import annotations
 
@@ -18,7 +22,8 @@ from pathlib import Path
 
 from . import grants
 from .levels import LEVELS
-from .locations import LOCATION_MAP, LOCATION_NAME_TO_ID, MILESTONE_PERCENT
+from .locations import (LOCATION_MAP, LOCATION_NAME_TO_ID, MILESTONE_PERCENT,
+                        speedrun_name)
 
 
 def remaining_percents_by_map(missing: "set[int]", created: "set[int]",
@@ -48,10 +53,31 @@ def encode_remaining(by_map: dict[str, list[int]]) -> str:
         for map_name, _, _ in LEVELS if map_name in by_map)
 
 
-def write(path: Path, seed_tag: str, remaining_by_map: str) -> None:
+def speedrun_outstanding_maps(missing: "set[int]", created: "set[int]",
+                              ) -> list[str]:
+    """Internal map names, in table order, whose Speedrun check the seed
+    created (id in ``created``) and the server still misses (id in
+    ``missing``). Empty when speedrunsanity is off, since no Speedrun location
+    exists then."""
+    out: list[str] = []
+    for map_name, display, _title in LEVELS:
+        location_id = LOCATION_NAME_TO_ID[speedrun_name(display)]
+        if location_id in created and location_id in missing:
+            out.append(map_name)
+    return out
+
+
+def encode_speedrun_maps(map_names: list[str]) -> str:
+    """The SpeedrunOutstandingMaps string, comma-joined in table order."""
+    return ",".join(map_names)
+
+
+def write(path: Path, seed_tag: str, remaining_by_map: str,
+          speedrun_maps: str = "") -> None:
     """Write the milestones file atomically. Always written on connect, even
     fully cleared, so a stale file from another seed cannot linger."""
     grants.write_atomic(Path(path), grants.build_object([
         ("SeedTag", seed_tag),
         ("RemainingByMap", remaining_by_map),
+        ("SpeedrunOutstandingMaps", speedrun_maps),
     ]))

@@ -32,6 +32,10 @@ const MessagePollInterval  = 1.0;
 const ToastPromoteInterval = 0.15;
 const ToastLifetime        = 5.0;
 const MaxVisibleToasts     = 8;
+const MaxHistoryToasts     = 20;
+// The medium font scaled a touch under 1, so toasts read a step above the
+// small join-message font without being as tall as full medium.
+const ToastFontScale       = 0.9;
 
 // Countdown block geometry (pre-ratio units) and the blink window.
 const TimedEffectTextSize     = 18.0;
@@ -66,6 +70,14 @@ var array<float>  VisibleToastExpiries;
 // Highest feed index already queued this level, so a poll never re-queues.
 var int HighestQueuedIndex;
 
+// Rolling log of the most recent promoted toast lines, newest last, shown on
+// the Tab history panel. Independent of the visible-toast lifetime.
+var array<string> ToastHistory;
+
+// The tool panel's bottom edge from the last PostRender, so the history panel
+// underneath it never overlaps.
+var float ToolPanelBottomY;
+
 simulated event PostBeginPlay()
 {
     super.PostBeginPlay();
@@ -84,7 +96,10 @@ event PostRender()
 {
     super.PostRender();
     if (bShowScores)
+    {
         DrawToolsanityPanel();
+        DrawToastHistoryPanel();
+    }
 }
 
 // Lists the current level's toolsanity tools while the scoreboard key is held,
@@ -97,6 +112,10 @@ function DrawToolsanityPanel()
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
     local int BitIndex, Bit, PresentCount, DrawnLines;
     local float LineHeight, PanelLeft, PanelTop, LabelLeft, HeadingTop;
+
+    // A floor so the history panel below still anchors sanely on a transient
+    // no-GRI frame where this returns early.
+    ToolPanelBottomY = ToolPanelTop * RatioY;
 
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(VCGRI);
     if (ReplicatedInfo == None)
@@ -115,6 +134,7 @@ function DrawToolsanityPanel()
         Canvas.SetDrawColor(255, 255, 255, 255);
         DrawTextEx("All tools available", LabelLeft, HeadingTop,
             ToolPanelTextSize * RatioY, VCDFont, HA_Left, VA_Top, true);
+        ToolPanelBottomY = PanelTop + LineHeight + 8.0 * RatioY;
         return;
     }
 
@@ -125,6 +145,8 @@ function DrawToolsanityPanel()
     }
     DrawToolPanelBacking(PanelLeft, PanelTop, ToolPanelWidth * RatioY,
         LineHeight * float(PresentCount + 1) + 8.0 * RatioY);
+    ToolPanelBottomY = PanelTop + LineHeight * float(PresentCount + 1)
+        + 8.0 * RatioY;
 
     Canvas.SetDrawColor(255, 255, 255, 255);
     DrawTextEx("This level's tools", LabelLeft, HeadingTop,
@@ -160,6 +182,7 @@ function DrawToolPanelBacking(float Left, float Top, float Width, float Height)
 function DrawHUD()
 {
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local float ReadoutTop;
 
     super.DrawHUD();
 
@@ -174,6 +197,17 @@ function DrawHUD()
     if (!ReplicatedInfo.bCleanlinessSampled)
         return;
 
+    // The speedrun timer takes the top-right band when the level's Speedrun
+    // check is still outstanding; the cleanliness readout drops below it.
+    ReadoutTop = 40.0 * RatioY;
+    if (ReplicatedInfo.bSpeedrunOutstanding
+        && ReplicatedInfo.PunchoutHandler != None
+        && ReplicatedInfo.PunchoutHandler.CleanupTimeLimitGamePar > 0.0)
+    {
+        DrawSpeedrunTimer(ReplicatedInfo.PunchoutHandler);
+        ReadoutTop = 72.0 * RatioY;
+    }
+
     // Both lines share the Archipelago location green once every milestone on
     // the level is confirmed checked; white otherwise.
     if (ReplicatedInfo.NextMilestonePercent
@@ -182,11 +216,63 @@ function DrawHUD()
     else
         Canvas.SetDrawColor(255, 255, 255, 255);
     DrawTextEx(FormatCleanliness(ReplicatedInfo.CleanlinessHundredths),
-        float(Canvas.SizeX - 4), 40.0 * RatioY, 24.0 * RatioY, VCDFont,
+        float(Canvas.SizeX - 4), ReadoutTop, 24.0 * RatioY, VCDFont,
         HA_Right, VA_Top, true);
     DrawTextEx(NextMilestoneLine(ReplicatedInfo.NextMilestonePercent),
-        float(Canvas.SizeX - 4), 70.0 * RatioY, 24.0 * RatioY, VCDFont,
+        float(Canvas.SizeX - 4), ReadoutTop + 30.0 * RatioY, 24.0 * RatioY,
+        VCDFont, HA_Right, VA_Top, true);
+}
+
+// Draws the base game's speedrun clock (H:MM:SS:CC, top-right, VCDFont) plus a
+// par line, shown while the level's Speedrun check is unearned. The clock reads
+// the handler's live CleanupTime (real seconds, client-simulated on guests).
+// White normally, red once the dilated clock passes par, the point past which
+// the check can no longer be earned. Splits the draw like the base HUD so the
+// jittery centiseconds sit flush right without shifting the rest.
+function DrawSpeedrunTimer(VCPunchoutHandler Handler)
+{
+    local float Elapsed, DigitsWidth, DigitsHeight;
+    local string TimeString;
+
+    Elapsed = Handler.CleanupTime;
+    if (Elapsed >= 3600.0)
+        TimeString = string((int(Elapsed) % 86400) / 3600) $ ":";
+    else
+        TimeString = "0:";
+    if (Elapsed >= 60.0)
+        TimeString $= GetDualDigit((int(Elapsed) % 3600) / 60) $ ":";
+    else
+        TimeString $= "00:";
+    TimeString $= GetDualDigit(int(Elapsed) % 60) $ ":";
+
+    if (Handler.CleanupTimeDilated > Handler.CleanupTimeLimitGamePar)
+        Canvas.SetDrawColor(255, 0, 0, 255);
+    else
+        Canvas.SetDrawColor(255, 255, 255, 255);
+    DrawTextEx(GetDualDigit(int(Elapsed * 100.0) % 100),
+        float(Canvas.SizeX - 4), 4.0 * RatioY, 24.0 * RatioY, VCDFont,
         HA_Right, VA_Top, true);
+    GetTextExtent("88", 24.0 * RatioY, VCDFont, DigitsWidth, DigitsHeight);
+    DrawTextEx(TimeString, float(Canvas.SizeX - 4) - DigitsWidth,
+        4.0 * RatioY, 24.0 * RatioY, VCDFont, HA_Right, VA_Top, true);
+
+    Canvas.SetDrawColor(255, 128, 0, 255);
+    DrawTextEx(FormatSpeedrunPar(Handler.CleanupTimeLimitGamePar) $ " Par",
+        float(Canvas.SizeX - 4), 34.0 * RatioY, 18.0 * RatioY, VCDFont,
+        HA_Right, VA_Top, true);
+}
+
+// "H:MM:SS" for the par line, the base game's format without centiseconds.
+function string FormatSpeedrunPar(float Seconds)
+{
+    local string Text;
+
+    if (Seconds >= 3600.0)
+        Text = string((int(Seconds) % 86400) / 3600) $ ":";
+    else
+        Text = "0:";
+    Text $= GetDualDigit((int(Seconds) % 3600) / 60) $ ":";
+    return Text $ GetDualDigit(int(Seconds) % 60);
 }
 
 // The line under the readout: the lowest percent the server still misses for
@@ -309,6 +395,7 @@ function PollMessageFeed()
             PendingToastIndexes.Length = 0;
             VisibleToastTexts.Length = 0;
             VisibleToastExpiries.Length = 0;
+            ToastHistory.Length = 0;
             bMessageStateDirty = true;
         }
         ParseStringIntoArray(MessageFeedFile.Messages, Entries, Chr(10), true);
@@ -347,6 +434,10 @@ function PromotePendingToast()
 
     VisibleToastTexts.AddItem(PendingToastTexts[0]);
     VisibleToastExpiries.AddItem(WorldInfo.TimeSeconds + ToastLifetime);
+    // Log every promoted line to the Tab history, newest last, capped.
+    ToastHistory.AddItem(PendingToastTexts[0]);
+    if (ToastHistory.Length > MaxHistoryToasts)
+        ToastHistory.Remove(0, ToastHistory.Length - MaxHistoryToasts);
     MessageState.ShownIndex = PendingToastIndexes[0];
     bMessageStateDirty = true;
     PendingToastTexts.Remove(0, 1);
@@ -382,8 +473,11 @@ function DrawToasts()
     if (VisibleToastTexts.Length == 0)
         return;
 
-    Canvas.Font = class'Engine.Engine'.static.GetSmallFont();
-    Canvas.TextSize("A", CharWidth, LineHeight);
+    // The medium font, scaled a touch down, reads a step larger than the
+    // small one the join and chat lines use, without crowding the left third
+    // the toasts cap at.
+    Canvas.Font = class'Engine.Engine'.static.GetMediumFont();
+    Canvas.TextSize("A", CharWidth, LineHeight, ToastFontScale, ToastFontScale);
 
     XStart = ((1.0 - HudCanvasScale) / 2.0) * Canvas.SizeX
         + ConsoleMessagePosX * HudCanvasScale * Canvas.SizeX;
@@ -392,6 +486,12 @@ function DrawToasts()
         + LineHeight;
     MaxRight = XStart + 0.4 * Canvas.SizeX;
     BottomLimit = Canvas.SizeY - ((1.0 - HudCanvasScale) / 2.0) * Canvas.SizeY;
+    // The console anchor can sit low enough that the downward stack clips
+    // after a few lines. Lift the start so the full visible cap fits above
+    // the bottom, while never dropping the start into the top margin.
+    if (DrawY > BottomLimit - float(MaxVisibleToasts) * LineHeight)
+        DrawY = FMax(LineHeight,
+            BottomLimit - float(MaxVisibleToasts) * LineHeight);
 
     for (ToastIndex = 0; ToastIndex < VisibleToastTexts.Length; ToastIndex++)
     {
@@ -399,6 +499,64 @@ function DrawToasts()
             break;
         DrawX = XStart;
         ParseStringIntoArray(VisibleToastTexts[ToastIndex], Segments, Chr(9), true);
+        for (SegmentIndex = 0; SegmentIndex < Segments.Length; SegmentIndex++)
+        {
+            if (Len(Segments[SegmentIndex]) <= 6)
+                continue;
+            DrawToastSegment(Mid(Segments[SegmentIndex], 6),
+                HexToColor(Left(Segments[SegmentIndex], 6)),
+                DrawX, DrawY, XStart, MaxRight, LineHeight);
+        }
+        DrawY += LineHeight;
+    }
+}
+
+// The Tab scrollback: the most recent promoted toast lines, newest at the
+// bottom, in the left column under the tool panel. Bottom-anchored so the
+// newest lines always show; when space between the tool panel and the screen
+// bottom is tight, the oldest lines drop first. Same colored-segment draw as
+// the live toasts.
+function DrawToastHistoryPanel()
+{
+    local float XStart, MaxRight, LineHeight, CharWidth;
+    local float PanelTop, DrawX, DrawY;
+    local int MaxLines, ShowCount, First, I, SegmentIndex;
+    local array<string> Segments;
+    local Color HeadingColor;
+
+    if (ToastHistory.Length == 0)
+        return;
+
+    Canvas.Font = class'Engine.Engine'.static.GetMediumFont();
+    Canvas.TextSize("A", CharWidth, LineHeight, ToastFontScale, ToastFontScale);
+
+    XStart = ToolPanelLeft * RatioY;
+    MaxRight = XStart + 0.4 * Canvas.SizeX;
+    // A heading line plus as many entries as fit below the tool panel.
+    PanelTop = ToolPanelBottomY + 16.0 * RatioY;
+    MaxLines = int((Canvas.SizeY - 24.0 * RatioY - PanelTop) / LineHeight) - 1;
+    if (MaxLines < 1)
+        return;
+    ShowCount = Min(ToastHistory.Length, MaxHistoryToasts);
+    if (ShowCount > MaxLines)
+        ShowCount = MaxLines;
+    First = ToastHistory.Length - ShowCount;
+
+    HeadingColor.R = 255;
+    HeadingColor.G = 255;
+    HeadingColor.B = 255;
+    HeadingColor.A = 255;
+    DrawShadowedText("Recent Archipelago activity", HeadingColor, XStart, PanelTop);
+
+    DrawY = PanelTop + LineHeight;
+    for (I = First; I < ToastHistory.Length; I++)
+    {
+        // A wrapped line advances DrawY past one row, so guard the bottom
+        // like the live toasts do rather than trust the per-line budget.
+        if (DrawY + LineHeight > Canvas.SizeY - 24.0 * RatioY)
+            break;
+        DrawX = XStart;
+        ParseStringIntoArray(ToastHistory[I], Segments, Chr(9), true);
         for (SegmentIndex = 0; SegmentIndex < Segments.Length; SegmentIndex++)
         {
             if (Len(Segments[SegmentIndex]) <= 6)
@@ -426,7 +584,7 @@ function DrawToastSegment(string Text, Color SegmentColor, out float DrawX,
     while (Len(Remaining) > 0)
     {
         Piece = Remaining;
-        Canvas.TextSize(Piece, PieceWidth, PieceHeight);
+        Canvas.TextSize(Piece, PieceWidth, PieceHeight, ToastFontScale, ToastFontScale);
         while (DrawX + PieceWidth > MaxRight)
         {
             BreakAt = LastSpaceIn(Piece);
@@ -441,7 +599,7 @@ function DrawToastSegment(string Text, Color SegmentColor, out float DrawX,
                 Piece = Left(Piece, Len(Piece) - 1);
             else
                 break;
-            Canvas.TextSize(Piece, PieceWidth, PieceHeight);
+            Canvas.TextSize(Piece, PieceWidth, PieceHeight, ToastFontScale, ToastFontScale);
         }
         if (Piece == "")
         {
@@ -466,10 +624,10 @@ function DrawShadowedText(string Text, Color TextColor, float DrawX, float DrawY
 {
     Canvas.SetDrawColor(0, 0, 0, TextColor.A);
     Canvas.SetPos(DrawX + 1.0, DrawY + 1.0);
-    Canvas.DrawText(Text, false);
+    Canvas.DrawText(Text, false, ToastFontScale, ToastFontScale);
     Canvas.DrawColor = TextColor;
     Canvas.SetPos(DrawX, DrawY);
-    Canvas.DrawText(Text, false);
+    Canvas.DrawText(Text, false, ToastFontScale, ToastFontScale);
 }
 
 function int LastSpaceIn(string Text)

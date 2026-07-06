@@ -414,7 +414,29 @@ function PollMilestones()
 
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
     if (ReplicatedInfo != None)
+    {
         ReplicatedInfo.NextMilestonePercent = ReadNextMilestonePercent();
+        ReplicatedInfo.bSpeedrunOutstanding = ReadSpeedrunOutstanding();
+    }
+}
+
+// Whether the current map's Speedrun check is still outstanding, from the
+// client-written milestones file. False without trustworthy same-seed data,
+// so the HUD timer stays hidden until the client confirms the seed.
+function bool ReadSpeedrunOutstanding()
+{
+    if (APState == None || APState.APSeedTag == "")
+        return false;
+    if (MilestoneFile == None)
+        MilestoneFile = new class'VCArchipelagoMilestones';
+    if (!class'Engine'.static.BasicLoadObject(MilestoneFile,
+        "..\\..\\Saves\\VCArchipelagoMilestones.sav", true, 1)
+        || MilestoneFile.SeedTag != APState.APSeedTag)
+    {
+        return false;
+    }
+    return InStr("," $ MilestoneFile.SpeedrunOutstandingMaps $ ",",
+        "," $ WorldInfo.GetMapName(true) $ ",") != -1;
 }
 
 // The lowest percent the server still misses for the current map: Unknown
@@ -1488,12 +1510,13 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
         // ClearTrophies), so the trunk scan mirrors that.
         APState.APTrunkFinds = CollectTrunkFinds();
     }
-    // The game's own speedrun standard, evaluated here because Archipelago is
-    // its own mode: status bit 1 or 2 (at least 95 percent clean) inside 75
-    // percent of the map's par time, dilated for player count.
+    // The Speedrun check: clean enough to not be fired (status bit 1 or 2, at
+    // least 95 percent clean) and under the map's par time, dilated for player
+    // count. The par is the target, not the game's stricter 75-percent
+    // achievement bar.
     if ((Handler.JobStatus.StatusCode & 3) != 0
         && Handler.CleanupTimeLimitGamePar > 0.0
-        && Handler.CleanupTimeDilated <= 0.75 * Handler.CleanupTimeLimitGamePar)
+        && Handler.CleanupTimeDilated <= Handler.CleanupTimeLimitGamePar)
     {
         APState.APSpeedrun = 1;
     }

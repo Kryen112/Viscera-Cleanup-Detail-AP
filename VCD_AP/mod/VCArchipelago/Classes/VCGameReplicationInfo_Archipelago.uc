@@ -23,6 +23,12 @@ const NextMilestoneCleared = 0;
 
 var int NextMilestonePercent;
 
+// Speedrun: whether the current level's Speedrun check is still outstanding
+// (speedrunsanity on and not yet earned). The HUD shows the speedrun timer
+// only while this is set; the host reads it from the client-written milestones
+// file, so co-op guests get it through replication.
+var bool bSpeedrunOutstanding;
+
 // Toolsanity: the current level's unlocked tools and machines as a bitmask,
 // bit set means unlocked. The host computes it from the client-written grants
 // (everything unlocked when the level has no toolsanity data, so stock
@@ -73,7 +79,7 @@ replication
 {
     if (bNetDirty)
         CleanlinessHundredths, bCleanlinessSampled, NextMilestonePercent,
-        UnlockedToolsMask, PresentToolsMask,
+        bSpeedrunOutstanding, UnlockedToolsMask, PresentToolsMask,
         TimedEffectTypes, TimedEffectRemaining, TimedEffectDurations,
         TimedEffectCounter;
 }
