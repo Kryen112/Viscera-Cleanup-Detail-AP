@@ -1,0 +1,117 @@
+// The Archipelago player controller: home of the dev measurement commands
+// for the toolsanity tour. Installed through the game mode's
+// PlayerControllerClass; every stock VCPlayerController cast still succeeds.
+//
+// The commands are standalone-only (a co-op guest or host cannot use them)
+// and dev-only: they override the lock state in memory, never the grants
+// file, so a level reload returns to the client-driven state.
+class VCPlayerController_Archipelago extends VCPlayerController;
+
+// The game mode, when the commands may run: standalone, in Archipelago mode.
+function VCGame_Archipelago DevCommandGame()
+{
+    if (WorldInfo.NetMode != NM_Standalone)
+        return None;
+    return VCGame_Archipelago(WorldInfo.Game);
+}
+
+exec function APToolLock(string ToolKey)
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.DevSetToolLock(ToolKey, false, self);
+}
+
+exec function APToolUnlock(string ToolKey)
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.DevSetToolLock(ToolKey, true, self);
+}
+
+exec function APToolLockAll()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.DevSetToolMask(0, self);
+}
+
+exec function APToolUnlockAll()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.DevSetToolMask(class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll, self);
+}
+
+// Drops the dev override and returns to the client-written grants state.
+exec function APToolLocksReset()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.DevClearToolMask(self);
+}
+
+exec function APScanReport()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.RunScanReport(self);
+}
+
+exec function APCleanBlood()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.CleanAllBloodSplats(self);
+}
+
+exec function APCleanMoppable()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.CleanAllMoppableSplats(self);
+}
+
+// Shows every level in the menu and passes the bounce gate for the rest of
+// this game session, for the measurement tour. Never writes the grants file.
+exec function APLevelsUnlockAll()
+{
+    SetDevLevelOverride(true,
+        "Dev level override active: every level is selectable until the game closes.");
+}
+
+exec function APLevelsReset()
+{
+    SetDevLevelOverride(false,
+        "Dev level override cleared: the grants file drives the level list again.");
+}
+
+function SetDevLevelOverride(bool bUnlockAll, string Confirmation)
+{
+    local VCGameViewportClient_Archipelago ViewportClient;
+
+    if (DevCommandGame() == None)
+        return;
+    ViewportClient = VCGameViewportClient_Archipelago(
+        class'Engine'.static.GetEngine().GameViewport);
+    if (ViewportClient == None)
+        return;
+    ViewportClient.bDevUnlockAllLevels = bUnlockAll;
+    ClientMessage(Confirmation);
+}

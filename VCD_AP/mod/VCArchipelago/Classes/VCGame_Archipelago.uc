@@ -16,12 +16,19 @@
 // hides locked levels from the list) is the front door, and EnforceLevelGate here
 // refuses a locked level that is reached some other way.
 //
+// Toolsanity locks tools and machines per level: EnforceToolLocks publishes
+// the unlocked set to the GRI each second, holds locked machines disabled,
+// and sweeps locked tools out of inventories. The carry-lock hands subclass
+// and the PRI machine gate read the GRI mask, so co-op guests enforce the
+// same locks.
+//
 // Punch-out is event-driven: PunchoutFromGame below wraps the game's own flow
 // and publishes the verdict (punched out, fired, speedrun) exactly once.
 //
-// TODO: detect collectibles as checks; make detection event-driven where the
-// game gives an event; throttle the mess scan (calling ProcessMapState every
-// second is a full scan).
+// The mess scan is event-driven: the GRI's mess counters signal every splat
+// and debris change (NotifyMessChanged), which runs a debounced immediate
+// scan, and a 1s floor timer catches scoring changes that add or remove no
+// actor (a barrel uprighted, a medpack restored, an incinerator door closed).
 class VCGame_Archipelago extends VCGame;
 
 // The published state object. Not named "State": that is a reserved UnrealScript
@@ -33,11 +40,14 @@ var VCArchipelagoState APState;
 var int HighestReportedRung;
 var int LastPublishedPercent;
 
-// Scans in a row that saw no percent movement. The cleanliness probe is a full
-// mess scan, so after enough idle scans it backs off to a slower cadence and
-// snaps back to per-second the moment the percent moves again.
-var int UnchangedScans;
-var bool bScanBackedOff;
+// Set when the level is on its way out (punch-out or bounce), so a queued
+// burst scan cannot run against a torn-down level.
+var bool bCleanlinessProbeStopped;
+
+// A splat or debris change coalesces into one scan after this delay, so a
+// burst (a spill, a mess-dump trap, a mop sweep clearing several splats)
+// folds into a single scan instead of one per actor.
+const CleanlinessBurstDelaySeconds = 0.2;
 
 // Janitors under a timed speed effect, with the base speeds to restore.
 // Same-level references only; the GameInfo and these arrays die with the
@@ -61,6 +71,66 @@ var VCArchipelagoTraps TrapQueueFile;
 // Reused load target for the client-written milestones file.
 var VCArchipelagoMilestones MilestoneFile;
 
+// Reused load target for the client-written grants file (toolsanity reads).
+var VCArchipelagoGrants GrantsFile;
+
+// Toolsanity: the last applied unlocked-tools mask, to catch a mid-level
+// unlock transition (the sniffer is the one tool granted in place; the rest
+// re-enable machines or floor pickups that already exist in the level).
+var int AppliedToolsMask;
+
+// Dev override for the measurement tour: while active it replaces the
+// grants-driven mask. In-memory only, so a level reload drops it.
+var bool bDevToolMaskActive;
+var int DevToolMask;
+
+// Toolsanity: the tools the level HAS, for the HUD unlock panel. Constant per
+// level, so it is read once from the grants file and cached (0 means no
+// toolsanity data, which the panel shows as all-available).
+var bool bPresentToolsMaskRead;
+var int PresentToolsMaskCache;
+
+// Self-Cleaning Mop: whether the current level's mop never dirties, read once
+// per level from the grants file. A short poll pins every mop's saturation to
+// zero, faster than the tool-lock pass so a furious mopper cannot reach the
+// paint threshold between ticks.
+var bool bSelfCleaningMapRead;
+var bool bSelfCleaningMap;
+const SelfCleaningMopPollInterval = 0.25;
+
+// Original machine tuning cached at first lock, restored on unlock, because
+// mappers tune these per instance and a blanket default would clobber that.
+struct BinDispensorLockInfo
+{
+    var VCBinDispensor Dispensor;
+    var bool bFrontDisabled;
+    var bool bBackDisabled;
+};
+var array<BinDispensorLockInfo> BinDispensorLocks;
+
+struct BucketDispensorLockInfo
+{
+    var VCBucketDispensor Dispensor;
+    var bool bFrontDisabled;
+    var bool bBackDisabled;
+};
+var array<BucketDispensorLockInfo> BucketDispensorLocks;
+
+struct IncineratorLockInfo
+{
+    var VCIncinerator Incinerator;
+    var float BurnRateScale;
+};
+var array<IncineratorLockInfo> IncineratorLocks;
+
+struct DisposalVolumeLockInfo
+{
+    var VCDisposalVolume Volume;
+    var float DisposalRate;
+    var bool bInstantDisposal;
+};
+var array<DisposalVolumeLockInfo> DisposalVolumeLocks;
+
 event InitGame(string Options, out string ErrorMessage)
 {
     super.InitGame(Options, ErrorMessage);
@@ -79,12 +149,54 @@ event InitGame(string Options, out string ErrorMessage)
     StampSeedTag();
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
-    UnchangedScans = 0;
-    bScanBackedOff = false;
+    bCleanlinessProbeStopped = false;
+    bPresentToolsMaskRead = false;
+    bSelfCleaningMapRead = false;
+    bSelfCleaningMap = false;
+    AppliedToolsMask = class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
     SetTimer(1.0, true, 'PublishCleanliness');
     SetTimer(5.0, true, 'PollTraps');
     SetTimer(1.0, true, 'PollMilestones');
+    SetTimer(1.0, true, 'EnforceToolLocks');
+    SetTimer(SelfCleaningMopPollInterval, true, 'PollSelfCleaningMop');
     EnforceLevelGate();
+}
+
+// Grants the stock default inventory, then swaps the stock hands for the
+// carry-lock subclass and strips whatever the level's toolsanity state locks.
+// Runs server-side on every spawn and respawn, so co-op guests and deaths are
+// covered without extra plumbing.
+function AddDefaultInventory(Pawn PlayerPawn)
+{
+    super.AddDefaultInventory(PlayerPawn);
+    SwapInHandsSubclass(PlayerPawn);
+    if (VCPawn(PlayerPawn) != None)
+        ApplyPawnInventoryLocks(VCPawn(PlayerPawn), CurrentToolsMask());
+}
+
+function SwapInHandsSubclass(Pawn PlayerPawn)
+{
+    local VCWeap_Hands Candidate, StockHands;
+    local bool bWasActive;
+
+    if (PlayerPawn == None || PlayerPawn.InvManager == None)
+        return;
+    // Only the exact stock class is swapped: a map that overrides the hands
+    // slot with its own weapon keeps it, and a swapped pawn is left alone.
+    foreach PlayerPawn.InvManager.InventoryActors(class'VCWeap_Hands', Candidate)
+    {
+        if (Candidate.Class == class'VCWeap_Hands')
+        {
+            StockHands = Candidate;
+            break;
+        }
+    }
+    if (StockHands == None)
+        return;
+    bWasActive = (PlayerPawn.Weapon == StockHands);
+    PlayerPawn.InvManager.RemoveFromInventory(StockHands);
+    StockHands.Destroy();
+    PlayerPawn.CreateInventory(class'VCWeap_Hands_Archipelago', !bWasActive);
 }
 
 // Reads the client-written unlocked set (Saves\VCArchipelagoGrants.sav, fresh via
@@ -118,11 +230,28 @@ function EnforceLevelGate()
     SetTimer(1.0, false, 'BounceLockedLevel');
 }
 
+// The dev level override lives on the viewport client because that object
+// persists across level travel; the GameInfo dies with each level. It only
+// takes effect standalone, so a flag left on cannot leak into a co-op
+// session started without a relaunch.
+function bool IsDevLevelOverrideActive()
+{
+    local VCGameViewportClient_Archipelago ViewportClient;
+
+    if (WorldInfo.NetMode != NM_Standalone)
+        return false;
+    ViewportClient = VCGameViewportClient_Archipelago(
+        class'Engine'.static.GetEngine().GameViewport);
+    return ViewportClient != None && ViewportClient.bDevUnlockAllLevels;
+}
+
 function bool IsMapUnlocked(string MapName)
 {
     local VCArchipelagoGrants Grants;
     local string unlocked;
 
+    if (IsDevLevelOverrideActive())
+        return true;
     Grants = new class'VCArchipelagoGrants';
     if (!class'Engine'.static.BasicLoadObject(Grants, "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1))
         return false;
@@ -135,9 +264,13 @@ function BounceLockedLevel()
     local VCGameViewportClient ViewportClient;
 
     // Stop our timers so they do not fire against a level being torn down.
+    bCleanlinessProbeStopped = true;
     ClearTimer('PublishCleanliness');
+    ClearTimer('PublishCleanlinessBurst');
     ClearTimer('PollTraps');
     ClearTimer('PollMilestones');
+    ClearTimer('EnforceToolLocks');
+    ClearTimer('PollSelfCleaningMop');
 
     // The trophy handler is persistent (it lives on the viewport client and
     // survives travel) and holds a reference to this level's punchout handler.
@@ -323,6 +456,828 @@ function int ReadNextMilestonePercent()
         return Lowest;
     }
     return class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneUnknown;
+}
+
+// Toolsanity: the effective unlocked-tools mask for the current level. The
+// Office is the hub and is never locked; the dev override wins over the
+// client-written grants during the measurement tour.
+function int CurrentToolsMask()
+{
+    local VCMapInfo MapInfo;
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.bIsOfficeLevel)
+        return class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
+    if (bDevToolMaskActive)
+        return DevToolMask;
+    return ReadUnlockedToolsMask(WorldInfo.GetMapName(true));
+}
+
+// Reads the level's unlocked tool keys from the client-written grants file. A
+// map absent from the string (or no file, or an old client) has toolsanity
+// off, so everything stays unlocked and stock behavior is the default.
+function int ReadUnlockedToolsMask(string MapName)
+{
+    local array<string> MapEntries, ToolKeys;
+    local int I, J, ColonAt, Mask;
+
+    if (GrantsFile == None)
+        GrantsFile = new class'VCArchipelagoGrants';
+    if (!class'Engine'.static.BasicLoadObject(GrantsFile, "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1)
+        || GrantsFile.UnlockedTools == "")
+    {
+        return class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
+    }
+    ParseStringIntoArray(GrantsFile.UnlockedTools, MapEntries, ",", true);
+    for (I = 0; I < MapEntries.Length; I++)
+    {
+        ColonAt = InStr(MapEntries[I], ":");
+        if (ColonAt == -1 || Left(MapEntries[I], ColonAt) != MapName)
+            continue;
+        Mask = 0;
+        ParseStringIntoArray(Mid(MapEntries[I], ColonAt + 1), ToolKeys, " ", true);
+        for (J = 0; J < ToolKeys.Length; J++)
+        {
+            Mask = Mask
+                | class'VCGameReplicationInfo_Archipelago'.static.ToolBitForKey(ToolKeys[J]);
+        }
+        return Mask;
+    }
+    return class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
+}
+
+// Reads the level's present tool keys (the superset the HUD panel colors).
+// Returns 0 when the map has no toolsanity data (no file, old client, or a
+// toolsanity-off seed), which the panel shows as an all-available fallback.
+function int ReadPresentToolsMask(string MapName)
+{
+    local array<string> MapEntries, ToolKeys;
+    local int I, J, ColonAt, Mask;
+
+    if (GrantsFile == None)
+        GrantsFile = new class'VCArchipelagoGrants';
+    if (!class'Engine'.static.BasicLoadObject(GrantsFile, "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1)
+        || GrantsFile.PresentTools == "")
+    {
+        return 0;
+    }
+    ParseStringIntoArray(GrantsFile.PresentTools, MapEntries, ",", true);
+    for (I = 0; I < MapEntries.Length; I++)
+    {
+        ColonAt = InStr(MapEntries[I], ":");
+        if (ColonAt == -1 || Left(MapEntries[I], ColonAt) != MapName)
+            continue;
+        ParseStringIntoArray(Mid(MapEntries[I], ColonAt + 1), ToolKeys, " ", true);
+        for (J = 0; J < ToolKeys.Length; J++)
+        {
+            Mask = Mask
+                | class'VCGameReplicationInfo_Archipelago'.static.ToolBitForKey(ToolKeys[J]);
+        }
+        return Mask;
+    }
+    return 0;
+}
+
+// Reads whether the current level's mop never dirties, from the client-written
+// grants file. A map absent from the list dirties normally (absent means off).
+function bool IsSelfCleaningMap(string MapName)
+{
+    if (GrantsFile == None)
+        GrantsFile = new class'VCArchipelagoGrants';
+    if (!class'Engine'.static.BasicLoadObject(GrantsFile, "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1)
+        || GrantsFile.SelfCleaningMaps == "")
+    {
+        return false;
+    }
+    return InStr("," $ GrantsFile.SelfCleaningMaps $ ",", "," $ MapName $ ",") != -1;
+}
+
+// Pins every janitor's mop saturation to zero on a Self-Cleaning Mop level, so
+// the mop never fills, never paints mess, never drips, and never needs a
+// bucket rinse. The server owns and replicates MopSaturation, so zeroing on
+// the host reaches co-op guests. The self-cleaning flag is constant per level,
+// read once and cached.
+function PollSelfCleaningMop()
+{
+    local VCMapInfo MapInfo;
+    local VCPawn Janitor;
+    local VCWeap_Mop Mop;
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.bIsOfficeLevel)
+        return;
+    if (!bSelfCleaningMapRead)
+    {
+        bSelfCleaningMap = IsSelfCleaningMap(WorldInfo.GetMapName(true));
+        bSelfCleaningMapRead = true;
+    }
+    if (!bSelfCleaningMap)
+        return;
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+    {
+        if (Janitor.InvManager == None)
+            continue;
+        foreach Janitor.InvManager.InventoryActors(class'VCWeap_Mop', Mop)
+        {
+            if (Mop.MopSaturation != 0.0)
+            {
+                Mop.MopSaturation = 0.0;
+                Mop.UpdateMopSaturationEffects();
+            }
+        }
+    }
+}
+
+// The per-second lock pass: publishes the mask to the GRI for the weapon and
+// PRI checks, holds every locked machine in its disabled state (kismet or a
+// map script may fight a value, so it is reasserted), and sweeps inventories
+// for tools that slipped in outside AddDefaultInventory (floor pickups, the
+// stock GiveTools cheat).
+function EnforceToolLocks()
+{
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local int Mask;
+
+    Mask = CurrentToolsMask();
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None && ReplicatedInfo.UnlockedToolsMask != Mask)
+        ReplicatedInfo.UnlockedToolsMask = Mask;
+    // Present tools are constant per level; read once and publish for the HUD.
+    if (!bPresentToolsMaskRead)
+    {
+        PresentToolsMaskCache = ReadPresentToolsMask(WorldInfo.GetMapName(true));
+        bPresentToolsMaskRead = true;
+    }
+    if (ReplicatedInfo != None && ReplicatedInfo.PresentToolsMask != PresentToolsMaskCache)
+        ReplicatedInfo.PresentToolsMask = PresentToolsMaskCache;
+    // The steady all-unlocked state (stock behavior, toolsanity off) has
+    // nothing to enforce or restore; skip the actor sweeps.
+    if (Mask == class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll
+        && AppliedToolsMask == Mask
+        && BinDispensorLocks.Length == 0
+        && BucketDispensorLocks.Length == 0
+        && IncineratorLocks.Length == 0
+        && DisposalVolumeLocks.Length == 0)
+    {
+        return;
+    }
+    ApplyMachineLocks(Mask);
+    ApplyInventoryLocks(Mask);
+    if ((Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolSniffer) != 0
+        && (AppliedToolsMask & class'VCGameReplicationInfo_Archipelago'.const.ToolSniffer) == 0)
+    {
+        GrantSniffers();
+    }
+    if ((Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolMop) != 0
+        && (AppliedToolsMask & class'VCGameReplicationInfo_Archipelago'.const.ToolMop) == 0)
+    {
+        GrantMops();
+    }
+    AppliedToolsMask = Mask;
+}
+
+function ApplyMachineLocks(int Mask)
+{
+    local VCBucketDispensor BucketDispensor;
+    local VCBinDispensor BinDispensor;
+    local VCIncinerator Incinerator;
+    local VCDisposalVolume Volume;
+    local VCWoodChipper Chipper;
+    local VCSharkDisposalVolume SharkVolume;
+    local array<VCDebris> Contents;
+    local int CacheIndex, I;
+    local bool bLocked;
+
+    // The Slosh-O-Matic locks only under the hard-start option; the default
+    // starting kit keeps it unlocked for the whole seed.
+    bLocked = (Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolSloshOMatic) == 0;
+    foreach AllActors(class'VCBucketDispensor', BucketDispensor)
+    {
+        CacheIndex = BucketDispensorLocks.Find('Dispensor', BucketDispensor);
+        if (bLocked)
+        {
+            if (CacheIndex == -1)
+            {
+                CacheIndex = BucketDispensorLocks.Length;
+                BucketDispensorLocks.Length = CacheIndex + 1;
+                BucketDispensorLocks[CacheIndex].Dispensor = BucketDispensor;
+                BucketDispensorLocks[CacheIndex].bFrontDisabled = BucketDispensor.bDisableFront;
+                BucketDispensorLocks[CacheIndex].bBackDisabled = BucketDispensor.bDisableBack;
+            }
+            BucketDispensor.bDisableFront = true;
+            BucketDispensor.bDisableBack = true;
+        }
+        else if (CacheIndex != -1)
+        {
+            BucketDispensor.bDisableFront = BucketDispensorLocks[CacheIndex].bFrontDisabled;
+            BucketDispensor.bDisableBack = BucketDispensorLocks[CacheIndex].bBackDisabled;
+            BucketDispensorLocks.Remove(CacheIndex, 1);
+        }
+    }
+
+    // Bin dispensers vend the carryable bins.
+    bLocked = (Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolBins) == 0;
+    foreach AllActors(class'VCBinDispensor', BinDispensor)
+    {
+        CacheIndex = BinDispensorLocks.Find('Dispensor', BinDispensor);
+        if (bLocked)
+        {
+            if (CacheIndex == -1)
+            {
+                CacheIndex = BinDispensorLocks.Length;
+                BinDispensorLocks.Length = CacheIndex + 1;
+                BinDispensorLocks[CacheIndex].Dispensor = BinDispensor;
+                BinDispensorLocks[CacheIndex].bFrontDisabled = BinDispensor.bDisableFront;
+                BinDispensorLocks[CacheIndex].bBackDisabled = BinDispensor.bDisableBack;
+            }
+            BinDispensor.bDisableFront = true;
+            BinDispensor.bDisableBack = true;
+        }
+        else if (CacheIndex != -1)
+        {
+            BinDispensor.bDisableFront = BinDispensorLocks[CacheIndex].bFrontDisabled;
+            BinDispensor.bDisableBack = BinDispensorLocks[CacheIndex].bBackDisabled;
+            BinDispensorLocks.Remove(CacheIndex, 1);
+        }
+    }
+
+    // The incinerator group is one lock: incinerators (fireplaces are
+    // subclasses), disposal volumes, the woodchipper, and the shark pool.
+    bLocked = (Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolIncinerator) == 0;
+    foreach AllActors(class'VCIncinerator', Incinerator)
+    {
+        CacheIndex = IncineratorLocks.Find('Incinerator', Incinerator);
+        if (bLocked)
+        {
+            if (CacheIndex == -1)
+            {
+                CacheIndex = IncineratorLocks.Length;
+                IncineratorLocks.Length = CacheIndex + 1;
+                IncineratorLocks[CacheIndex].Incinerator = Incinerator;
+                IncineratorLocks[CacheIndex].BurnRateScale = Incinerator.BurnRateScale;
+            }
+            Incinerator.BurnRateScale = 0.0;
+            // A cold incinerator still hides its contents from the mess scan,
+            // so anything stuffed inside is unregistered; the burn timer
+            // prunes the entries within seconds and the mess counts again.
+            Contents.Length = 0;
+            Incinerator.GetContents(Contents);
+            for (I = 0; I < Contents.Length; I++)
+            {
+                if (Contents[I] != None)
+                    Incinerator.RemoveObject(Contents[I]);
+            }
+        }
+        else if (CacheIndex != -1)
+        {
+            Incinerator.BurnRateScale = IncineratorLocks[CacheIndex].BurnRateScale;
+            IncineratorLocks.Remove(CacheIndex, 1);
+        }
+    }
+    foreach AllActors(class'VCDisposalVolume', Volume)
+    {
+        CacheIndex = DisposalVolumeLocks.Find('Volume', Volume);
+        if (bLocked)
+        {
+            if (CacheIndex == -1)
+            {
+                CacheIndex = DisposalVolumeLocks.Length;
+                DisposalVolumeLocks.Length = CacheIndex + 1;
+                DisposalVolumeLocks[CacheIndex].Volume = Volume;
+                DisposalVolumeLocks[CacheIndex].DisposalRate = Volume.DisposalRate;
+                DisposalVolumeLocks[CacheIndex].bInstantDisposal = Volume.bInstantDisposal;
+            }
+            Volume.DisposalRate = 0.0;
+            Volume.bInstantDisposal = false;
+        }
+        else if (CacheIndex != -1)
+        {
+            Volume.DisposalRate = DisposalVolumeLocks[CacheIndex].DisposalRate;
+            Volume.bInstantDisposal = DisposalVolumeLocks[CacheIndex].bInstantDisposal;
+            DisposalVolumeLocks.Remove(CacheIndex, 1);
+        }
+    }
+    if (bLocked)
+    {
+        // The woodchipper has no rate to zero; unregistering its tracked
+        // debris every second keeps anything from shredding.
+        foreach AllActors(class'VCWoodChipper', Chipper)
+        {
+            for (I = Chipper.DebrisObjects.Length - 1; I >= 0; I--)
+            {
+                if (Chipper.DebrisObjects[I].Object != None)
+                    Chipper.RemoveObject(Chipper.DebrisObjects[I].Object);
+            }
+        }
+        // The shark pool eats what swims into it; clearing the queue and any
+        // shark already homing on debris starves it.
+        foreach AllActors(class'VCSharkDisposalVolume', SharkVolume)
+        {
+            SharkVolume.PendingTargets.Length = 0;
+            for (I = 0; I < SharkVolume.Sharks.Length; I++)
+            {
+                if (SharkVolume.Sharks[I] != None
+                    && VCDebris(SharkVolume.Sharks[I].TargetMeal) != None)
+                {
+                    SharkVolume.Sharks[I].SetMeal(None);
+                }
+            }
+        }
+    }
+}
+
+function ApplyInventoryLocks(int Mask)
+{
+    local VCPawn Janitor;
+
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+        ApplyPawnInventoryLocks(Janitor, Mask);
+}
+
+function ApplyPawnInventoryLocks(VCPawn Janitor, int Mask)
+{
+    local VCWeapon Weapon;
+    local array<VCWeapon> LockedWeapons;
+    local int I;
+
+    if (Janitor == None || Janitor.InvManager == None)
+        return;
+    foreach Janitor.InvManager.InventoryActors(class'VCWeapon', Weapon)
+    {
+        if (VCWeap_Mop(Weapon) != None
+            && (Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolMop) == 0)
+        {
+            LockedWeapons.AddItem(Weapon);
+        }
+        else if (VCWeap_Mucktector(Weapon) != None
+            && (Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolSniffer) == 0)
+        {
+            LockedWeapons.AddItem(Weapon);
+        }
+        else if (VCWeap_WeldingLaser(Weapon) != None
+            && (Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolWelder) == 0)
+        {
+            LockedWeapons.AddItem(Weapon);
+        }
+        else if (VCWeap_Shovel(Weapon) != None
+            && (Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolShovel) == 0)
+        {
+            LockedWeapons.AddItem(Weapon);
+        }
+        else if (VCWeap_BroomBase(Weapon) != None
+            && (Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolBroom) == 0)
+        {
+            LockedWeapons.AddItem(Weapon);
+        }
+    }
+    for (I = 0; I < LockedWeapons.Length; I++)
+        RemoveLockedWeapon(Janitor, LockedWeapons[I]);
+}
+
+// Returns the locked tool to the world as its floor pickup unless a world
+// copy already exists (so the map's welder can still be racked once unlocked,
+// and respawns never pile up duplicates); tools with no pickup form, like the
+// sniffer, are simply removed.
+function RemoveLockedWeapon(VCPawn Janitor, VCWeapon LockedWeapon)
+{
+    local Actor ExistingDrop;
+    local bool bDropExists;
+
+    if (LockedWeapon.ItemDropClass != None)
+    {
+        foreach AllActors(LockedWeapon.ItemDropClass, ExistingDrop)
+        {
+            bDropExists = true;
+            break;
+        }
+        if (!bDropExists)
+        {
+            LockedWeapon.DropFrom(Janitor.Location, vect(0, 0, 0));
+            return;
+        }
+    }
+    if (Janitor.InvManager != None)
+        Janitor.InvManager.RemoveFromInventory(LockedWeapon);
+    LockedWeapon.Destroy();
+}
+
+// Grants the mop to every janitor missing one, on a mid-level unlock under
+// the hard start. Granted active (the mop arriving is the moment the level
+// opens up), which also releases anything the hands are holding.
+function GrantMops()
+{
+    local VCPawn Janitor;
+    local VCMapInfo MapInfo;
+    local class<VCWeapon> MopClass;
+    local VCWeap_Mop Existing;
+    local bool bHasMop;
+
+    MopClass = class'VCWeap_Mop';
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.LevelInventory.Length > 0)
+    {
+        // A blank slot means the map deliberately gives no mop; a non-mop
+        // override keeps the map's own arrangement.
+        if (MapInfo.LevelInventory[0] == None
+            || !ClassIsChildOf(MapInfo.LevelInventory[0], class'VCWeap_Mop'))
+        {
+            return;
+        }
+        MopClass = MapInfo.LevelInventory[0];
+    }
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+    {
+        if (Janitor.InvManager == None)
+            continue;
+        bHasMop = false;
+        foreach Janitor.InvManager.InventoryActors(class'VCWeap_Mop', Existing)
+        {
+            bHasMop = true;
+            break;
+        }
+        if (!bHasMop)
+            Janitor.CreateInventory(MopClass);
+    }
+}
+
+// Grants the sniffer to every janitor missing one, on a mid-level unlock. The
+// other tools re-enable things that already exist in the level; the sniffer
+// and the mop are default inventory, so they are the grants done in place.
+function GrantSniffers()
+{
+    local VCPawn Janitor;
+    local VCMapInfo MapInfo;
+    local VCWeap_Mucktector Existing;
+    local bool bHasSniffer;
+
+    if (bDisableSniffer)
+        return;
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.LevelInventory.Length > 2
+        && (MapInfo.LevelInventory[2] == None
+            || !ClassIsChildOf(MapInfo.LevelInventory[2], class'VCWeap_Mucktector')))
+    {
+        // A blank slot means the map deliberately gives no sniffer; a non-
+        // sniffer override keeps the map's own arrangement.
+        return;
+    }
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+    {
+        if (Janitor.InvManager == None)
+            continue;
+        bHasSniffer = false;
+        foreach Janitor.InvManager.InventoryActors(class'VCWeap_Mucktector', Existing)
+        {
+            bHasSniffer = true;
+            break;
+        }
+        if (!bHasSniffer)
+            Janitor.CreateInventory(class'VCWeap_Mucktector', true);
+    }
+}
+
+// Dev override of one tool's lock, from the measurement tour commands. The
+// override starts from the current effective mask, so single locks compose
+// with the grants-driven state.
+function DevSetToolLock(string ToolKey, bool bUnlock, PlayerController Requester)
+{
+    local int ToolBit;
+
+    ToolBit = class'VCGameReplicationInfo_Archipelago'.static.ToolBitForKey(ToolKey);
+    if (ToolBit == 0)
+    {
+        Requester.ClientMessage("Unknown tool key '"$ToolKey
+            $"'. Keys: Hands Welder Shovel Lift Vendor Incinerator Sniffer Broom Bins Mop SloshOMatic.");
+        return;
+    }
+    if (!bDevToolMaskActive)
+    {
+        DevToolMask = CurrentToolsMask();
+        bDevToolMaskActive = true;
+    }
+    if (bUnlock)
+        DevToolMask = DevToolMask | ToolBit;
+    else
+        DevToolMask = DevToolMask & ~ToolBit;
+    EnforceToolLocks();
+    Requester.ClientMessage("Dev tool override active. Unlocked: "
+        $class'VCGameReplicationInfo_Archipelago'.static.DescribeToolMask(DevToolMask));
+}
+
+function DevSetToolMask(int Mask, PlayerController Requester)
+{
+    bDevToolMaskActive = true;
+    DevToolMask = Mask;
+    EnforceToolLocks();
+    Requester.ClientMessage("Dev tool override active. Unlocked: "
+        $class'VCGameReplicationInfo_Archipelago'.static.DescribeToolMask(DevToolMask));
+}
+
+function DevClearToolMask(PlayerController Requester)
+{
+    bDevToolMaskActive = false;
+    EnforceToolLocks();
+    Requester.ClientMessage("Dev tool override cleared. Unlocked: "
+        $class'VCGameReplicationInfo_Archipelago'.static.DescribeToolMask(CurrentToolsMask()));
+}
+
+// The measurement scan: walks every mess item the way the punchout handler's
+// starting pass does, sums the penalty per toolsanity category, and reports
+// the machine presence counts. The result drives the apworld's per-level
+// logic table; run it on arrival, before cleaning anything.
+function RunScanReport(PlayerController Requester)
+{
+    local VCPunchoutHandler_General Handler;
+    local VCMapInfo MapInfo;
+    local VCDebris Debris;
+    local VCSplat Splat;
+    local VCIncinerator Incinerator;
+    local VCMedpackBox MedpackBox;
+    local VCLowGravityVolume GravityVolume;
+    local VCBucketDispensor BucketDispensor;
+    local VCBinDispensor BinDispensor;
+    local VCDisposalVolume DisposalVolume;
+    local VCWoodChipper Chipper;
+    local VCSharkDisposalVolume SharkVolume;
+    local VCSupplyMachine SupplyMachine;
+    local VCScissorLift Lift;
+    local VCPunchMachine PunchMachine;
+    local float MopPenalty, WelderPenalty, HandsDisposalPenalty, BarrelPenalty;
+    local float EquipmentPenalty, VendorPenalty, GravityPenalty, DoorPenalty;
+    local float Total, Remainder;
+    local int MopCount, WelderCount, HandsDisposalCount, BarrelCount;
+    local int EquipmentCount, VendorCount, UnknownSplatCount, WelderPickupCount;
+    local int SloshCount, BinMachineCount, IncineratorCount, FireplaceCount;
+    local int DisposalCount, ChipperCount, SharkPoolCount, SupplyCount;
+    local int LiftCount, PunchClockCount;
+    local string MapName, ReportLine;
+    local string DebrisId;
+
+    Handler = VCPunchoutHandler_General(PunchoutHandler);
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (Handler == None || Handler.StartingCleanupScore <= 0.0
+        || MapInfo == None || MapInfo.bIsOfficeLevel)
+    {
+        Requester.ClientMessage("APScanReport: no cleanable level is loaded.");
+        return;
+    }
+
+    // Mirrors ProcessStartingMapState's classification chain exactly, so the
+    // sums line up with StartingCleanupScore.
+    foreach AllActors(class'VCDebris', Debris)
+    {
+        if (Debris.bShutdown)
+            continue;
+        DebrisId = string(Debris.Id);
+        if (VCBucket(Debris) != None)
+        {
+            EquipmentPenalty += Handler.GetPenaltyFor(Debris, 512);
+            EquipmentCount++;
+        }
+        else if (VCBin(Debris) != None)
+        {
+            EquipmentPenalty += Handler.GetPenaltyFor(Debris, 1024);
+            EquipmentCount++;
+        }
+        else if (InStr(DebrisId, "Barrel",, true) != -1)
+        {
+            if (!Debris.IsUpright())
+            {
+                BarrelPenalty += Handler.GetPenaltyFor(Debris, 256);
+                BarrelCount++;
+            }
+        }
+        else if (VCDebris_BurntRubbish(Debris) != None)
+        {
+            HandsDisposalPenalty += Handler.GetPenaltyFor(Debris, 64);
+            HandsDisposalCount++;
+        }
+        else if (VCDebris_ShellCasing(Debris) != None)
+        {
+            HandsDisposalPenalty += Handler.GetPenaltyFor(Debris, 4);
+            HandsDisposalCount++;
+        }
+        else if (InStr(DebrisId, "BodyBag",, true) != -1)
+        {
+            HandsDisposalPenalty += Handler.GetPenaltyFor(Debris, 128);
+            HandsDisposalCount++;
+        }
+        else if (InStr(DebrisId, "GooJar",, true) != -1)
+        {
+            HandsDisposalPenalty += Handler.GetPenaltyFor(Debris, 16384);
+            HandsDisposalCount++;
+        }
+        else if (InStr(DebrisId, "GlassShard",, true) != -1)
+        {
+            HandsDisposalPenalty += Handler.GetPenaltyFor(Debris, 32768);
+            HandsDisposalCount++;
+        }
+        else if (VCItemDrop_WeldingLaser(Debris) != None)
+        {
+            WelderPickupCount++;
+        }
+        else if (Debris.CountAsMess() && Debris.SplatClass != None)
+        {
+            HandsDisposalPenalty += Handler.GetPenaltyFor(Debris, 2);
+            HandsDisposalCount++;
+        }
+        else if (Debris.CountAsMess() && Debris.SplatClass == None)
+        {
+            HandsDisposalPenalty += Handler.GetPenaltyFor(Debris, 8);
+            HandsDisposalCount++;
+        }
+    }
+    foreach AllActors(class'VCSplat', Splat)
+    {
+        if (Splat.bHidden && Splat.Physics == PHYS_None)
+            continue;
+        if (Splat.IsA('VCSplat_GooJar'))
+        {
+            MopPenalty += Handler.GetPenaltyFor(Splat, 16384);
+            MopCount++;
+        }
+        else if (Splat.SplatType == 1)
+        {
+            MopPenalty += Handler.GetPenaltyFor(Splat, 1);
+            MopCount++;
+        }
+        else if (Splat.SplatType == 2)
+        {
+            MopPenalty += Handler.GetPenaltyFor(Splat, 32);
+            MopCount++;
+        }
+        else if (Splat.SplatType == 4)
+        {
+            WelderPenalty += Handler.GetPenaltyFor(Splat, 16);
+            WelderCount++;
+        }
+        else if (Splat.SplatType == 8)
+        {
+            WelderPenalty += Handler.GetPenaltyFor(Splat, 131072);
+            WelderCount++;
+        }
+        else
+        {
+            // Map-specific splat types score through per-map handler bits and
+            // land in the remainder; the count flags them for manual review.
+            UnknownSplatCount++;
+        }
+    }
+    foreach AllActors(class'VCMedpackBox', MedpackBox)
+    {
+        if (!MedpackBox.CheckRestored())
+        {
+            VendorPenalty += Handler.GetPenaltyFor(MedpackBox, 2048);
+            VendorCount++;
+        }
+    }
+    foreach AllActors(class'VCIncinerator', Incinerator)
+    {
+        IncineratorCount++;
+        if (Incinerator.IsA('VCIncinerator_FirePlace')
+            || Incinerator.IsA('VCIncinerator_FirePlace_Horror'))
+        {
+            FireplaceCount++;
+        }
+        // Doors standing open at level start cost their penalty until closed;
+        // door use is denied while the incinerator is locked, so this share
+        // belongs to the incinerator item.
+        if (Incinerator.Doors.Length >= 2
+            && (int(Incinerator.Doors[0].State) == 1 || int(Incinerator.Doors[0].State) == 2
+                || int(Incinerator.Doors[1].State) == 1 || int(Incinerator.Doors[1].State) == 2))
+        {
+            DoorPenalty += Handler.GetPenaltyFor(Incinerator, 4096);
+        }
+    }
+    foreach AllActors(class'VCLowGravityVolume', GravityVolume)
+    {
+        if (GravityVolume.bEnabled && MapInfo.GravityVolumes.Length > 0
+            && MapInfo.GravityVolumes.Find(GravityVolume) != -1)
+        {
+            // The gravity console is a machine UI, always usable, so this
+            // share is free; scored once per level like the starting pass.
+            GravityPenalty += Handler.GetPenaltyFor(GravityVolume, 8192);
+            break;
+        }
+    }
+
+    foreach AllActors(class'VCBucketDispensor', BucketDispensor)
+        SloshCount++;
+    foreach AllActors(class'VCBinDispensor', BinDispensor)
+        BinMachineCount++;
+    foreach AllActors(class'VCDisposalVolume', DisposalVolume)
+        DisposalCount++;
+    foreach AllActors(class'VCWoodChipper', Chipper)
+        ChipperCount++;
+    foreach AllActors(class'VCSharkDisposalVolume', SharkVolume)
+        SharkPoolCount++;
+    foreach AllActors(class'VCSupplyMachine', SupplyMachine)
+        SupplyCount++;
+    foreach AllActors(class'VCScissorLift', Lift)
+        LiftCount++;
+    foreach AllActors(class'VCPunchMachine', PunchMachine)
+        PunchClockCount++;
+
+    Total = Handler.StartingCleanupScore;
+    Remainder = Total - MopPenalty - WelderPenalty - HandsDisposalPenalty
+        - BarrelPenalty - EquipmentPenalty - VendorPenalty - GravityPenalty
+        - DoorPenalty;
+    MapName = WorldInfo.GetMapName(true);
+    ReportLine = "Map="$MapName
+        $"|Start="$Total
+        $"|Mop="$MopPenalty$"/"$MopCount
+        $"|Welder="$WelderPenalty$"/"$WelderCount
+        $"|HandsDisposal="$HandsDisposalPenalty$"/"$HandsDisposalCount
+        $"|Barrels="$BarrelPenalty$"/"$BarrelCount
+        $"|Equipment="$EquipmentPenalty$"/"$EquipmentCount
+        $"|Vendor="$VendorPenalty$"/"$VendorCount
+        $"|Gravity="$GravityPenalty
+        $"|IncineratorDoors="$DoorPenalty
+        $"|Remainder="$Remainder
+        $"|UnknownSplats="$UnknownSplatCount
+        $"|WelderPickups="$WelderPickupCount
+        $"|Machines=Slosh:"$SloshCount$" Bins:"$BinMachineCount
+        $" Incinerator:"$IncineratorCount$" Fireplace:"$FireplaceCount
+        $" Disposal:"$DisposalCount$" Chipper:"$ChipperCount
+        $" SharkPool:"$SharkPoolCount$" Vendor:"$SupplyCount
+        $" Lift:"$LiftCount$" PunchClock:"$PunchClockCount;
+    WriteScanLine(MapName, ReportLine);
+    `log("VCAP SCAN "$ReportLine);
+    Requester.ClientMessage("Scan written for "$MapName$". Mop-only share: "
+        $int((MopPenalty / Total) * 100.0)$" percent of "$int(Total)
+        $" points; remainder "$int(Remainder)$" points"
+        $", unknown splats "$UnknownSplatCount$".");
+}
+
+// Updates or appends the map's line in the scan results config object. The
+// class defaults mirror keeps repeat scans in one session consistent, because
+// an instance SaveConfig never updates the class default object.
+function WriteScanLine(string MapName, string ReportLine)
+{
+    local VCArchipelagoScanResults Results;
+    local string LinePrefix;
+    local int I;
+    local bool bReplaced;
+
+    Results = new class'VCArchipelagoScanResults';
+    LinePrefix = "Map="$MapName$"|";
+    for (I = 0; I < Results.ScanLines.Length; I++)
+    {
+        if (Left(Results.ScanLines[I], Len(LinePrefix)) == LinePrefix)
+        {
+            Results.ScanLines[I] = ReportLine;
+            bReplaced = true;
+            break;
+        }
+    }
+    if (!bReplaced)
+        Results.ScanLines.AddItem(ReportLine);
+    class'VCArchipelagoScanResults'.default.ScanLines = Results.ScanLines;
+    Results.SaveConfig();
+}
+
+// Removes every blood splat, and only blood: the same category the mop
+// clears first, through the same Die path the game's own mess cheat uses, so
+// the score updates with no other side effects. Measurement aid for
+// eyeballing the blood share in place.
+function CleanAllBloodSplats(PlayerController Requester)
+{
+    local VCSplat Splat;
+    local int Removed;
+
+    foreach AllActors(class'VCSplat', Splat)
+    {
+        if (Splat.bHidden && Splat.Physics == PHYS_None)
+            continue;
+        if (Splat.SplatType != 1 || Splat.IsA('VCSplat_GooJar'))
+            continue;
+        Splat.Die();
+        Removed++;
+    }
+    Requester.ClientMessage("Removed "$Removed$" blood splats.");
+}
+
+// Removes everything the scan's mop band counts: blood, scorch, and goo
+// splats. Verifies the mop-only share in place; the live percent afterwards
+// should match the scan's mop number.
+function CleanAllMoppableSplats(PlayerController Requester)
+{
+    local VCSplat Splat;
+    local int Removed;
+
+    foreach AllActors(class'VCSplat', Splat)
+    {
+        if (Splat.bHidden && Splat.Physics == PHYS_None)
+            continue;
+        if (Splat.SplatType != 1 && Splat.SplatType != 2
+            && !Splat.IsA('VCSplat_GooJar'))
+        {
+            continue;
+        }
+        Splat.Die();
+        Removed++;
+    }
+    Requester.ClientMessage("Removed "$Removed$" moppable splats.");
 }
 
 // Sprays blood splats on the floor around the janitor. Splats spawn the same
@@ -514,7 +1469,9 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     // The milestone poll keeps running so the indicator can still flip once
     // the server confirms the final rungs before the travel.
     PublishCleanliness();
+    bCleanlinessProbeStopped = true;
     ClearTimer('PublishCleanliness');
+    ClearTimer('PublishCleanlinessBurst');
     ClearTimer('PollTraps');
 
     Handler = VCPunchoutHandler_General(PunchoutHandler);
@@ -619,7 +1576,7 @@ function PublishCleanliness()
     local VCMapInfo MapInfo;
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
     local float clean;
-    local int percent, rung;
+    local int percent;
     local bool changed;
 
     // Never probe the Office or menu maps; they are not cleanable levels.
@@ -651,18 +1608,13 @@ function PublishCleanliness()
         APState.APCleanPct = percent;
         APState.APMap = WorldInfo.GetMapName(true);
         changed = true;
-        UnchangedScans = 0;
-    }
-    else
-    {
-        UnchangedScans += 1;
     }
 
-    // Publish each newly crossed five percent rung, so a jump does not skip one.
-    rung = (percent / 5) * 5;
-    while (HighestReportedRung < rung)
+    // Publish every newly crossed whole percent, so a jump does not skip
+    // one; the client filters the list to the seed's enabled rungs.
+    while (HighestReportedRung < percent)
     {
-        HighestReportedRung += 5;
+        HighestReportedRung += 1;
         if (APState.APMilestones == "")
             APState.APMilestones = string(HighestReportedRung);
         else
@@ -675,24 +1627,29 @@ function PublishCleanliness()
         APState.APSeq = APState.APSeq + 1;
         SaveAPState();
     }
+}
 
-    // Back off to a five second cadence after thirty idle scans; return to
-    // per-second the moment the percent moves. Rung publication is unaffected
-    // beyond the added latency, and the punch-out hook runs its own final scan.
-    if (!bScanBackedOff && UnchangedScans >= 30)
-    {
-        bScanBackedOff = true;
-        SetTimer(5.0, true, 'PublishCleanliness');
-    }
-    else if (bScanBackedOff && UnchangedScans == 0)
-    {
-        bScanBackedOff = false;
-        SetTimer(1.0, true, 'PublishCleanliness');
-    }
+// Called by the GRI when a splat or debris is created or removed. Coalesces a
+// burst of changes into one scan through a one-shot timer, so a spill or a
+// mop sweep folds into a single scan. Ignored once the level is on its way
+// out, so a queued burst cannot rescan a torn-down level.
+function NotifyMessChanged()
+{
+    if (bCleanlinessProbeStopped)
+        return;
+    if (!IsTimerActive('PublishCleanlinessBurst'))
+        SetTimer(CleanlinessBurstDelaySeconds, false, 'PublishCleanlinessBurst');
+}
+
+function PublishCleanlinessBurst()
+{
+    PublishCleanliness();
 }
 
 defaultproperties
 {
     HUDType=Class'VCArchipelago.VCHUD_Archipelago'
     GameReplicationInfoClass=Class'VCArchipelago.VCGameReplicationInfo_Archipelago'
+    PlayerControllerClass=Class'VCArchipelago.VCPlayerController_Archipelago'
+    PlayerReplicationInfoClass=Class'VCArchipelago.VCPlayerReplicationInfo_Archipelago'
 }

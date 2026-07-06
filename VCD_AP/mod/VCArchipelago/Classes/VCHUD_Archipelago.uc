@@ -39,6 +39,14 @@ const TimedEffectBarWidth     = 200.0;
 const TimedEffectBarHeight    = 8.0;
 const TimedEffectBlinkSeconds = 5.0;
 
+// Toolsanity unlock panel geometry (pre-ratio units). The 11 tool bits are
+// powers of two in TOOL_KEY_ORDER, so bit (1 << index) walks them in order.
+const ToolPanelTextSize = 18.0;
+const ToolPanelWidth    = 220.0;
+const ToolPanelTop      = 120.0;
+const ToolPanelLeft     = 12.0;
+const ToolBitCount      = 11;
+
 // Reused load target for the feed file, so the poll does not pile up garbage
 // objects between collections.
 var VCArchipelagoMessages MessageFeedFile;
@@ -65,6 +73,88 @@ simulated event PostBeginPlay()
     HighestQueuedIndex = MessageState.ShownIndex;
     SetTimer(MessagePollInterval, true, 'PollMessageFeed');
     SetTimer(ToastPromoteInterval, true, 'PromotePendingToast');
+}
+
+// The engine runs DrawHUD only when the scoreboard is hidden, and VCHUD draws
+// the scoreboard from PostRender when it is shown. So the toolsanity panel
+// (shown while the scoreboard key is held) cannot ride DrawHUD; it hooks here,
+// after the scoreboard, and the rest of the HUD keeps drawing from DrawHUD as
+// today when the key is not held.
+event PostRender()
+{
+    super.PostRender();
+    if (bShowScores)
+        DrawToolsanityPanel();
+}
+
+// Lists the current level's toolsanity tools while the scoreboard key is held,
+// each in its player-facing name, the Archipelago location green when unlocked
+// and dim grey when still locked. A level with no toolsanity data (an old
+// client or a toolsanity-off seed) shows a single all-available line. Reads the
+// replicated GRI, so the host and co-op guests see the same panel.
+function DrawToolsanityPanel()
+{
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local int BitIndex, Bit, PresentCount, DrawnLines;
+    local float LineHeight, PanelLeft, PanelTop, LabelLeft, HeadingTop;
+
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(VCGRI);
+    if (ReplicatedInfo == None)
+        return;
+
+    LineHeight = (ToolPanelTextSize + 6.0) * RatioY;
+    PanelLeft = ToolPanelLeft * RatioY;
+    PanelTop = ToolPanelTop * RatioY;
+    LabelLeft = PanelLeft + 6.0 * RatioY;
+    HeadingTop = PanelTop + 4.0 * RatioY;
+
+    if (ReplicatedInfo.PresentToolsMask == 0)
+    {
+        DrawToolPanelBacking(PanelLeft, PanelTop,
+            ToolPanelWidth * RatioY, LineHeight + 8.0 * RatioY);
+        Canvas.SetDrawColor(255, 255, 255, 255);
+        DrawTextEx("All tools available", LabelLeft, HeadingTop,
+            ToolPanelTextSize * RatioY, VCDFont, HA_Left, VA_Top, true);
+        return;
+    }
+
+    for (BitIndex = 0; BitIndex < ToolBitCount; BitIndex++)
+    {
+        if ((ReplicatedInfo.PresentToolsMask & (1 << BitIndex)) != 0)
+            PresentCount++;
+    }
+    DrawToolPanelBacking(PanelLeft, PanelTop, ToolPanelWidth * RatioY,
+        LineHeight * float(PresentCount + 1) + 8.0 * RatioY);
+
+    Canvas.SetDrawColor(255, 255, 255, 255);
+    DrawTextEx("This level's tools", LabelLeft, HeadingTop,
+        ToolPanelTextSize * RatioY, VCDFont, HA_Left, VA_Top, true);
+
+    DrawnLines = 1;
+    for (BitIndex = 0; BitIndex < ToolBitCount; BitIndex++)
+    {
+        Bit = 1 << BitIndex;
+        if ((ReplicatedInfo.PresentToolsMask & Bit) == 0)
+            continue;
+        if ((ReplicatedInfo.UnlockedToolsMask & Bit) != 0)
+            Canvas.SetDrawColor(0, 255, 127, 255);
+        else
+            Canvas.SetDrawColor(128, 128, 128, 255);
+        DrawTextEx(
+            class'VCGameReplicationInfo_Archipelago'.static.ToolDisplayLabel(Bit),
+            LabelLeft, HeadingTop + LineHeight * float(DrawnLines),
+            ToolPanelTextSize * RatioY, VCDFont, HA_Left, VA_Top, true);
+        DrawnLines++;
+    }
+}
+
+// A translucent tile behind the panel so the list stays readable over the
+// level, the same idiom the timed-effect bar uses.
+function DrawToolPanelBacking(float Left, float Top, float Width, float Height)
+{
+    Canvas.SetDrawColor(0, 0, 0, 128);
+    Canvas.SetPos(Left, Top);
+    Canvas.DrawTile(Canvas.DefaultTexture, Width, Height, 0.0, 0.0, 32.0, 32.0);
 }
 
 function DrawHUD()

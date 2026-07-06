@@ -23,6 +23,32 @@ const NextMilestoneCleared = 0;
 
 var int NextMilestonePercent;
 
+// Toolsanity: the current level's unlocked tools and machines as a bitmask,
+// bit set means unlocked. The host computes it from the client-written grants
+// (everything unlocked when the level has no toolsanity data, so stock
+// behavior is the default) and the weapon and PRI checks read it here, so
+// co-op guests enforce the same locks.
+const ToolHands       = 1;
+const ToolWelder      = 2;
+const ToolShovel      = 4;
+const ToolLift        = 8;
+const ToolVendor      = 16;
+const ToolIncinerator = 32;
+const ToolSniffer     = 64;
+const ToolBroom       = 128;
+const ToolBins        = 256;
+const ToolMop         = 512;
+const ToolSloshOMatic = 1024;
+const ToolMaskAll     = 2047;
+
+var int UnlockedToolsMask;
+
+// Toolsanity: the tools the current level HAS (a superset of the unlocked
+// mask), so the HUD panel can tell a locked tool from one not on this level.
+// The host reads it from the client-written grants; 0 means no toolsanity
+// data, where the panel shows an all-available fallback.
+var int PresentToolsMask;
+
 // Timed trap effects for the on-screen countdown. Fixed slots because
 // dynamic arrays do not replicate; the None type marks an empty slot.
 const TimedEffectNone     = 0;
@@ -47,8 +73,72 @@ replication
 {
     if (bNetDirty)
         CleanlinessHundredths, bCleanlinessSampled, NextMilestonePercent,
+        UnlockedToolsMask, PresentToolsMask,
         TimedEffectTypes, TimedEffectRemaining, TimedEffectDurations,
         TimedEffectCounter;
+}
+
+simulated function bool IsToolUnlocked(int ToolBit)
+{
+    return (UnlockedToolsMask & ToolBit) != 0;
+}
+
+// The grants-file key for each tool bit and back. The client writes these keys
+// into the UnlockedTools string; the dev override commands take them too.
+static function int ToolBitForKey(string ToolKey)
+{
+    if (ToolKey ~= "Hands")       return ToolHands;
+    if (ToolKey ~= "Welder")      return ToolWelder;
+    if (ToolKey ~= "Shovel")      return ToolShovel;
+    if (ToolKey ~= "Lift")        return ToolLift;
+    if (ToolKey ~= "Vendor")      return ToolVendor;
+    if (ToolKey ~= "Incinerator") return ToolIncinerator;
+    if (ToolKey ~= "Sniffer")     return ToolSniffer;
+    if (ToolKey ~= "Broom")       return ToolBroom;
+    if (ToolKey ~= "Bins")        return ToolBins;
+    if (ToolKey ~= "Mop")         return ToolMop;
+    if (ToolKey ~= "SloshOMatic") return ToolSloshOMatic;
+    return 0;
+}
+
+static function string DescribeToolMask(int ToolMask)
+{
+    local string Described;
+
+    if ((ToolMask & ToolHands) != 0)       Described $= "Hands ";
+    if ((ToolMask & ToolWelder) != 0)      Described $= "Welder ";
+    if ((ToolMask & ToolShovel) != 0)      Described $= "Shovel ";
+    if ((ToolMask & ToolLift) != 0)        Described $= "Lift ";
+    if ((ToolMask & ToolVendor) != 0)      Described $= "Vendor ";
+    if ((ToolMask & ToolIncinerator) != 0) Described $= "Incinerator ";
+    if ((ToolMask & ToolSniffer) != 0)     Described $= "Sniffer ";
+    if ((ToolMask & ToolBroom) != 0)       Described $= "Broom ";
+    if ((ToolMask & ToolBins) != 0)        Described $= "Bins ";
+    if ((ToolMask & ToolMop) != 0)         Described $= "Mop ";
+    if ((ToolMask & ToolSloshOMatic) != 0) Described $= "SloshOMatic ";
+    if (Described == "")
+        return "none";
+    return Left(Described, Len(Described) - 1);
+}
+
+// The player-facing name for a single tool bit, for the HUD unlock panel.
+static function string ToolDisplayLabel(int ToolBit)
+{
+    switch (ToolBit)
+    {
+        case ToolHands:       return "Hands";
+        case ToolWelder:      return "Laser Welder";
+        case ToolShovel:      return "Shovel";
+        case ToolLift:        return "J-HARM";
+        case ToolVendor:      return "Vendor";
+        case ToolIncinerator: return "Incinerator";
+        case ToolSniffer:     return "Sniffer";
+        case ToolBroom:       return "Broom";
+        case ToolBins:        return "Bin Dispenser";
+        case ToolMop:         return "Mop";
+        case ToolSloshOMatic: return "Slosh-O-Matic";
+    }
+    return "";
 }
 
 simulated event ReplicatedEvent(name VarName)
@@ -57,6 +147,44 @@ simulated event ReplicatedEvent(name VarName)
         StampTimedEffectEndTimes();
     else
         super.ReplicatedEvent(VarName);
+}
+
+// The game keeps live mess counts here: every splat and debris calls these
+// four on spawn and cleanup (authority only). That makes them the change
+// signal the base game otherwise lacks, so the cleanliness probe scans the
+// moment mess appears or clears instead of only on a timer. Guests have no
+// GameInfo, so the notify no-ops there.
+simulated function AddSplat(VCSplat Splat)
+{
+    super.AddSplat(Splat);
+    NotifyGameCleanlinessDirty();
+}
+
+simulated function RemoveSplat(VCSplat Splat)
+{
+    super.RemoveSplat(Splat);
+    NotifyGameCleanlinessDirty();
+}
+
+simulated function AddDebris(VCDebris Debris)
+{
+    super.AddDebris(Debris);
+    NotifyGameCleanlinessDirty();
+}
+
+simulated function RemoveDebris(VCDebris Debris)
+{
+    super.RemoveDebris(Debris);
+    NotifyGameCleanlinessDirty();
+}
+
+simulated function NotifyGameCleanlinessDirty()
+{
+    local VCGame_Archipelago Game;
+
+    Game = VCGame_Archipelago(WorldInfo.Game);
+    if (Game != None)
+        Game.NotifyMessChanged();
 }
 
 // Rebuilds the local end times from the remaining seconds.
@@ -152,4 +280,7 @@ function RefreshTimedEffects()
 defaultproperties
 {
     NextMilestonePercent=-1
+    // Everything unlocked until the host applies the level's toolsanity data,
+    // so a stock or toolsanity-off level never flickers into a locked state.
+    UnlockedToolsMask=2047
 }

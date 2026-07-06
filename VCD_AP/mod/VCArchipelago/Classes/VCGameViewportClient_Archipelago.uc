@@ -15,6 +15,13 @@
 // left untouched, so normal play outside a session is unaffected.
 class VCGameViewportClient_Archipelago extends VCGameViewportClient;
 
+// Dev override for the measurement tour: shows every level and passes the
+// bounce gate, set by the APLevelsUnlockAll dev command. An instance var
+// works because this object persists across level travel; a relaunch returns
+// to the grants-driven state and the grants file keeps its single writer
+// (the client).
+var bool bDevUnlockAllLevels;
+
 // Seconds between curation passes, and the running accumulator.
 const CurationInterval = 0.5;
 var float SecondsSinceCuration;
@@ -45,11 +52,20 @@ function CurateMapProviders()
     local VCArchipelagoGrants Grants;
     local string unlocked;
     local int i, shown, hidden;
+    local bool bUnlockAll;
 
-    Grants = new class'VCArchipelagoGrants';
-    if (!class'Engine'.static.BasicLoadObject(Grants, "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1))
-        return;
-    unlocked = Grants.UnlockedMaps;
+    // Standalone only, so a flag left on never leaks into a co-op session
+    // started without a relaunch.
+    bUnlockAll = bDevUnlockAllLevels
+        && class'WorldInfo'.static.GetWorldInfo() != None
+        && class'WorldInfo'.static.GetWorldInfo().NetMode == NM_Standalone;
+    if (!bUnlockAll)
+    {
+        Grants = new class'VCArchipelagoGrants';
+        if (!class'Engine'.static.BasicLoadObject(Grants, "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1))
+            return;
+        unlocked = Grants.UnlockedMaps;
+    }
 
     DSClient = class'Engine.UIInteraction'.static.GetDataStoreClient();
     if (DSClient == None)
@@ -64,7 +80,7 @@ function CurateMapProviders()
         MapProvider = VCUIDataProvider_MapInfo(Providers[i]);
         if (MapProvider == None)
             continue;
-        if (InStr(","$unlocked$",", ","$MapProvider.MapName$",") != -1)
+        if (bUnlockAll || InStr(","$unlocked$",", ","$MapProvider.MapName$",") != -1)
         {
             MapProvider.bHideFromMenu = false;
             // An empty ValidTitles passes the menu's title filter, so a granted
@@ -83,7 +99,10 @@ function CurateMapProviders()
     if (CurationLogBudget > 0)
     {
         CurationLogBudget--;
-        `log("VCAP VP CURATE shown="$shown$" hidden="$hidden$" unlocked="$unlocked);
+        if (bUnlockAll)
+            `log("VCAP VP CURATE shown="$shown$" hidden="$hidden$" unlocked=<dev-override>");
+        else
+            `log("VCAP VP CURATE shown="$shown$" hidden="$hidden$" unlocked="$unlocked);
     }
 }
 
