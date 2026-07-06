@@ -2,9 +2,12 @@
 // paths. ServerReceiveUICommand carries every machine UI panel click, so
 // dropping a command here locks the Vendor and the J-HARM lift for host and
 // guests alike. ServerReceiveIncidentReportValue carries every punch-out
-// report field edit, so clamping a field's length here closes the paste
-// exploit (see below). Installed through the game mode's
-// PlayerReplicationInfoClass.
+// report field edit, so clamping a field's length here caps the string that
+// gets replicated and saved to the UI's own maximum, keeping a pasted overflow
+// from bloating the report payload. The report bonus can no longer fake
+// cleanliness (the milestone probe ignores it, see VCGame_Archipelago's
+// PublishCleanliness); these clamps are payload hygiene, not the anti-cheese.
+// Installed through the game mode's PlayerReplicationInfoClass.
 class VCPlayerReplicationInfo_Archipelago extends VCPlayerReplicationInfo;
 
 // Seconds between deny messages, so panel click spam does not flood the HUD.
@@ -13,17 +16,17 @@ var float LastDenyMessageTime;
 // The incident report bonus scales with the length of five text fields:
 // ProcessIncidentReports adds len(field)/divisor to the penalty reduction,
 // and the Union ID field's divisor is small enough that each character drops
-// the mess penalty by a full point. The report UI caps these fields, but a
-// paste bypasses the cap, so a huge paste spikes live cleanliness (the mod
-// reads it a full scan before the field snaps back). Every field edit reaches
-// the authoritative store through one of two paths on this PRI: a co-op guest
-// sends through the ServerReceive RPCs, while a standalone player and a co-op
-// host's own edits drain through the ClientReceive functions (the game's
-// pending-changes flush picks the path by net mode). All four clamp the value
-// to the field's own UI limit before storing, so the scorer and the live
-// probe never see an oversized field. ValueId to limit matches the report
-// form's MaxCharacters; the other value ids are numeric fields whose bonuses
-// are ratio-clamped and cannot be inflated this way.
+// the mess penalty by a full point. Even at the UI's own caps that hands out
+// far too much cleanliness for free, so the milestone probe ignores the whole
+// report bonus (VCGame_Archipelago's PublishCleanliness adds ReportsPenalty
+// back). These clamps only cap the string that gets replicated and saved: a
+// paste bypasses the UI cap, and every field edit reaches the store through
+// one of two paths on this PRI (a co-op guest sends through the ServerReceive
+// RPCs, while a standalone player and a co-op host's own edits drain through
+// the ClientReceive functions, the game's pending-changes flush picking the
+// path by net mode), so all four truncate to the field's own UI limit before
+// storing. ValueId to limit matches the report form's MaxCharacters; the
+// other value ids are numeric fields left unchanged.
 const ReportFieldWorkMethod  = 2;
 const ReportFieldPlayerText  = 3;
 const ReportFieldPeerText    = 9;
@@ -68,8 +71,8 @@ reliable server function ServerReceiveIncidentReportValue(byte ValueId, coerce s
 }
 
 // Truncates a report field to its UI character limit, so a pasted overflow
-// cannot inflate the length-based report bonus past its intended maximum.
-// Non-text value ids pass through unchanged.
+// cannot bloat the string that gets replicated and saved. Non-text value ids
+// pass through unchanged.
 function string ClampReportValue(byte ValueId, string Value)
 {
     local int Limit;
