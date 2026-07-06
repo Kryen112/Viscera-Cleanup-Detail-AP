@@ -182,12 +182,13 @@ event InitGame(string Options, out string ErrorMessage)
 }
 
 // The GRI exists by now (the base spawns it before this) and no janitor has
-// spawned yet, so publishing the boots flag here means the pawn subclass
-// refuses foot blood from the very first step, with no first-poll gap.
+// spawned yet, so publishing the boots and mop flags here means the pawn and
+// mop subclasses suppress from the very first step, with no first-poll gap.
 event PostBeginPlay()
 {
     super.PostBeginPlay();
     PublishSqueakyBootsFlag();
+    PublishSelfCleaningMopFlag();
 }
 
 // Grants the stock default inventory, then swaps the stock hands for the
@@ -198,6 +199,7 @@ function AddDefaultInventory(Pawn PlayerPawn)
 {
     super.AddDefaultInventory(PlayerPawn);
     SwapInHandsSubclass(PlayerPawn);
+    SwapInMopSubclass(PlayerPawn);
     if (VCPawn(PlayerPawn) != None)
         ApplyPawnInventoryLocks(VCPawn(PlayerPawn), CurrentToolsMask());
 }
@@ -225,6 +227,34 @@ function SwapInHandsSubclass(Pawn PlayerPawn)
     PlayerPawn.InvManager.RemoveFromInventory(StockHands);
     StockHands.Destroy();
     PlayerPawn.CreateInventory(class'VCWeap_Hands_Archipelago', !bWasActive);
+}
+
+// Swaps the stock mop for the Self-Cleaning Mop subclass, so a self-cleaning
+// level holds saturation at zero at its source. Mirrors SwapInHandsSubclass:
+// only the exact stock class is swapped, so a map with its own mop keeps it,
+// and the subclass behaves exactly like the stock mop unless the level's
+// self-cleaning flag is set.
+function SwapInMopSubclass(Pawn PlayerPawn)
+{
+    local VCWeap_Mop Candidate, StockMop;
+    local bool bWasActive;
+
+    if (PlayerPawn == None || PlayerPawn.InvManager == None)
+        return;
+    foreach PlayerPawn.InvManager.InventoryActors(class'VCWeap_Mop', Candidate)
+    {
+        if (Candidate.Class == class'VCWeap_Mop')
+        {
+            StockMop = Candidate;
+            break;
+        }
+    }
+    if (StockMop == None)
+        return;
+    bWasActive = (PlayerPawn.Weapon == StockMop);
+    PlayerPawn.InvManager.RemoveFromInventory(StockMop);
+    StockMop.Destroy();
+    PlayerPawn.CreateInventory(class'VCWeap_Mop_Archipelago', !bWasActive);
 }
 
 // Reads the client-written unlocked set (Saves\VCArchipelagoGrants.sav, fresh via
@@ -603,16 +633,13 @@ function bool IsSelfCleaningMap(string MapName)
     return InStr("," $ GrantsFile.SelfCleaningMaps $ ",", "," $ MapName $ ",") != -1;
 }
 
-// Pins every janitor's mop saturation to zero on a Self-Cleaning Mop level, so
-// the mop never fills, never paints mess, never drips, and never needs a
-// bucket rinse. The server owns and replicates MopSaturation, so zeroing on
-// the host reaches co-op guests. The self-cleaning flag is constant per level,
-// read once and cached.
-function PollSelfCleaningMop()
+// Reads the level's self-cleaning state (once, cached) and publishes it to the
+// GRI, so the mop weapon subclass sees it. Called from PostBeginPlay before any
+// mop spawns and again each poll.
+function PublishSelfCleaningMopFlag()
 {
     local VCMapInfo MapInfo;
-    local VCPawn Janitor;
-    local VCWeap_Mop Mop;
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
 
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
     if (MapInfo != None && MapInfo.bIsOfficeLevel)
@@ -622,6 +649,22 @@ function PollSelfCleaningMop()
         bSelfCleaningMap = IsSelfCleaningMap(WorldInfo.GetMapName(true));
         bSelfCleaningMapRead = true;
     }
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None && ReplicatedInfo.bSelfCleaningMop != bSelfCleaningMap)
+        ReplicatedInfo.bSelfCleaningMop = bSelfCleaningMap;
+}
+
+// Keeps the mop clean on a Self-Cleaning Mop level, so it never fills, paints
+// mess, drips, or needs a bucket rinse. The primary stop is the mop weapon
+// subclass (VCWeap_Mop_Archipelago), which pins saturation to zero while the
+// replicated flag is set. This poll keeps the flag published and, as a fallback
+// for a map that forces its own mop past the swap, zeroes any mop's saturation.
+function PollSelfCleaningMop()
+{
+    local VCPawn Janitor;
+    local VCWeap_Mop Mop;
+
+    PublishSelfCleaningMopFlag();
     if (!bSelfCleaningMap)
         return;
     foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
@@ -1015,6 +1058,12 @@ function GrantMops()
         }
         MopClass = MapInfo.LevelInventory[0];
     }
+    // Grant the self-cleaning subclass wherever the stock mop would be created,
+    // matching the default-inventory swap, so a mid-level mop grant on a
+    // self-cleaning level is held clean at its source too. A map's own mop
+    // subclass is kept as-is.
+    if (MopClass == class'VCWeap_Mop')
+        MopClass = class'VCWeap_Mop_Archipelago';
     foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
     {
         if (Janitor.InvManager == None)

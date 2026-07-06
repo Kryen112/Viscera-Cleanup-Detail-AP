@@ -62,6 +62,12 @@ var int PresentToolsMask;
 // what counts.
 var bool bSqueakyBoots;
 
+// Self-Cleaning Mop: set when the current level holds the mop unlock, so the
+// mop weapon subclass pins its saturation to zero. The host reads it from the
+// client-written grants; the mop is server-owned and replicated, so the host
+// suppression reaches guests.
+var bool bSelfCleaningMop;
+
 // Timed trap effects for the on-screen countdown. Fixed slots because
 // dynamic arrays do not replicate; the None type marks an empty slot.
 const TimedEffectNone     = 0;
@@ -87,8 +93,8 @@ replication
     if (bNetDirty)
         CleanlinessHundredths, bCleanlinessSampled, NextMilestonePercent,
         bSpeedrunOutstanding, UnlockedToolsMask, PresentToolsMask,
-        bSqueakyBoots, TimedEffectTypes, TimedEffectRemaining,
-        TimedEffectDurations, TimedEffectCounter;
+        bSqueakyBoots, bSelfCleaningMop, TimedEffectTypes,
+        TimedEffectRemaining, TimedEffectDurations, TimedEffectCounter;
 }
 
 simulated function bool IsToolUnlocked(int ToolBit)
