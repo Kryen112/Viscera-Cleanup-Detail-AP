@@ -55,6 +55,13 @@ var int UnlockedToolsMask;
 // data, where the panel shows an all-available fallback.
 var int PresentToolsMask;
 
+// Squeaky Clean Boots: set when the current level holds the boots unlock, so
+// the janitor pawn subclass drops foot-blood accumulation before it can ever
+// stamp a print. The host reads it from the client-written grants; guests read
+// it here, and the print spawn is authority-side, so the host suppression is
+// what counts.
+var bool bSqueakyBoots;
+
 // Timed trap effects for the on-screen countdown. Fixed slots because
 // dynamic arrays do not replicate; the None type marks an empty slot.
 const TimedEffectNone     = 0;
@@ -80,8 +87,8 @@ replication
     if (bNetDirty)
         CleanlinessHundredths, bCleanlinessSampled, NextMilestonePercent,
         bSpeedrunOutstanding, UnlockedToolsMask, PresentToolsMask,
-        TimedEffectTypes, TimedEffectRemaining, TimedEffectDurations,
-        TimedEffectCounter;
+        bSqueakyBoots, TimedEffectTypes, TimedEffectRemaining,
+        TimedEffectDurations, TimedEffectCounter;
 }
 
 simulated function bool IsToolUnlocked(int ToolBit)

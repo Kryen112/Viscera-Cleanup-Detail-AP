@@ -27,8 +27,9 @@ from .collectibles import (BOB_ALTAR_MAP, BOB_NOTE_MAPS, COLLECTIBLES,
                            GATED_COLLECTIBLE_TOKENS)
 from .items import (CLEAN_MOP_ITEMS, FILLER_NAMES, ITEM_GROUPS,
                     ITEM_NAME_TO_ID, LEVEL_ACCESS_ITEMS,
-                    PROGRESSION_TOOL_ITEMS, TOOL_ITEMS, access_item_name,
-                    self_cleaning_mop_name)
+                    PROGRESSION_TOOL_ITEMS, SQUEAKY_BOOTS_ITEMS, TOOL_ITEMS,
+                    access_item_name, self_cleaning_mop_name,
+                    squeaky_boots_name)
 from .traps import TRAP_NAMES, USEFUL_NAMES
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (BOB_GATED_LOCATIONS, FIND_BOB_LOCATION,
@@ -45,12 +46,14 @@ GAME_NAME = "Viscera Cleanup Detail"
 PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(
     LEVEL_ACCESS_ITEMS) | PROGRESSION_TOOL_ITEMS
 TRAP_ITEM_NAMES: frozenset[str] = frozenset(TRAP_NAMES)
-# The quality-of-life tool unlocks and the per-level Self-Cleaning Mop
-# classify useful like the supply drops: never progression, never in logic.
+# The quality-of-life tool unlocks, the per-level Self-Cleaning Mop, and the
+# per-level Squeaky Clean Boots classify useful like the supply drops: never
+# progression, never in logic.
 USEFUL_ITEM_NAMES: frozenset[str] = (
     frozenset(USEFUL_NAMES)
     | (frozenset(TOOL_ITEMS) - PROGRESSION_TOOL_ITEMS)
-    | frozenset(CLEAN_MOP_ITEMS))
+    | frozenset(CLEAN_MOP_ITEMS)
+    | frozenset(SQUEAKY_BOOTS_ITEMS))
 
 
 def _launch_client() -> None:
@@ -295,10 +298,13 @@ class VCDWorld(World):
                     self.multiworld.itempool.append(
                         self.create_item(tool_item_name(display, key)))
                     placed += 1
-            # The Self-Cleaning Mop is always created, one per pooled level,
-            # independent of toolsanity.
+            # The Self-Cleaning Mop and the Squeaky Clean Boots are always
+            # created, one of each per pooled level, independent of toolsanity.
             self.multiworld.itempool.append(
                 self.create_item(self_cleaning_mop_name(display)))
+            placed += 1
+            self.multiworld.itempool.append(
+                self.create_item(squeaky_boots_name(display)))
             placed += 1
         active_locations = sum(
             len(self._enabled_locations_for(m)) for m in self.pooled_maps)

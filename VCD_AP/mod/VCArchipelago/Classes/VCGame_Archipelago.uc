@@ -101,6 +101,14 @@ var bool bSelfCleaningMapRead;
 var bool bSelfCleaningMap;
 const SelfCleaningMopPollInterval = 0.25;
 
+// Squeaky Clean Boots: whether the current level's janitor never tracks bloody
+// footprints, read once per level from the grants file. The same short poll
+// pins every janitor's foot blood to zero, so it never reaches the one-unit
+// threshold a footstep needs to stamp a print.
+var bool bSqueakyBootsMapRead;
+var bool bSqueakyBootsMap;
+const SqueakyBootsPollInterval = 0.25;
+
 // Original machine tuning cached at first lock, restored on unlock, because
 // mappers tune these per instance and a blanket default would clobber that.
 struct BinDispensorLockInfo
@@ -161,13 +169,25 @@ event InitGame(string Options, out string ErrorMessage)
     bPresentToolsMaskRead = false;
     bSelfCleaningMapRead = false;
     bSelfCleaningMap = false;
+    bSqueakyBootsMapRead = false;
+    bSqueakyBootsMap = false;
     AppliedToolsMask = class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
     SetTimer(1.0, true, 'PublishCleanliness');
     SetTimer(5.0, true, 'PollTraps');
     SetTimer(1.0, true, 'PollMilestones');
     SetTimer(1.0, true, 'EnforceToolLocks');
     SetTimer(SelfCleaningMopPollInterval, true, 'PollSelfCleaningMop');
+    SetTimer(SqueakyBootsPollInterval, true, 'PollSqueakyBoots');
     EnforceLevelGate();
+}
+
+// The GRI exists by now (the base spawns it before this) and no janitor has
+// spawned yet, so publishing the boots flag here means the pawn subclass
+// refuses foot blood from the very first step, with no first-poll gap.
+event PostBeginPlay()
+{
+    super.PostBeginPlay();
+    PublishSqueakyBootsFlag();
 }
 
 // Grants the stock default inventory, then swaps the stock hands for the
@@ -279,6 +299,7 @@ function BounceLockedLevel()
     ClearTimer('PollMilestones');
     ClearTimer('EnforceToolLocks');
     ClearTimer('PollSelfCleaningMop');
+    ClearTimer('PollSqueakyBoots');
 
     // The trophy handler is persistent (it lives on the viewport client and
     // survives travel) and holds a reference to this level's punchout handler.
@@ -614,6 +635,66 @@ function PollSelfCleaningMop()
                 Mop.MopSaturation = 0.0;
                 Mop.UpdateMopSaturationEffects();
             }
+        }
+    }
+}
+
+// Reads whether the current level's janitor never tracks bloody footprints,
+// from the client-written grants file. A map absent from the list tracks
+// prints normally (absent means off).
+function bool IsSqueakyBootsMap(string MapName)
+{
+    if (GrantsFile == None)
+        GrantsFile = new class'VCArchipelagoGrants';
+    if (!class'Engine'.static.BasicLoadObject(GrantsFile, "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1)
+        || GrantsFile.SqueakyBootsMaps == "")
+    {
+        return false;
+    }
+    return InStr("," $ GrantsFile.SqueakyBootsMaps $ ",", "," $ MapName $ ",") != -1;
+}
+
+// Reads the level's boots state (once, cached) and publishes it to the GRI, so
+// the pawn subclass sees it. Called from PostBeginPlay before any janitor
+// spawns, so foot blood is refused from the first step, and again each poll.
+function PublishSqueakyBootsFlag()
+{
+    local VCMapInfo MapInfo;
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.bIsOfficeLevel)
+        return;
+    if (!bSqueakyBootsMapRead)
+    {
+        bSqueakyBootsMap = IsSqueakyBootsMap(WorldInfo.GetMapName(true));
+        bSqueakyBootsMapRead = true;
+    }
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None && ReplicatedInfo.bSqueakyBoots != bSqueakyBootsMap)
+        ReplicatedInfo.bSqueakyBoots = bSqueakyBootsMap;
+}
+
+// Suppresses bloody footprints on a Squeaky Clean Boots level. The primary stop
+// is the pawn subclass (VCPawn_Archipelago), which refuses foot-blood
+// accumulation while the replicated boots flag is set, so FootBlood never
+// reaches the one-unit print threshold (this also kills the blood-step sound
+// and the footstep achievement, all gated on the same threshold). This poll
+// keeps the flag published and, as a fallback for maps that force their own
+// pawn class past DefaultPawnClass, zeroes any foot blood a janitor carries.
+function PollSqueakyBoots()
+{
+    local VCPawn Janitor;
+
+    PublishSqueakyBootsFlag();
+    if (!bSqueakyBootsMap)
+        return;
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+    {
+        if (Janitor.FootBlood != 0.0)
+        {
+            Janitor.FootBlood = 0.0;
+            Janitor.UpdateFootBloodEffects();
         }
     }
 }
@@ -1707,4 +1788,7 @@ defaultproperties
     GameReplicationInfoClass=Class'VCArchipelago.VCGameReplicationInfo_Archipelago'
     PlayerControllerClass=Class'VCArchipelago.VCPlayerController_Archipelago'
     PlayerReplicationInfoClass=Class'VCArchipelago.VCPlayerReplicationInfo_Archipelago'
+    // The stock janitor pawn, subclassed only to suppress bloody footprints on
+    // a Squeaky Clean Boots level.
+    DefaultPawnClass=Class'VCArchipelago.VCPawn_Archipelago'
 }

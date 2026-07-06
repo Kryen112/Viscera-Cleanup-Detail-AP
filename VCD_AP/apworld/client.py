@@ -30,7 +30,7 @@ from . import VCDWorld, grants, installer, messages, milestones, toolsanity, tra
 from .saves import SaveManager, seed_folder_name
 from .collectibles import BOB_NOTE_MAP_BY_TOKEN, COLLECTIBLE_BY_TOKEN
 from .items import (ITEM_NAME_TO_ID, access_item_name,
-                    self_cleaning_mop_name)
+                    self_cleaning_mop_name, squeaky_boots_name)
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (COLLECTIBLE_LOCATION_NAMES, DIGSITE_GATES_LOCATION,
                         FIND_BOB_LOCATION, LOCATION_NAME_TO_ID, bob_note_name,
@@ -69,6 +69,13 @@ TOOL_ID_TO_MAP_KEY: dict[int, "tuple[str, str]"] = {
 # granted mop unlock keeps its level's mop from dirtying.
 CLEAN_MOP_ID_TO_MAP: dict[int, str] = {
     ITEM_NAME_TO_ID[self_cleaning_mop_name(display)]: map_name
+    for map_name, display, _title in LEVELS
+}
+
+# Received-item id to internal map name for the Squeaky Clean Boots, so a
+# granted boots unlock keeps its level's janitor from tracking bloody prints.
+SQUEAKY_BOOTS_ID_TO_MAP: dict[int, str] = {
+    ITEM_NAME_TO_ID[squeaky_boots_name(display)]: map_name
     for map_name, display, _title in LEVELS
 }
 
@@ -315,6 +322,8 @@ class VCDContext(CommonContext):
         self.unlocked_tools: "dict[str, set[str]]" = {}
         # Maps where the janitor holds the Self-Cleaning Mop unlock.
         self.clean_mop_maps: set[str] = set()
+        # Maps where the janitor holds the Squeaky Clean Boots unlock.
+        self.squeaky_boots_maps: set[str] = set()
         self.last_grants_written: "str | None" = None
         self.last_traps_written: "str | None" = None
         # Items already held when this session connected; traps at or below
@@ -585,6 +594,10 @@ class VCDContext(CommonContext):
             if clean_mop_map is not None and clean_mop_map not in self.clean_mop_maps:
                 self.clean_mop_maps.add(clean_mop_map)
                 changed = True
+            boots_map = SQUEAKY_BOOTS_ID_TO_MAP.get(item.item)
+            if boots_map is not None and boots_map not in self.squeaky_boots_maps:
+                self.squeaky_boots_maps.add(boots_map)
+                changed = True
         if changed:
             self.write_grants_if_changed()
         self.write_traps_if_changed()
@@ -598,6 +611,7 @@ class VCDContext(CommonContext):
         self.pooled_maps = list(slot_data.get("pooled_maps", []))
         self.unlocked_tools = {}
         self.clean_mop_maps = set()
+        self.squeaky_boots_maps = set()
         self._set_goal(slot_data)
         self.saves_ready = False
         self.trap_baseline = None
@@ -725,14 +739,16 @@ class VCDContext(CommonContext):
         tools_string = self.unlocked_tools_string()
         present_string = self.present_tools_string()
         clean_mop_ordered = [m for m, _, _ in LEVELS if m in self.clean_mop_maps]
+        boots_ordered = [m for m, _, _ in LEVELS if m in self.squeaky_boots_maps]
         payload = ("|".join([",".join(ordered), tools_string, present_string,
-                             ",".join(clean_mop_ordered)]))
+                             ",".join(clean_mop_ordered),
+                             ",".join(boots_ordered)]))
         if payload == self.last_grants_written:
             return
         try:
             grants.write(self.install_dir / "Saves" / "VCArchipelagoGrants.sav",
                          ordered, tools_string, present_string,
-                         clean_mop_ordered)
+                         clean_mop_ordered, boots_ordered)
         except OSError as error:
             client_logger.error(f"Could not write the grants file: {error}")
             return

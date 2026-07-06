@@ -70,20 +70,22 @@ class TestGrantsCodec(unittest.TestCase):
             grants.write(path, ["VC_Hall", "VC_Cryo", "VC_Hall"],
                          "VC_Hall:Hands Welder,VC_Cryo:",
                          "VC_Hall:Hands Welder Incinerator,VC_Cryo:Hands",
-                         ["VC_Hall", "VC_Cryo"])
+                         ["VC_Hall", "VC_Cryo"], ["VC_Cryo"])
             properties = _read_properties(path.read_bytes())
         self.assertEqual(properties, {
             "UnlockedMaps": "VC_Hall,VC_Cryo",
             "UnlockedTools": "VC_Hall:Hands Welder,VC_Cryo:",
             "PresentTools": "VC_Hall:Hands Welder Incinerator,VC_Cryo:Hands",
             "SelfCleaningMaps": "VC_Hall,VC_Cryo",
+            "SqueakyBootsMaps": "VC_Cryo",
         })
 
     def test_write_defaults_to_toolsanity_off(self) -> None:
         # Empty UnlockedTools and PresentTools are the toolsanity-off
         # contract: the mod treats every tool as unlocked and the HUD panel
         # shows the all-available fallback. Empty SelfCleaningMaps means the
-        # mop dirties normally everywhere.
+        # mop dirties normally everywhere; empty SqueakyBootsMaps means the
+        # janitor tracks bloody footprints everywhere.
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "VCArchipelagoGrants.sav"
             grants.write(path, ["VC_Hall"])
@@ -91,6 +93,7 @@ class TestGrantsCodec(unittest.TestCase):
         self.assertEqual(properties["UnlockedTools"], "")
         self.assertEqual(properties["PresentTools"], "")
         self.assertEqual(properties["SelfCleaningMaps"], "")
+        self.assertEqual(properties["SqueakyBootsMaps"], "")
 
 
 if __name__ == "__main__":

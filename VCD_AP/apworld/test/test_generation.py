@@ -107,6 +107,28 @@ class TestDefault(VCDTestBase):
         self.assertNotIn(self_cleaning_mop_name("Waste Disposal"), kit)
         self.assertTrue(location.can_reach(self.state_with(access + kit)))
 
+    def test_squeaky_boots_is_useful_one_per_pooled_level(self):
+        from BaseClasses import ItemClassification
+        from ..items import squeaky_boots_name
+        item = self.world.create_item(squeaky_boots_name("Overgrowth"))
+        self.assertEqual(item.classification, ItemClassification.useful)
+        pool = self.created_item_names()
+        for map_name in self.world.pooled_maps:
+            self.assertEqual(
+                pool.count(squeaky_boots_name(DISPLAY_BY_MAP[map_name])), 1,
+                map_name)
+
+    def test_squeaky_boots_never_gates_a_location(self):
+        # A useful item is never required, so no location's rule references it.
+        from ..items import squeaky_boots_name
+        access = [access_item_name("Waste Disposal")]
+        kit = list(self.world._full_kit_items("VC_Sewer"))
+        location = self.multiworld.get_location(
+            employee_of_the_month_name("Waste Disposal"), self.player)
+        # The full kit alone reaches it; the boots item is not part of the kit.
+        self.assertNotIn(squeaky_boots_name("Waste Disposal"), kit)
+        self.assertTrue(location.can_reach(self.state_with(access + kit)))
+
     def test_low_rungs_open_with_access_high_rungs_need_the_kit(self):
         # Waste Disposal is 73 percent moppable, so mid rungs open with the
         # starting kit but the top of the ladder waits for the tools.

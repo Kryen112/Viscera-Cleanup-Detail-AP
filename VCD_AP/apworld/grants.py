@@ -78,7 +78,8 @@ def write_atomic(path: Path, data: bytes) -> None:
 
 def write(path: Path, map_names: Iterable[str],
           unlocked_tools: str = "", present_tools: str = "",
-          self_cleaning_maps: Iterable[str] = ()) -> None:
+          self_cleaning_maps: Iterable[str] = (),
+          squeaky_boots_maps: Iterable[str] = ()) -> None:
     """Write the grants file atomically. ``unlocked_tools`` is the toolsanity
     string (``"VC_Hall:Hands Welder,VC_Cryo:"``, keys space-joined per map);
     empty means toolsanity off, and the mod treats every tool as unlocked.
@@ -86,10 +87,13 @@ def write(path: Path, map_names: Iterable[str],
     has (the superset the HUD panel colors as locked or unlocked); empty means
     toolsanity off. ``self_cleaning_maps`` is the comma-joined internal map
     names where the janitor holds the Self-Cleaning Mop; a map absent means the
-    mop dirties normally there (absent means off, like ``UnlockedMaps``)."""
+    mop dirties normally there (absent means off, like ``UnlockedMaps``).
+    ``squeaky_boots_maps`` is the same, for the Squeaky Clean Boots: a map
+    absent means the janitor tracks bloody footprints there normally."""
     write_atomic(path, build_object([
         ("UnlockedMaps", join_maps(map_names)),
         ("UnlockedTools", unlocked_tools),
         ("PresentTools", present_tools),
         ("SelfCleaningMaps", join_maps(self_cleaning_maps)),
+        ("SqueakyBootsMaps", join_maps(squeaky_boots_maps)),
     ]))

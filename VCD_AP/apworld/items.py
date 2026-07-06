@@ -54,6 +54,18 @@ CLEAN_MOP_ITEMS: list[str] = [
     self_cleaning_mop_name(_display) for _, _display, _ in LEVELS
 ]
 
+
+def squeaky_boots_name(display_name: str) -> str:
+    return f"{display_name} - Squeaky Clean Boots"
+
+
+# One per level in table order: a useful unlock that keeps the janitor from
+# ever tracking bloody footprints on that level. Always created, independent of
+# toolsanity.
+SQUEAKY_BOOTS_ITEMS: list[str] = [
+    squeaky_boots_name(_display) for _, _display, _ in LEVELS
+]
+
 # Ids are assigned in list order. The tail below is frozen: a name added later
 # appends at the end no matter which group it belongs to, so every existing id
 # stays stable even for a seed generated with an older version.
@@ -65,10 +77,11 @@ _ID_ORDERED_NAMES: list[str] = LEVEL_ACCESS_ITEMS + FILLER_NAMES + [
     "Clean Water Bucket",
     "Empty Bin",
     "Speedup Trap",
-] + TOOL_ITEMS + CLEAN_MOP_ITEMS
+] + TOOL_ITEMS + CLEAN_MOP_ITEMS + SQUEAKY_BOOTS_ITEMS
 assert sorted(_ID_ORDERED_NAMES) == sorted(
     LEVEL_ACCESS_ITEMS + FILLER_NAMES + RETIRED_NAMES
-    + TRAP_NAMES + USEFUL_NAMES + TOOL_ITEMS + CLEAN_MOP_ITEMS)
+    + TRAP_NAMES + USEFUL_NAMES + TOOL_ITEMS + CLEAN_MOP_ITEMS
+    + SQUEAKY_BOOTS_ITEMS)
 
 ITEM_NAME_TO_ID: dict[str, int] = {}
 _next = ITEM_ID_BASE
@@ -84,4 +97,5 @@ ITEM_GROUPS: dict[str, list[str]] = {
     "Useful": list(USEFUL_NAMES),
     "Tools": list(TOOL_ITEMS),
     "Self-Cleaning Mop": list(CLEAN_MOP_ITEMS),
+    "Squeaky Clean Boots": list(SQUEAKY_BOOTS_ITEMS),
 }

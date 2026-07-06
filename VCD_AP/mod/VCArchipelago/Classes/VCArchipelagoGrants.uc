@@ -27,3 +27,8 @@ var string PresentTools;
 // Mop, so that level's mop never dirties. A map absent means the mop dirties
 // normally there (absent means off, like UnlockedMaps).
 var string SelfCleaningMaps;
+
+// Comma-separated internal map names where the janitor holds the Squeaky Clean
+// Boots, so that level's janitor never tracks bloody footprints. A map absent
+// means the janitor tracks prints normally there (absent means off).
+var string SqueakyBootsMaps;
