@@ -6,21 +6,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from Options import (Choice, NamedRange, OptionSet, PerGameCommonOptions,
-                     Range, StartInventoryPool, Toggle)
+from Options import (Choice, DefaultOnToggle, NamedRange, OptionSet,
+                     PerGameCommonOptions, Range, StartInventoryPool, Toggle)
 
 from .levels import LEVELS
 
 
 class MilestoneStep(Choice):
-    """How finely each level's cleanliness is checked. 5 percent gives 20 checks
-    per level (a large, filler-heavy world); 25 percent gives 4. The 100 percent
-    rung (Employee of the Month) exists at every step."""
+    """How finely each level's cleanliness is checked. 5 percent gives 20
+    checks per level; 1 percent gives 100 (a very large world, more still
+    with above_and_beyond). The 100 percent rung (Employee of the Month)
+    exists at every step, and steps finer than 5 keep the 5 percent step's
+    ladder ceiling and logic margins, so no check gets closer to a level's
+    known maximum than at the 5 percent step."""
     display_name = "Milestone step"
+    option_1 = 1
+    option_2 = 2
     option_5 = 5
     option_10 = 10
-    option_20 = 20
-    option_25 = 25
     default = 5
 
 
@@ -37,6 +40,25 @@ class Speedrunsanity(Toggle):
     within 75 percent of the level's par time. Off by default, so seeds carry no
     speed pressure unless asked for."""
     display_name = "Speedrunsanity"
+
+
+class Toolsanity(DefaultOnToggle):
+    """Lock each level's tools and machines behind per-level items: hands
+    (carrying), the laser welder, the shovel, the J-HARM lift, the vendor, and
+    the incinerator become progression, while the sniffer, broom, and bin
+    dispenser become useful unlocks. Every level starts with just the mop and
+    the Slosh-O-Matic, and higher cleanliness milestones need the tools that
+    can physically reach them. On by default."""
+    display_name = "Toolsanity"
+
+
+class RandomStartingKit(Toggle):
+    """With toolsanity on, each level independently rolls its free starting
+    pair: mop plus Slosh-O-Matic, or hands plus incinerator (the displaced
+    pair becomes that level's items). A hands start is the hard way: debris
+    can burn, but blood waits for the mop. Off by default (every level starts
+    mop and Slosh-O-Matic)."""
+    display_name = "Random starting kit"
 
 
 class TrapPercentage(Range):
@@ -132,6 +154,8 @@ class VCDOptions(PerGameCommonOptions):
     milestone_step: MilestoneStep
     above_and_beyond: AboveAndBeyond
     speedrunsanity: Speedrunsanity
+    toolsanity: Toolsanity
+    random_starting_kit: RandomStartingKit
     trap_percentage: TrapPercentage
     useful_percentage: UsefulPercentage
     goal: Goal

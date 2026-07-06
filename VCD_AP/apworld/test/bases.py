@@ -46,6 +46,17 @@ class VCDTestBase(WorldTestBase):
             state.collect(self.world.create_item(name), prevent_sweep=True)
         return state
 
+    def created_item_names(self) -> list[str]:
+        """Every item the seed created for the player: the itempool, the
+        precollected starting items, and any items locked into locations by
+        pre_fill (a started level's keystone tool)."""
+        names = [item.name for item in self.multiworld.itempool]
+        names += [item.name
+                  for item in self.multiworld.precollected_items[self.player]]
+        names += [loc.item.name for loc in self.multiworld.get_locations(
+            self.player) if loc.item is not None and loc.locked]
+        return names
+
     def assert_location_exists(self, name: str) -> None:
         try:
             self.world.get_location(name)

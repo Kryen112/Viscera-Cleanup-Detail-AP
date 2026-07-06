@@ -1,10 +1,12 @@
 """Locations. Per level, the static full set is:
 - a Punch Out check (finishing the level, always enabled),
-- a milestone ladder at every 5 percent (`Clean 5%` .. `Clean 95%`), each enabled
-  only when it is a multiple of the seed's milestone step,
+- a milestone ladder at every 1 percent (`Clean 1%` .. `Clean 99%`), each
+  enabled only when it is a multiple of the seed's milestone step,
 - an Employee of the Month check (the 100 percent rung, enabled for every step),
-- an over-100 ladder topping out a full step under the level's known maximum,
-  enabled by the above_and_beyond option,
+- an over-100 ladder enabled by the above_and_beyond option, whose ceiling is
+  computed on the 5 percent grid (a full 5-grid step under the level's known
+  maximum, or coarser for coarser steps), so a fine step never trusts the
+  community-measured maxima more than the 5 percent step does,
 - a Speedrun check (enabled by the speedrunsanity option),
 - the level's collectibles and Bob note, where it has them (always enabled),
 - and on the Digsite, the two Bob events (gates opened, Bob found).
@@ -22,21 +24,39 @@ from .levels import DISPLAY_BY_MAP, LEVELS, MAX_CLEAN_PERCENT_BY_MAP
 
 LOCATION_ID_BASE = 0x5643_1_0000  # kept well clear of the item id range
 
-MILESTONE_STEP_CHOICES: tuple[int, ...] = (5, 10, 20, 25)
-CLEAN_RUNGS: list[int] = list(range(5, 100, 5))  # 5..95; 100 is Employee of the Month
+MILESTONE_STEP_CHOICES: tuple[int, ...] = (1, 2, 5, 10)
+CLEAN_RUNGS: list[int] = list(range(5, 100, 5))  # the original 5-grid ladder
+# The fine 1-grid rungs, kept separate so every original id stays frozen.
+FINE_CLEAN_RUNGS: list[int] = [p for p in range(1, 100) if p % 5 != 0]
+
+# The known maxima are community measurements, so ceilings never trust them
+# on a grid finer than the 5 percent step they were validated against.
+CEILING_STEP_FLOOR = 5
 
 
 def top_rung(map_name: str, step: int) -> int:
     """The highest above_and_beyond rung a level generates at a step: the
     level's known maximum floored to the step, minus one more step, so a small
-    measurement error cannot strand the top check. At or below 100 the level
-    gets no over-100 rungs at that step."""
-    return int(MAX_CLEAN_PERCENT_BY_MAP[map_name] // step) * step - step
+    measurement error cannot strand the top check. Steps finer than 5 keep the
+    5-grid ceiling. At or below 100 the level gets no over-100 rungs."""
+    ceiling_step = max(step, CEILING_STEP_FLOOR)
+    return (int(MAX_CLEAN_PERCENT_BY_MAP[map_name] // ceiling_step)
+            * ceiling_step - ceiling_step)
 
 
 def over_100_rungs(map_name: str) -> list[int]:
-    """Every over-100 rung the datapackage holds for a level (the finest step)."""
+    """Every over-100 rung the datapackage holds for a level (the finest
+    step): the original 5-grid rungs first, then the finer fill, mirroring
+    the frozen id order."""
+    return _over_100_original(map_name) + _over_100_fine(map_name)
+
+
+def _over_100_original(map_name: str) -> list[int]:
     return list(range(105, top_rung(map_name, 5) + 1, 5))
+
+
+def _over_100_fine(map_name: str) -> list[int]:
+    return [p for p in range(101, top_rung(map_name, 1) + 1) if p % 5 != 0]
 
 
 GROUP_PUNCH_OUT = "PunchOut"
@@ -109,7 +129,16 @@ for _map, _token in BOB_NOTES:
 _add(DIGSITE_GATES_LOCATION, BOB_ALTAR_MAP, GROUP_BOB_EVENT)
 _add(FIND_BOB_LOCATION, BOB_ALTAR_MAP, GROUP_BOB_EVENT)
 for _map, _display, _title in LEVELS:
-    for _p in over_100_rungs(_map):
+    for _p in _over_100_original(_map):
+        _add(milestone_name(_display, _p), _map, GROUP_MILESTONE, _p)
+
+# The fine 1-grid rungs (steps 1 and 2) appended after everything the 5-grid
+# datapackage held, so every earlier id keeps its frozen value.
+for _map, _display, _title in LEVELS:
+    for _p in FINE_CLEAN_RUNGS:
+        _add(milestone_name(_display, _p), _map, GROUP_MILESTONE, _p)
+for _map, _display, _title in LEVELS:
+    for _p in _over_100_fine(_map):
         _add(milestone_name(_display, _p), _map, GROUP_MILESTONE, _p)
 
 COLLECTIBLE_LOCATION_NAMES: list[str] = [

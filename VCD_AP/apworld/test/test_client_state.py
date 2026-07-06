@@ -251,6 +251,50 @@ class TestPrintJsonRelevant(unittest.TestCase):
         self.assertTrue(print_json_relevant(cheat, _concerns_slot_one, 1))
 
 
+class TestUnlockedToolsString(unittest.TestCase):
+    """The toolsanity half of the grants contract: the client composes the
+    per-map key lists the mod parses."""
+
+    @staticmethod
+    def _tools_context(toolsanity: bool) -> VCDContext:
+        ctx = VCDContext.__new__(VCDContext)
+        ctx.toolsanity = toolsanity
+        ctx.hard_start_maps = {"VC_Cryo"}
+        ctx.pooled_maps = ["VC_Hall", "VC_Cryo"]
+        ctx.unlocked_tools = {"VC_Hall": {"Welder", "Hands"}}
+        return ctx
+
+    def test_free_pair_plus_received_keys_in_key_order(self) -> None:
+        # Levels list in table order; the hard-start level's free pair is
+        # hands and incinerator, the normal level folds in its received keys.
+        self.assertEqual(
+            self._tools_context(True).unlocked_tools_string(),
+            "VC_Cryo:Hands Incinerator,VC_Hall:Hands Welder Mop SloshOMatic")
+
+    def test_toolsanity_off_writes_an_empty_string(self) -> None:
+        self.assertEqual(self._tools_context(False).unlocked_tools_string(), "")
+
+    def test_unpooled_maps_stay_absent(self) -> None:
+        ctx = self._tools_context(True)
+        ctx.unlocked_tools["VC_Sewer"] = {"Hands"}
+        self.assertNotIn("VC_Sewer", ctx.unlocked_tools_string())
+
+    def test_present_tools_is_a_superset_in_key_order(self) -> None:
+        from .. import toolsanity
+        ctx = self._tools_context(True)
+        present = ctx.present_tools_string()
+        # Each pooled map lists every tool it has, in the mod's key order.
+        for map_name in ("VC_Hall", "VC_Cryo"):
+            expected = " ".join(toolsanity.tools_present(map_name))
+            self.assertIn(f"{map_name}:{expected}", present)
+        # Present is a superset of unlocked for the same map.
+        self.assertIn("Hands", present)
+        self.assertIn("Welder", present)
+
+    def test_present_tools_off_is_empty(self) -> None:
+        self.assertEqual(self._tools_context(False).present_tools_string(), "")
+
+
 def _feed_context(install_dir: "Path | None") -> VCDContext:
     """A context carrying only the toast-feed state, skipping __init__ so no
     framework plumbing is needed."""

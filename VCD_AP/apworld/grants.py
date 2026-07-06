@@ -51,14 +51,19 @@ def build(unlocked_maps: str) -> bytes:
     return build_object([("UnlockedMaps", unlocked_maps)])
 
 
-def build_from_maps(map_names: Iterable[str]) -> bytes:
-    """Serialize an iterable of internal map names, joined with commas. Order is
-    preserved and duplicates are dropped so the file is stable across writes."""
+def join_maps(map_names: Iterable[str]) -> str:
+    """Comma-join internal map names. Order is preserved and duplicates are
+    dropped so the file is stable across writes."""
     seen: list[str] = []
     for name in map_names:
         if name and name not in seen:
             seen.append(name)
-    return build(",".join(seen))
+    return ",".join(seen)
+
+
+def build_from_maps(map_names: Iterable[str]) -> bytes:
+    """Serialize an iterable of internal map names into the .sav byte layout."""
+    return build(join_maps(map_names))
 
 
 def write_atomic(path: Path, data: bytes) -> None:
@@ -71,6 +76,20 @@ def write_atomic(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
-def write(path: Path, map_names: Iterable[str]) -> None:
-    """Write the grants file atomically."""
-    write_atomic(path, build_from_maps(map_names))
+def write(path: Path, map_names: Iterable[str],
+          unlocked_tools: str = "", present_tools: str = "",
+          self_cleaning_maps: Iterable[str] = ()) -> None:
+    """Write the grants file atomically. ``unlocked_tools`` is the toolsanity
+    string (``"VC_Hall:Hands Welder,VC_Cryo:"``, keys space-joined per map);
+    empty means toolsanity off, and the mod treats every tool as unlocked.
+    ``present_tools`` is the same per-map format listing every tool the level
+    has (the superset the HUD panel colors as locked or unlocked); empty means
+    toolsanity off. ``self_cleaning_maps`` is the comma-joined internal map
+    names where the janitor holds the Self-Cleaning Mop; a map absent means the
+    mop dirties normally there (absent means off, like ``UnlockedMaps``)."""
+    write_atomic(path, build_object([
+        ("UnlockedMaps", join_maps(map_names)),
+        ("UnlockedTools", unlocked_tools),
+        ("PresentTools", present_tools),
+        ("SelfCleaningMaps", join_maps(self_cleaning_maps)),
+    ]))

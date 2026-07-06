@@ -56,14 +56,19 @@ Before ending any turn that changed the apworld, the mod, or the client, check
 whether the docs still match and update them in the same turn, unprompted. The
 reviewer treats a missed update as a blocker.
 
-- Player docs live in `VCD_AP/docs`: `PLAYER_SETUP.md` (install and first run)
-  and `RELEASE_NOTES.md` (a dated build log, newest entry first).
+- Player docs live in `VCD_AP/docs`: `PLAYER_SETUP.md` (install and first
+  run), `RELEASE_NOTES.md` (the Discord-sized summary of the LATEST build
+  only, hard cap 2000 characters INCLUDING the GitHub release link it must
+  end with), and `RELEASE_NOTES_FULL.md` (the unlimited dated build log,
+  newest entry first, used as the GitHub release body).
 - A docs pass is required for every player-visible change: options and their
   defaults, checks and goals, client commands and messages, the install and
   connect flow, save isolation, traps and supply drops. Internal refactors
   need none.
-- `RELEASE_NOTES.md` gets a new dated entry for a player-visible change, or
-  extends the entry for today's date if one exists.
+- A player-visible change adds a dated entry to `RELEASE_NOTES_FULL.md` (or
+  extends today's), and rewrites `RELEASE_NOTES.md` to summarize the latest
+  build within its 2000-character cap. Verify the character count after
+  editing it.
 - After any options change, rebuild the apworld and regenerate the options
   template into `Viscera Cleanup Detail.template.yaml` at the repo root. Never
   write to `Viscera Cleanup Detail.yaml`; it holds the player's own settings.
@@ -76,29 +81,47 @@ The reviewer treats a violation of any of these as a correctness blocker.
 
 - Only progression items are guaranteed reachable by the generator. Logic must
   not gate access on a non-progression item.
-- The 26 level-access unlock items are progression. Every per-level check
-  (milestone ladder, speedrun, punch-out, that level's collectibles and Bob
-  note) requires only that level's access item: a single predicate
-  `has(Access(level))`. The ONLY exceptions are the two Digsite Bob events
-  (Open the Digsite Gates, Find Bob) and the Red Keycard collectible (it sits
-  behind those gates), which additionally require the six note-level access
-  items (the pedestal needs all nine notes; three are Office freebies).
+- The 26 level-access unlock items are progression, and so are the toolsanity
+  tool items (Hands, Laser Welder, Shovel, J-HARM, Vendor, Incinerator, plus
+  Mop and Slosh-O-Matic under the hard start). Every per-level check requires
+  that level's access item; with toolsanity off that is the whole predicate.
+- Toolsanity logic (on by default) lives entirely in `toolsanity.py` and is a
+  band model: regular milestone rungs need the toolset whose band cap clears
+  the rung with one step of slack, and everything else on a level (Employee
+  of the Month, over-100 rungs, speedrun, punch-out, collectibles, the Bob
+  note) needs the level's full progression kit. The scan table there is
+  transcribed from the mod's APScanReport run on every level; never
+  hand-guess its numbers, and never credit a band to a toolset that cannot
+  physically clear it (the welder and vendor bands also need the mop, every
+  special band needs Hands, the lift is a flat reservation). The full kit
+  always caps at the level's known-maximum usable total.
+- The Digsite gate exceptions: the two Bob events (Open the Digsite Gates,
+  Find Bob) and the Red Keycard collectible additionally require the six
+  note-level access items (the pedestal needs all nine notes; three are
+  Office freebies), plus the chain's full kits under toolsanity.
 - `completion_condition` is a solvability contract and switches on the `goal`
   option. Treat edits to it as high-risk. Named count-based traps:
   - `find_bob` resolves to the Find Bob location, whose rule carries the six
-    note levels plus the Digsite. Those access items must be progression and
-    reachable, or the goal is unsolvable.
+    note levels plus the Digsite (and their full kits under toolsanity).
+    Those items must be progression and reachable, or the goal is unsolvable.
   - `collect_collectibles` with amount N requires access to the levels that hold
     N collectibles; the amount is clamped to the 39 that exist.
 - The collectible and Bob tables in `collectibles.py` are transcribed from game
   data (map name tables, punchout handlers, `GP_Notes_Arch`); do not hand-guess
   entries. The Doom Armour and Shotgun are an Office stash, not locations.
-- Item classification lives in `create_item`: level-access items are progression,
-  trap items are `ItemClassification.trap`, useful supply items are
-  `ItemClassification.useful`, the rest is filler. No tool-gating. Traps and
-  supplies are never progression and never required by logic; the
-  `trap_percentage` (default 5) and `useful_percentage` (default 15) options
-  convert shares of filler slots, traps first.
+- Item classification lives in `create_item`: level-access and progression
+  tool items are progression, trap items are `ItemClassification.trap`,
+  useful supply items and the quality-of-life tool unlocks (Sniffer, Broom,
+  Bin Dispenser) are `ItemClassification.useful`, the rest is filler. Traps,
+  supplies, and useful tool unlocks are never progression and never required
+  by logic; the `trap_percentage` (default 5) and `useful_percentage`
+  (default 15) options convert shares of filler slots, traps first.
+- Toolsanity state travels client to mod inside the grants file as the
+  `UnlockedTools` string (`"VC_Hall:Hands Welder,VC_Cryo:"`); a map absent
+  from it means toolsanity off for that map, so old clients and
+  toolsanity-off seeds get stock behavior. Keys: Hands Welder Shovel Lift
+  Vendor Incinerator Sniffer Broom Bins Mop SloshOMatic. The client is the
+  only writer.
 - Traps and useful supply drops travel client to mod via
   `Saves\VCArchipelagoTraps.sav` (SeedTag, BaselineIndex, and a full
   "index:Type" queue keyed by received-item position). The mod stores the last

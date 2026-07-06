@@ -11,14 +11,15 @@ from Options import OptionError
 from .bases import VCDTestBase
 from ..collectibles import (BOB_NOTE_MAPS, BOB_NOTES, COLLECTIBLES,
                             GATED_COLLECTIBLE_TOKENS)
-from ..items import ITEM_NAME_TO_ID, access_item_name
+from ..items import ITEM_NAME_TO_ID, TOOL_ITEMS, access_item_name
 from ..levels import DISPLAY_BY_MAP, LEVELS, MAP_NAMES
 from ..locations import (BOB_GATED_LOCATIONS, DIGSITE_GATES_LOCATION,
                          FIND_BOB_LOCATION, LOCATION_MAP,
                          LOCATION_NAME_TO_ID, MILESTONE_PERCENT,
-                         collectible_name, milestone_enabled, milestone_name,
-                         over_100_rungs, punch_out_name, speedrun_name,
-                         top_rung)
+                         collectible_name, employee_of_the_month_name,
+                         milestone_enabled, milestone_name, over_100_rungs,
+                         punch_out_name, speedrun_name, top_rung)
+from ..toolsanity import tool_item_name
 
 
 class TestDefault(VCDTestBase):
@@ -29,13 +30,16 @@ class TestDefault(VCDTestBase):
         for _map, display, _title in LEVELS:
             self.assertNotIn(speedrun_name(display), names)
 
-    def test_bob_gated_checks_need_every_note_level_plus_the_digsite(self):
+    def test_bob_gated_checks_need_the_chain_accesses_and_full_kits(self):
         needed = [access_item_name(DISPLAY_BY_MAP[m])
                   for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
+        for m in BOB_NOTE_MAPS + ["VC_Digsite"]:
+            needed.extend(self.world._full_kit_items(m))
         gated = [DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION]
         gated += [collectible_name(DISPLAY_BY_MAP[m], c)
                   for m, t, c in COLLECTIBLES if t in GATED_COLLECTIBLE_TOKENS]
         for name in gated:
+            # Any single missing piece (the last is a Digsite tool) blocks it.
             self.assertFalse(
                 self.multiworld.get_location(name, self.player).can_reach(
                     self.state_with(needed[:-1])), name)
@@ -43,16 +47,86 @@ class TestDefault(VCDTestBase):
                 self.multiworld.get_location(name, self.player).can_reach(
                     self.state_with(needed)), name)
 
-    def test_collectibles_need_only_their_level(self):
+    def test_collectibles_need_their_level_and_its_full_kit(self):
         # Except the gate-locked ones, which the Bob-gated test covers.
         for map_name, token, collectible in COLLECTIBLES:
             if token in GATED_COLLECTIBLE_TOKENS:
                 continue
             display = DISPLAY_BY_MAP[map_name]
+            kit = list(self.world._full_kit_items(map_name))
             location = self.multiworld.get_location(
                 collectible_name(display, collectible), self.player)
+            self.assertFalse(
+                location.can_reach(self.state_with(
+                    [access_item_name(display)] + kit[:-1])), display)
             self.assertTrue(
-                location.can_reach(self.state_with([access_item_name(display)])))
+                location.can_reach(self.state_with(
+                    [access_item_name(display)] + kit)), display)
+
+    def test_tool_items_follow_presence_and_skip_the_free_pair(self):
+        pool = self.created_item_names()
+        self.assertIn(tool_item_name("Overgrowth", "Shovel"), pool)
+        self.assertNotIn(tool_item_name("Splatter Station", "Shovel"), pool)
+        self.assertIn(tool_item_name("Splatter Station", "Lift"), pool)
+        self.assertNotIn(tool_item_name("Cryogenesis", "Lift"), pool)
+        self.assertIn(tool_item_name("Cryogenesis", "Hands"), pool)
+        # The default free pair is never itemized.
+        self.assertNotIn(tool_item_name("Cryogenesis", "Mop"), pool)
+        self.assertNotIn(tool_item_name("Cryogenesis", "SloshOMatic"), pool)
+
+    def test_tool_item_classifications(self):
+        from BaseClasses import ItemClassification
+        for key in ("Hands", "Incinerator", "Welder", "Lift", "Vendor"):
+            item = self.world.create_item(tool_item_name("Overgrowth", key))
+            self.assertEqual(item.classification,
+                             ItemClassification.progression, key)
+        for key in ("Sniffer", "Broom", "Bins"):
+            item = self.world.create_item(tool_item_name("Overgrowth", key))
+            self.assertEqual(item.classification,
+                             ItemClassification.useful, key)
+
+    def test_self_cleaning_mop_is_useful_one_per_pooled_level(self):
+        from BaseClasses import ItemClassification
+        from ..items import self_cleaning_mop_name
+        item = self.world.create_item(self_cleaning_mop_name("Overgrowth"))
+        self.assertEqual(item.classification, ItemClassification.useful)
+        pool = self.created_item_names()
+        for map_name in self.world.pooled_maps:
+            self.assertEqual(
+                pool.count(self_cleaning_mop_name(DISPLAY_BY_MAP[map_name])), 1,
+                map_name)
+
+    def test_self_cleaning_mop_never_gates_a_location(self):
+        # A useful item is never required, so no location's rule references it.
+        from ..items import self_cleaning_mop_name
+        access = [access_item_name("Waste Disposal")]
+        kit = list(self.world._full_kit_items("VC_Sewer"))
+        location = self.multiworld.get_location(
+            employee_of_the_month_name("Waste Disposal"), self.player)
+        # The full kit alone reaches it; the mop item is not part of the kit.
+        self.assertNotIn(self_cleaning_mop_name("Waste Disposal"), kit)
+        self.assertTrue(location.can_reach(self.state_with(access + kit)))
+
+    def test_low_rungs_open_with_access_high_rungs_need_the_kit(self):
+        # Waste Disposal is 73 percent moppable, so mid rungs open with the
+        # starting kit but the top of the ladder waits for the tools.
+        access = [access_item_name("Waste Disposal")]
+        kit = list(self.world._full_kit_items("VC_Sewer"))
+        low = self.multiworld.get_location(
+            milestone_name("Waste Disposal", 45), self.player)
+        high = self.multiworld.get_location(
+            milestone_name("Waste Disposal", 95), self.player)
+        self.assertTrue(low.can_reach(self.state_with(access)))
+        self.assertFalse(high.can_reach(self.state_with(access)))
+        self.assertTrue(high.can_reach(self.state_with(access + kit)))
+
+    def test_employee_of_the_month_needs_the_full_kit(self):
+        access = [access_item_name("Waste Disposal")]
+        kit = list(self.world._full_kit_items("VC_Sewer"))
+        location = self.multiworld.get_location(
+            employee_of_the_month_name("Waste Disposal"), self.player)
+        self.assertFalse(location.can_reach(self.state_with(access + kit[:-1])))
+        self.assertTrue(location.can_reach(self.state_with(access + kit)))
 
 
 class TestSpeedrunsanity(VCDTestBase):
@@ -187,8 +261,98 @@ class TestZeroPercentagesDisableTrapsAndUseful(VCDTestBase):
             self.assertNotIn(item.name, USEFUL_NAMES)
 
 
-class TestStep25(VCDTestBase):
-    options = {"milestone_step": 25}
+class TestToolsanityOff(VCDTestBase):
+    options = {"toolsanity": False}
+
+    def test_no_tool_items(self):
+        self.assertTrue(set(self.created_item_names()).isdisjoint(TOOL_ITEMS))
+
+    def test_collectibles_need_only_their_level(self):
+        for map_name, token, collectible in COLLECTIBLES:
+            if token in GATED_COLLECTIBLE_TOKENS:
+                continue
+            display = DISPLAY_BY_MAP[map_name]
+            location = self.multiworld.get_location(
+                collectible_name(display, collectible), self.player)
+            self.assertTrue(
+                location.can_reach(self.state_with([access_item_name(display)])))
+
+
+class TestStartingKeystoneEarly(VCDTestBase):
+    # A single high-mop starting level (Waste Disposal, 73 percent moppable)
+    # deterministically has many tool-free rungs, so the placement always runs.
+    options = {"starting_levels": 1, "goal": "complete_levels",
+               "goal_amount": 1, "level_pool": {"Waste Disposal"}}
+
+    def test_started_level_keystone_is_placed_in_its_own_early_rung(self):
+        from ..toolsanity import free_kit_rungs, tool_item_name
+        (started,) = self.world.started_maps
+        self.assertEqual(started, "VC_Sewer")
+        key = self.world._starting_keystone(started)
+        rungs = free_kit_rungs(started, self.world._step(),
+                               self.world.hard_start_maps)
+        self.assertIsNotNone(key)
+        self.assertGreaterEqual(len(rungs), 2)
+        display = DISPLAY_BY_MAP[started]
+        # The keystone is locked into the highest rung the free kit reaches,
+        # leaving the low rungs for the fill.
+        location = self.multiworld.get_location(
+            milestone_name(display, rungs[-1]), self.player)
+        self.assertEqual(location.item.name, tool_item_name(display, key))
+        self.assertTrue(location.locked)
+        self.assertTrue(location.can_reach(self.state_with(
+            [access_item_name(DISPLAY_BY_MAP[m])
+             for m in self.world.started_maps])))
+
+
+class TestRandomStartingKit(VCDTestBase):
+    options = {"random_starting_kit": True}
+
+    def test_hard_start_levels_swap_their_item_pairs(self):
+        pool = self.created_item_names()
+        for map_name, display, _title in LEVELS:
+            if map_name in self.world.hard_start_maps:
+                self.assertIn(tool_item_name(display, "Mop"), pool)
+                self.assertIn(tool_item_name(display, "SloshOMatic"), pool)
+                self.assertNotIn(tool_item_name(display, "Hands"), pool)
+                self.assertNotIn(tool_item_name(display, "Incinerator"), pool)
+            else:
+                self.assertNotIn(tool_item_name(display, "Mop"), pool)
+                self.assertIn(tool_item_name(display, "Hands"), pool)
+
+    def test_slot_data_reports_the_rolls(self):
+        self.assertEqual(self.world.fill_slot_data()["hard_start_maps"],
+                         sorted(self.world.hard_start_maps))
+
+
+class TestStep1(VCDTestBase):
+    # A small pool keeps the fill fast; step 1 on the full 26 levels holds
+    # thousands of checks and works the same way.
+    options = {"milestone_step": 1, "above_and_beyond": True,
+               "level_pool": {"Athena's Wrath", "Cryogenesis",
+                              "Waste Disposal"},
+               "goal_amount": 3}
+
+    def test_fine_rungs_exist_and_the_ceiling_stays_on_the_5_grid(self):
+        names = {loc.name for loc in self.multiworld.get_locations(self.player)}
+        self.assertIn(milestone_name("Athena's Wrath", 7), names)
+        self.assertIn(milestone_name("Athena's Wrath", 101), names)
+        # Athena's Wrath peaks at 154.04: the ladder tops at 145, same as
+        # step 5, so the community-measured maximum is never trusted tighter.
+        self.assertIn(milestone_name("Athena's Wrath", 145), names)
+        self.assertNotIn(milestone_name("Athena's Wrath", 146), names)
+
+
+class TestStep2(VCDTestBase):
+    options = {"milestone_step": 2,
+               "level_pool": {"Athena's Wrath", "Cryogenesis",
+                              "Waste Disposal"},
+               "goal_amount": 3}
+
+    def test_even_rungs_only(self):
+        names = {loc.name for loc in self.multiworld.get_locations(self.player)}
+        self.assertIn(milestone_name("Cryogenesis", 4), names)
+        self.assertNotIn(milestone_name("Cryogenesis", 5), names)
 
 
 class TestFewStartingLevels(VCDTestBase):
@@ -205,6 +369,8 @@ class TestFindBobGoal(VCDTestBase):
     def test_completion_requires_the_note_levels(self):
         needed = [access_item_name(DISPLAY_BY_MAP[m])
                   for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
+        for m in BOB_NOTE_MAPS + ["VC_Digsite"]:
+            needed.extend(self.world._full_kit_items(m))
         self.assertFalse(
             self.multiworld.completion_condition[self.player](
                 self.state_with(needed[:-1])))
@@ -218,12 +384,16 @@ class TestCollectiblesGoal(VCDTestBase):
 
     def test_completion_counts_reachable_collectibles(self):
         # Cryogenesis and Gravity Drive hold two collectibles each; the two
-        # levels together clear the three-collectible bar.
-        one = self.state_with([access_item_name("Cryogenesis")])
-        both = self.state_with([access_item_name("Cryogenesis"),
-                                access_item_name("Gravity Drive")])
-        self.assertFalse(self.multiworld.completion_condition[self.player](one))
-        self.assertTrue(self.multiworld.completion_condition[self.player](both))
+        # levels together clear the three-collectible bar. Collectibles need
+        # their level's full kit on top of its access.
+        cryo = ([access_item_name("Cryogenesis")]
+                + list(self.world._full_kit_items("VC_Cryo")))
+        both_kits = cryo + [access_item_name("Gravity Drive")] + list(
+            self.world._full_kit_items("VC_ZeroG_New"))
+        self.assertFalse(self.multiworld.completion_condition[self.player](
+            self.state_with(cryo)))
+        self.assertTrue(self.multiworld.completion_condition[self.player](
+            self.state_with(both_kits)))
 
 
 class TestCollectiblesGoalFullAmount(VCDTestBase):
@@ -287,11 +457,14 @@ class TestCollectiblesGoalPooled(VCDTestBase):
                "level_pool": {"Cryogenesis", "Gravity Drive"}}
 
     def test_completion_needs_both_pooled_levels(self):
-        one = self.state_with([access_item_name("Cryogenesis")])
-        both = self.state_with([access_item_name("Cryogenesis"),
-                                access_item_name("Gravity Drive")])
-        self.assertFalse(self.multiworld.completion_condition[self.player](one))
-        self.assertTrue(self.multiworld.completion_condition[self.player](both))
+        cryo = ([access_item_name("Cryogenesis")]
+                + list(self.world._full_kit_items("VC_Cryo")))
+        both_kits = cryo + [access_item_name("Gravity Drive")] + list(
+            self.world._full_kit_items("VC_ZeroG_New"))
+        self.assertFalse(self.multiworld.completion_condition[self.player](
+            self.state_with(cryo)))
+        self.assertTrue(self.multiworld.completion_condition[self.player](
+            self.state_with(both_kits)))
 
 
 class TestPoolOptionErrors(unittest.TestCase):
@@ -405,7 +578,61 @@ class TestRandomizedPoolFromCandidates(VCDTestBase):
 
 
 class TestCompleteFew(VCDTestBase):
-    options = {"goal": "complete_levels", "goal_amount": 5, "milestone_step": 20}
+    options = {"goal": "complete_levels", "goal_amount": 5,
+               "milestone_step": 10}
+
+
+class TestToolsanityBands(unittest.TestCase):
+    def test_mop_only_caps(self):
+        from ..toolsanity import DEFAULT_FREE_KEYS, rung_in_logic
+        kit = frozenset(DEFAULT_FREE_KEYS)
+        # Waste Disposal is 73 percent moppable with no lift on the level.
+        self.assertTrue(rung_in_logic("VC_Sewer", 65, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Sewer", 70, 5, kit))
+        # Incubation Emergency is 16 percent moppable minus the lift
+        # reservation: not even the first rung clears with slack.
+        self.assertFalse(rung_in_logic("VC_Incubator", 5, 5, kit))
+
+    def test_no_hands_ceiling_on_key_gated_levels(self):
+        from ..toolsanity import DEFAULT_FREE_KEYS, rung_in_logic, toolset_cap
+        kit = frozenset(DEFAULT_FREE_KEYS)
+        # House of Horror walls its deeper areas behind carried keys: without
+        # hands the measured ceiling is 45 percent, well under the 56 the mop
+        # share minus the lift reservation would otherwise credit.
+        self.assertEqual(toolset_cap("VC_Horror_01", 5, kit), 45.0)
+        self.assertTrue(rung_in_logic("VC_Horror_01", 40, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Horror_01", 45, 5, kit))
+        # With hands the ceiling lifts and the mop share carries further.
+        self.assertTrue(rung_in_logic(
+            "VC_Horror_01", 45, 5, kit | {"Hands", "Incinerator"}))
+        # A map absent from the ceiling table keeps its pure band arithmetic:
+        # Waste Disposal mop-only is exactly its scanned mop share.
+        self.assertAlmostEqual(toolset_cap("VC_Sewer", 5, kit),
+                               15940.0 / 21758.5 * 100.0)
+
+    def test_fine_steps_keep_the_five_point_slack(self):
+        from ..toolsanity import DEFAULT_FREE_KEYS, rung_in_logic
+        kit = frozenset(DEFAULT_FREE_KEYS)
+        # At step 1 the slack stays 5 points, so the mop-only ladder on Waste
+        # Disposal (73.26 percent) tops out at rung 68, not 72.
+        self.assertTrue(rung_in_logic("VC_Sewer", 68, 1, kit))
+        self.assertFalse(rung_in_logic("VC_Sewer", 69, 1, kit))
+
+    def test_full_kit_reaches_the_usable_total(self):
+        from ..toolsanity import full_kit_keys, toolset_cap
+        held = frozenset(full_kit_keys("VC_Incubator"))
+        # Incubation Emergency's known maximum is 117.67; the ladder tops out
+        # at the floored 115 even though its bands sum to far less.
+        self.assertEqual(toolset_cap("VC_Incubator", 5, held), 115.0)
+
+    def test_welder_and_vendor_bands_need_the_mop(self):
+        from ..toolsanity import toolset_cap
+        # A hard start holding welder and vendor but no mop gains neither
+        # band: the welder leaves soot and restocking ends in scrubbing.
+        without_mop = frozenset({"Hands", "Incinerator", "Welder", "Vendor"})
+        with_mop = without_mop | {"Mop", "SloshOMatic"}
+        self.assertGreater(toolset_cap("VC_Uprinsing", 5, with_mop),
+                           toolset_cap("VC_Uprinsing", 5, without_mop) + 15.0)
 
 
 class TestData(unittest.TestCase):
@@ -421,10 +648,10 @@ class TestData(unittest.TestCase):
         self.assertEqual(len(MAP_NAMES), len(set(MAP_NAMES)))
 
     def test_each_level_has_the_full_static_set(self):
-        # Punch Out + 19 clean rungs + Employee of the Month + Speedrun = 22,
+        # Punch Out + 99 clean rungs + Employee of the Month + Speedrun = 102,
         # plus the level's collectibles, its Bob note, and the Digsite events.
         for _map, display, _title in LEVELS:
-            expected = 22 + len(over_100_rungs(_map))
+            expected = 102 + len(over_100_rungs(_map))
             expected += sum(1 for m, _t, _c in COLLECTIBLES if m == _map)
             expected += sum(1 for m, _t in BOB_NOTES if m == _map)
             if _map == "VC_Digsite":
@@ -433,28 +660,39 @@ class TestData(unittest.TestCase):
             self.assertEqual(count, expected, display)
 
     def test_top_rung_floors_to_step_then_backs_off_one(self):
-        # Athena's Wrath peaks at 154.04 percent.
+        # Athena's Wrath peaks at 154.04 percent. Steps finer than 5 keep the
+        # 5-grid ceiling, so the maxima are never trusted more tightly.
         self.assertEqual(top_rung("VC_Hall", 5), 145)
         self.assertEqual(top_rung("VC_Hall", 10), 140)
-        self.assertEqual(top_rung("VC_Hall", 25), 125)
-        # Gravity Drive peaks at 113.78: one over-100 rung at step 5, none wider.
+        self.assertEqual(top_rung("VC_Hall", 2), 145)
+        self.assertEqual(top_rung("VC_Hall", 1), 145)
+        # Gravity Drive peaks at 113.78: the ceiling is 105 on the fine grid.
         self.assertEqual(top_rung("VC_ZeroG_New", 5), 105)
         self.assertEqual(top_rung("VC_ZeroG_New", 10), 100)
-        self.assertEqual(over_100_rungs("VC_ZeroG_New"), [105])
+        self.assertCountEqual(over_100_rungs("VC_ZeroG_New"),
+                              [101, 102, 103, 104, 105])
 
     def test_collectible_tokens_unique(self):
         tokens = ([t for _m, t, _c in COLLECTIBLES] + [t for _m, t in BOB_NOTES])
         self.assertEqual(len(tokens), len(set(tokens)))
         self.assertEqual(len(COLLECTIBLES), 39)
 
+    def test_step_choices_match_the_option(self):
+        from ..locations import MILESTONE_STEP_CHOICES
+        from ..options import MilestoneStep
+        self.assertEqual(sorted(MILESTONE_STEP_CHOICES),
+                         sorted(MilestoneStep.options.values()))
+
     def test_milestone_step_gating(self):
         # Punch Out (not a milestone) is always enabled.
-        self.assertTrue(milestone_enabled(punch_out_name(LEVELS[0][1]), 25))
+        self.assertTrue(milestone_enabled(punch_out_name(LEVELS[0][1]), 10))
         # A milestone rung is enabled only when its percent is a multiple of step.
-        enabled_25 = [n for n in MILESTONE_PERCENT if milestone_enabled(n, 25)]
-        self.assertTrue(all(MILESTONE_PERCENT[n] % 25 == 0 for n in enabled_25))
-        # Every rung sits on a 5% boundary, so step 5 enables all of them.
-        self.assertTrue(all(p % 5 == 0 for p in MILESTONE_PERCENT.values()))
+        enabled_10 = [n for n in MILESTONE_PERCENT if milestone_enabled(n, 10)]
+        self.assertTrue(all(MILESTONE_PERCENT[n] % 10 == 0 for n in enabled_10))
+        # The datapackage holds every whole-percent rung; step 1 enables all.
+        self.assertTrue(all(milestone_enabled(n, 1) for n in MILESTONE_PERCENT))
+        self.assertTrue(any(MILESTONE_PERCENT[n] % 5 != 0
+                            for n in MILESTONE_PERCENT))
 
 
 if __name__ == "__main__":

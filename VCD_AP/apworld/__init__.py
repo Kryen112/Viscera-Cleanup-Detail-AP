@@ -6,7 +6,9 @@ code-generation step; build_apworld.py only packages the world.
 v1 shape: level-access unlock items gate each level; per-level checks are a
 milestone cleanliness ladder, a punch-out completion, the level's collectibles
 and Bob note, and a speedrun when the speedrunsanity option is on. The two
-Digsite Bob events additionally need every note level. See V1_PLAN.md and
+Digsite Bob events additionally need every note level. Under toolsanity (on
+by default) each level's tools and machines are per-level items too, and the
+milestone ladder follows the band logic in toolsanity.py. See V1_PLAN.md and
 CLAUDE.md.
 """
 
@@ -23,20 +25,32 @@ from worlds.LauncherComponents import (Component, Type, components,
 
 from .collectibles import (BOB_ALTAR_MAP, BOB_NOTE_MAPS, COLLECTIBLES,
                            GATED_COLLECTIBLE_TOKENS)
-from .items import (FILLER_NAMES, ITEM_GROUPS, ITEM_NAME_TO_ID,
-                    LEVEL_ACCESS_ITEMS, access_item_name)
+from .items import (CLEAN_MOP_ITEMS, FILLER_NAMES, ITEM_GROUPS,
+                    ITEM_NAME_TO_ID, LEVEL_ACCESS_ITEMS,
+                    PROGRESSION_TOOL_ITEMS, TOOL_ITEMS, access_item_name,
+                    self_cleaning_mop_name)
 from .traps import TRAP_NAMES, USEFUL_NAMES
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (BOB_GATED_LOCATIONS, FIND_BOB_LOCATION,
                         LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
-                        collectible_name, employee_of_the_month_name,
-                        location_enabled, punch_out_name)
+                        MILESTONE_PERCENT, collectible_name,
+                        employee_of_the_month_name, location_enabled,
+                        milestone_name, punch_out_name)
 from .options import VCDOptions
+from .toolsanity import (CORE_CLEANING_KEYS, PROGRESSION_TOOL_KEYS,
+                         free_keys, free_kit_rungs, full_kit_keys,
+                         item_keys, rung_in_logic, tool_item_name)
 
 GAME_NAME = "Viscera Cleanup Detail"
-PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(LEVEL_ACCESS_ITEMS)
+PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(
+    LEVEL_ACCESS_ITEMS) | PROGRESSION_TOOL_ITEMS
 TRAP_ITEM_NAMES: frozenset[str] = frozenset(TRAP_NAMES)
-USEFUL_ITEM_NAMES: frozenset[str] = frozenset(USEFUL_NAMES)
+# The quality-of-life tool unlocks and the per-level Self-Cleaning Mop
+# classify useful like the supply drops: never progression, never in logic.
+USEFUL_ITEM_NAMES: frozenset[str] = (
+    frozenset(USEFUL_NAMES)
+    | (frozenset(TOOL_ITEMS) - PROGRESSION_TOOL_ITEMS)
+    | frozenset(CLEAN_MOP_ITEMS))
 
 
 def _launch_client() -> None:
@@ -105,6 +119,7 @@ class VCDWorld(World):
     started_maps: ClassVar[set[str]]
     pooled_maps: ClassVar[list[str]]
     bob_chain_pooled: ClassVar[bool]
+    hard_start_maps: ClassVar[set[str]]
 
     @staticmethod
     def _countable_collectibles(maps: set[str]) -> int:
@@ -175,8 +190,49 @@ class VCDWorld(World):
         self.pooled_maps = candidates
         pooled = set(candidates)
         self.bob_chain_pooled = pooled.issuperset(BOB_NOTE_MAPS + [BOB_ALTAR_MAP])
+        # Toolsanity starting kits: by default every level starts mop and
+        # Slosh-O-Matic; the random_starting_kit option rolls each level
+        # independently, and a hard-start level opens hands and incinerator
+        # instead.
+        self.hard_start_maps = set()
+        if self.options.toolsanity and self.options.random_starting_kit:
+            self.hard_start_maps = {
+                m for m in candidates if self.random.random() < 0.5}
         start_n = min(int(self.options.starting_levels.value), len(candidates))
-        self.started_maps = set(self.random.sample(candidates, start_n))
+        self.started_maps = self._draw_started_maps(candidates, start_n)
+
+    def _starting_keystone(self, map_name: str) -> "str | None":
+        """The one keystone cleaning tool to hand a started level up front: the
+        most impactful core tool the level itemizes. None when the level's
+        free kit already covers the core (nothing worth front-loading)."""
+        available = set(item_keys(map_name, self.hard_start_maps))
+        for key in ("Hands", "Mop", "Incinerator", "Welder", "SloshOMatic"):
+            if key in available and key in CORE_CLEANING_KEYS:
+                return key
+        return None
+
+    def _draw_started_maps(self, candidates: "list[str]",
+                           start_n: int) -> "set[str]":
+        """The starting levels. Under toolsanity a seed must open with at
+        least one reachable check, so one started level is always drawn from
+        those whose starting kit alone clears some milestone rung (a level
+        like Incubation Emergency has too little moppable mess to clear even
+        the first rung with slack); the rest draw freely."""
+        if not self.options.toolsanity:
+            return set(self.random.sample(candidates, start_n))
+        step = self._step()
+        open_maps = [
+            m for m in candidates
+            if free_kit_rungs(m, step, self.hard_start_maps)
+        ]
+        if not open_maps:
+            raise OptionError(
+                f"{self.player_name}: no pooled level offers a reachable "
+                f"milestone with its starting kit alone. Lower milestone_step "
+                f"or widen level_pool.")
+        first = self.random.choice(open_maps)
+        rest = [m for m in candidates if m != first]
+        return {first} | set(self.random.sample(rest, start_n - 1))
 
     def create_item(self, name: str) -> VCDItem:
         if name in PROGRESSION_ITEM_NAMES:
@@ -234,9 +290,24 @@ class VCDWorld(World):
             else:
                 self.multiworld.itempool.append(item)
                 placed += 1
+            if self.options.toolsanity:
+                for key in item_keys(map_name, self.hard_start_maps):
+                    self.multiworld.itempool.append(
+                        self.create_item(tool_item_name(display, key)))
+                    placed += 1
+            # The Self-Cleaning Mop is always created, one per pooled level,
+            # independent of toolsanity.
+            self.multiworld.itempool.append(
+                self.create_item(self_cleaning_mop_name(display)))
+            placed += 1
         active_locations = sum(
             len(self._enabled_locations_for(m)) for m in self.pooled_maps)
         filler_slots = active_locations - placed
+        if filler_slots < 0:
+            raise OptionError(
+                f"{self.player_name}: the item pool ({placed} items) outgrows "
+                f"the location pool ({active_locations} checks). Lower "
+                f"milestone_step, add levels, or turn toolsanity off.")
         trap_slots = filler_slots * int(self.options.trap_percentage.value) // 100
         # Traps take their share first; supplies cap at the remaining slots.
         useful_slots = min(
@@ -248,6 +319,37 @@ class VCDWorld(World):
             self.multiworld.itempool.append(self.create_item(self.random.choice(USEFUL_NAMES)))
         for _ in range(filler_slots - trap_slots - useful_slots):
             self.multiworld.itempool.append(self.create_item(self.get_filler_item_name()))
+
+    def pre_fill(self) -> None:
+        # Front-load each started level's keystone tool by locking it into one
+        # of that level's tool-free rungs, so a seed opens with a level worth
+        # taking deep instead of only shallow new levels. Only levels with at
+        # least two tool-free rungs qualify, and the keystone takes the
+        # highest of them, so the low rungs stay free for the fill to bootstrap
+        # progression (reserving a level's sole early slot starves tight
+        # pools). Levels with fewer tool-free rungs are simply left alone.
+        if not self.options.toolsanity:
+            return
+        step = self._step()
+        for map_name in self.started_maps:
+            key = self._starting_keystone(map_name)
+            if key is None:
+                continue
+            rungs = free_kit_rungs(map_name, step, self.hard_start_maps)
+            if len(rungs) < 2:
+                continue
+            display = DISPLAY_BY_MAP[map_name]
+            location = self.get_location(milestone_name(display, rungs[-1]))
+            if location.item is not None:
+                continue
+            item_name = tool_item_name(display, key)
+            item = next((i for i in self.multiworld.itempool
+                         if i.player == self.player and i.name == item_name),
+                        None)
+            if item is None:
+                continue
+            self.multiworld.itempool.remove(item)
+            location.place_locked_item(item)
 
     def _goal_locations(self) -> tuple[list[str], int]:
         """The locations whose reachability defines victory, and how many are
@@ -268,20 +370,85 @@ class VCDWorld(World):
                          or t not in GATED_COLLECTIBLE_TOKENS)], amount
         return [punch_out_name(d) for m, d, _ in LEVELS if m in pooled], amount
 
+    def _tool_state_pairs(self, map_name: str) -> "tuple[tuple[str, str], ...]":
+        """(tool key, item name) for the level's progression tool items; the
+        free pair is not itemized and folds in as always held, and the
+        quality-of-life unlocks never gate a band, so the hot rung predicate
+        skips them."""
+        display = DISPLAY_BY_MAP[map_name]
+        return tuple((k, tool_item_name(display, k))
+                     for k in item_keys(map_name, self.hard_start_maps)
+                     if k in PROGRESSION_TOOL_KEYS)
+
+    def _full_kit_items(self, map_name: str) -> "tuple[str, ...]":
+        """The item names of the level's full progression kit, minus its free
+        starting pair."""
+        display = DISPLAY_BY_MAP[map_name]
+        free = free_keys(map_name, self.hard_start_maps)
+        return tuple(tool_item_name(display, k)
+                     for k in sorted(full_kit_keys(map_name)) if k not in free)
+
+    def _rung_rule(self, map_name: str, rung: int, step: int):
+        """A regular ladder rung's access rule: the held toolset's band cap
+        must clear the rung (toolsanity.py owns the arithmetic)."""
+        player = self.player
+        base = free_keys(map_name, self.hard_start_maps)
+        pairs = self._tool_state_pairs(map_name)
+
+        def rule(state, m=map_name, r=rung, s=step, kit=base,
+                 tool_pairs=pairs) -> bool:
+            unlocked = set(kit)
+            for key, item in tool_pairs:
+                if state.has(item, player):
+                    unlocked.add(key)
+            return rung_in_logic(m, r, s, frozenset(unlocked))
+
+        return rule
+
     def set_rules(self) -> None:
+        player = self.player
+        toolsanity = bool(self.options.toolsanity)
+        step = self._step()
+
+        # Toolsanity gates every check on the tools that physically reach it:
+        # regular ladder rungs follow the band logic, and everything else on a
+        # level (Employee of the Month, over-100 rungs, the punch-out, the
+        # speedrun, collectibles, the Bob note) takes the level's full kit. A
+        # barely-cleaned punch-out gets the janitor fired, and a fired
+        # punch-out never counts, so the punch-out gate matches the game.
+        if toolsanity:
+            for map_name in self.pooled_maps:
+                kit_items = self._full_kit_items(map_name)
+                for name in self._enabled_locations_for(map_name):
+                    if name in BOB_GATED_LOCATIONS:
+                        continue
+                    percent = MILESTONE_PERCENT.get(name)
+                    if percent is not None and percent < 100:
+                        self.get_location(name).access_rule = self._rung_rule(
+                            map_name, percent, step)
+                    else:
+                        self.get_location(name).access_rule = (
+                            lambda state, items=kit_items:
+                                state.has_all(items, player))
+
         # The Digsite gate needs all nine Bob notes on the pedestal: six live in
         # the note levels (three are Office freebies), and Bob and the Red
         # Keycard sit behind the gate. So those checks need every note level on
-        # top of the Digsite access their region already requires. They only
-        # exist when the pool holds the whole chain, whose access items are all
-        # progression, so they are guaranteed reachable.
-        player = self.player
+        # top of the Digsite access their region already requires; under
+        # toolsanity they also need the chain's full kits, because the notes
+        # are collected and carried by hand. They only exist when the pool
+        # holds the whole chain, whose access items are all progression, so
+        # they are guaranteed reachable.
         if self.bob_chain_pooled:
-            note_access = tuple(
-                access_item_name(DISPLAY_BY_MAP[m]) for m in BOB_NOTE_MAPS)
+            required = [access_item_name(DISPLAY_BY_MAP[m])
+                        for m in BOB_NOTE_MAPS]
+            if toolsanity:
+                for m in list(BOB_NOTE_MAPS) + [BOB_ALTAR_MAP]:
+                    required.extend(self._full_kit_items(m))
             for name in BOB_GATED_LOCATIONS:
                 self.get_location(name).access_rule = (
-                    lambda state, items=note_access: state.has_all(items, player)
+                    lambda state, items=tuple(required):
+                        state.has_all(items, player)
                 )
 
         locations, need = self._goal_locations()
@@ -298,6 +465,8 @@ class VCDWorld(World):
             "milestone_step": self._step(),
             "above_and_beyond": bool(self.options.above_and_beyond),
             "speedrunsanity": bool(self.options.speedrunsanity),
+            "toolsanity": bool(self.options.toolsanity),
+            "hard_start_maps": sorted(self.hard_start_maps),
             "started_maps": sorted(self.started_maps),
             "pooled_maps": list(self.pooled_maps),
         }

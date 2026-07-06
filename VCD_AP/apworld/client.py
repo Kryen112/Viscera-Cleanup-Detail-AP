@@ -26,10 +26,11 @@ from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser
                           gui_enabled, server_loop)
 from NetUtils import ClientStatus
 
-from . import VCDWorld, grants, installer, messages, milestones, traps
+from . import VCDWorld, grants, installer, messages, milestones, toolsanity, traps
 from .saves import SaveManager, seed_folder_name
 from .collectibles import BOB_NOTE_MAP_BY_TOKEN, COLLECTIBLE_BY_TOKEN
-from .items import ITEM_NAME_TO_ID, access_item_name
+from .items import (ITEM_NAME_TO_ID, access_item_name,
+                    self_cleaning_mop_name)
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (COLLECTIBLE_LOCATION_NAMES, DIGSITE_GATES_LOCATION,
                         FIND_BOB_LOCATION, LOCATION_NAME_TO_ID, bob_note_name,
@@ -54,6 +55,21 @@ ACCESS_ID_TO_MAP: dict[int, str] = {
 QUEUE_ID_TO_TYPE: dict[int, str] = {
     ITEM_NAME_TO_ID[name]: queue_type
     for name, queue_type in traps.QUEUE_TYPE_BY_NAME.items()
+}
+
+# Received-item id to (internal map name, tool key), so a granted tool item
+# unlocks its tool on its level through the grants file.
+TOOL_ID_TO_MAP_KEY: dict[int, "tuple[str, str]"] = {
+    ITEM_NAME_TO_ID[toolsanity.tool_item_name(display, key)]: (map_name, key)
+    for map_name, display, _title in LEVELS
+    for key in toolsanity.TOOL_KEY_ORDER
+}
+
+# Received-item id to internal map name for the Self-Cleaning Mop, so a
+# granted mop unlock keeps its level's mop from dirtying.
+CLEAN_MOP_ID_TO_MAP: dict[int, str] = {
+    ITEM_NAME_TO_ID[self_cleaning_mop_name(display)]: map_name
+    for map_name, display, _title in LEVELS
 }
 
 
@@ -291,6 +307,14 @@ class VCDContext(CommonContext):
         super().__init__(server_address, password)
         self.install_dir: "Path | None" = None
         self.unlocked_maps: set[str] = set()
+        # Toolsanity: whether the seed locks tools, each level's free starting
+        # pair source, and the tool keys unlocked so far per map.
+        self.toolsanity: bool = False
+        self.hard_start_maps: set[str] = set()
+        self.pooled_maps: list[str] = []
+        self.unlocked_tools: "dict[str, set[str]]" = {}
+        # Maps where the janitor holds the Self-Cleaning Mop unlock.
+        self.clean_mop_maps: set[str] = set()
         self.last_grants_written: "str | None" = None
         self.last_traps_written: "str | None" = None
         # Items already held when this session connected; traps at or below
@@ -521,28 +545,7 @@ class VCDContext(CommonContext):
             if not self.seed_name:
                 self.seed_name = args.get("seed_name")
         elif cmd == "Connected":
-            slot_data = args.get("slot_data", {})
-            self.unlocked_maps = set(slot_data.get("started_maps", []))
-            self._set_goal(slot_data)
-            self.saves_ready = False
-            self.trap_baseline = None
-            self.last_traps_written = None
-            self.storage_traps_applied = None
-            self.last_traps_pushed = 0
-            self.message_tag = messages.session_tag(self.seed_name)
-            self.message_index = 0
-            self.message_entries = []
-            self.last_messages_written = None
-            self.last_milestones_written = None
-            self.enqueue_message([(messages.WHITE, "Archipelago connected.")])
-            # Subscribe to the slot's shared applied counter and fetch it; the
-            # Retrieved answer releases the traps-file write gate.
-            key = self.traps_applied_storage_key()
-            asyncio.create_task(self.send_msgs([
-                {"cmd": "SetNotify", "keys": [key]},
-                {"cmd": "Get", "keys": [key]},
-            ]))
-            asyncio.create_task(self.setup_and_launch())
+            self._on_connected(args.get("slot_data", {}))
         elif cmd == "Retrieved":
             keys = args.get("keys", {})
             storage_key = self.traps_applied_storage_key()
@@ -556,19 +559,68 @@ class VCDContext(CommonContext):
             # into the sets, so this write carries the server-confirmed view.
             self.write_milestones_if_changed()
         elif cmd == "ReceivedItems":
-            # The first packet after connect (index 0) is the full resync list:
-            # everything in it predates this session, so it sets the trap baseline.
-            if self.trap_baseline is None and int(args.get("index", 0)) == 0:
-                self.trap_baseline = len(args.get("items", []))
-            changed = False
-            for item in args.get("items", []):
-                map_name = ACCESS_ID_TO_MAP.get(item.item)
-                if map_name and map_name not in self.unlocked_maps:
-                    self.unlocked_maps.add(map_name)
+            self._on_received_items(args)
+
+    def _on_received_items(self, args: dict) -> None:
+        """Folds granted level accesses and tool unlocks into the grants
+        state, and advances the trap bookkeeping."""
+        # The first packet after connect (index 0) is the full resync list:
+        # everything in it predates this session, so it sets the trap baseline.
+        if self.trap_baseline is None and int(args.get("index", 0)) == 0:
+            self.trap_baseline = len(args.get("items", []))
+        changed = False
+        for item in args.get("items", []):
+            map_name = ACCESS_ID_TO_MAP.get(item.item)
+            if map_name and map_name not in self.unlocked_maps:
+                self.unlocked_maps.add(map_name)
+                changed = True
+            tool = TOOL_ID_TO_MAP_KEY.get(item.item)
+            if tool is not None:
+                tool_map, tool_key = tool
+                held = self.unlocked_tools.setdefault(tool_map, set())
+                if tool_key not in held:
+                    held.add(tool_key)
                     changed = True
-            if changed:
-                self.write_grants_if_changed()
-            self.write_traps_if_changed()
+            clean_mop_map = CLEAN_MOP_ID_TO_MAP.get(item.item)
+            if clean_mop_map is not None and clean_mop_map not in self.clean_mop_maps:
+                self.clean_mop_maps.add(clean_mop_map)
+                changed = True
+        if changed:
+            self.write_grants_if_changed()
+        self.write_traps_if_changed()
+
+    def _on_connected(self, slot_data: dict) -> None:
+        """Resets the per-connect state from the slot data and kicks off the
+        install setup and the data-storage subscription."""
+        self.unlocked_maps = set(slot_data.get("started_maps", []))
+        self.toolsanity = bool(slot_data.get("toolsanity", False))
+        self.hard_start_maps = set(slot_data.get("hard_start_maps", []))
+        self.pooled_maps = list(slot_data.get("pooled_maps", []))
+        self.unlocked_tools = {}
+        self.clean_mop_maps = set()
+        self._set_goal(slot_data)
+        self.saves_ready = False
+        self.trap_baseline = None
+        # A fresh save set swaps in on connect, so every file writes fresh
+        # even when its payload matches the previous session's.
+        self.last_grants_written = None
+        self.last_traps_written = None
+        self.storage_traps_applied = None
+        self.last_traps_pushed = 0
+        self.message_tag = messages.session_tag(self.seed_name)
+        self.message_index = 0
+        self.message_entries = []
+        self.last_messages_written = None
+        self.last_milestones_written = None
+        self.enqueue_message([(messages.WHITE, "Archipelago connected.")])
+        # Subscribe to the slot's shared applied counter and fetch it; the
+        # Retrieved answer releases the traps-file write gate.
+        key = self.traps_applied_storage_key()
+        asyncio.create_task(self.send_msgs([
+            {"cmd": "SetNotify", "keys": [key]},
+            {"cmd": "Get", "keys": [key]},
+        ]))
+        asyncio.create_task(self.setup_and_launch())
 
     def on_print_json(self, args: dict) -> None:
         super().on_print_json(args)
@@ -634,19 +686,57 @@ class VCDContext(CommonContext):
         self.goal_location_ids, self.goal_need = goal_locations_from_slot_data(
             slot_data)
 
+    def unlocked_tools_string(self) -> str:
+        """The toolsanity grants string: every pooled map, listing its free
+        starting pair plus every tool item received for it, in the mod's key
+        order. Empty when the seed does not lock tools, which the mod reads
+        as everything unlocked."""
+        if not self.toolsanity:
+            return ""
+        entries = []
+        for map_name, _display, _title in LEVELS:
+            if map_name not in self.pooled_maps:
+                continue
+            keys = set(toolsanity.free_keys(map_name, self.hard_start_maps))
+            keys |= self.unlocked_tools.get(map_name, set())
+            ordered_keys = [k for k in toolsanity.TOOL_KEY_ORDER if k in keys]
+            entries.append(f"{map_name}:{' '.join(ordered_keys)}")
+        return ",".join(entries)
+
+    def present_tools_string(self) -> str:
+        """The toolsanity present set: every pooled map with the tools the
+        level has, in the mod's key order. Constant for the seed (it is the
+        superset the HUD panel colors as locked or unlocked); empty when the
+        seed does not lock tools."""
+        if not self.toolsanity:
+            return ""
+        entries = []
+        for map_name, _display, _title in LEVELS:
+            if map_name not in self.pooled_maps:
+                continue
+            keys = toolsanity.tools_present(map_name)
+            entries.append(f"{map_name}:{' '.join(keys)}")
+        return ",".join(entries)
+
     def write_grants_if_changed(self) -> None:
         if not self.install_dir or not self.saves_ready:
             return
         ordered = [m for m, _, _ in LEVELS if m in self.unlocked_maps]
-        joined = ",".join(ordered)
-        if joined == self.last_grants_written:
+        tools_string = self.unlocked_tools_string()
+        present_string = self.present_tools_string()
+        clean_mop_ordered = [m for m, _, _ in LEVELS if m in self.clean_mop_maps]
+        payload = ("|".join([",".join(ordered), tools_string, present_string,
+                             ",".join(clean_mop_ordered)]))
+        if payload == self.last_grants_written:
             return
         try:
-            grants.write(self.install_dir / "Saves" / "VCArchipelagoGrants.sav", ordered)
+            grants.write(self.install_dir / "Saves" / "VCArchipelagoGrants.sav",
+                         ordered, tools_string, present_string,
+                         clean_mop_ordered)
         except OSError as error:
             client_logger.error(f"Could not write the grants file: {error}")
             return
-        self.last_grants_written = joined
+        self.last_grants_written = payload
 
     def write_traps_if_changed(self) -> None:
         """Write the full trap queue (always on connect, even empty, so a stale
