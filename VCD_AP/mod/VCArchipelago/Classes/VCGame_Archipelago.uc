@@ -67,6 +67,16 @@ var byte ActiveSpeedEffectType;
 // the replicated GRI slot.
 const SpeedEffectDurationSeconds = 30.0;
 
+// The magnet trap's reach and pull speeds. The pull sets rigid-body velocity
+// instead of adding an impulse, so every piece moves at a bounded speed no
+// matter its mass. Pieces closer than the dead zone are already at the
+// janitor's feet and stay put.
+const MagnetizeRadius       = 1024.0;
+const MagnetizeDeadZone     = 64.0;
+const MagnetizeMinPullSpeed = 250.0;
+const MagnetizeMaxPullSpeed = 750.0;
+const MagnetizeLiftSpeed    = 150.0;
+
 // Reused load target for the trap queue file, so the 5 second poll does not
 // pile up garbage objects between collections.
 var VCArchipelagoTraps TrapQueueFile;
@@ -452,6 +462,10 @@ function ApplyQueueEntry(string QueueType)
     {
         ScaleJanitorSpeeds(2.0,
             class'VCGameReplicationInfo_Archipelago'.const.TimedEffectSpeedup);
+    }
+    else if (QueueType ~= "Magnetize")
+    {
+        Magnetize();
     }
     else if (QueueType ~= "CleanBucket")
     {
@@ -1536,6 +1550,38 @@ function bool SpillNearestBucket()
         return false;
     Nearest.Spill();
     return true;
+}
+
+// Yanks every loose debris piece within reach toward the janitor in one kick,
+// via the piece's own SpawnKick. Held, shut-down, and contained pieces are
+// skipped; a container's contents ride along with the container's pull.
+function Magnetize()
+{
+    local VCPawn Janitor;
+    local VCDebris Debris;
+    local Vector Pull;
+    local float Distance;
+
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+        break;
+    if (Janitor == None)
+        return;
+
+    foreach DynamicActors(class'VCDebris', Debris)
+    {
+        if (Debris.bHeld || Debris.bShutdown || Debris.MyContainer != None
+            || Pawn(Debris.NetConstrainer) != None)
+        {
+            continue;
+        }
+        Distance = VSize(Janitor.Location - Debris.Location);
+        if (Distance > MagnetizeRadius || Distance < MagnetizeDeadZone)
+            continue;
+        Pull = Normal(Janitor.Location - Debris.Location)
+            * FClamp(Distance, MagnetizeMinPullSpeed, MagnetizeMaxPullSpeed);
+        Pull.Z += MagnetizeLiftSpeed;
+        Debris.SpawnKick(Pull,, true);
+    }
 }
 
 // Scales every janitor's ground speed off its stored base for the effect
