@@ -88,6 +88,19 @@ exec function APCleanMoppable()
         Game.CleanAllMoppableSplats(self);
 }
 
+// Clears everything a core kit disposes (moppable splats plus hand-disposable
+// mess debris), leaving tool-specific mess, stackables, tools, medkits,
+// collectibles, and Bob notes. The cleanliness readout afterwards is the
+// level's core-kit ceiling.
+exec function APCleanCoreKit()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.CleanAllCoreKitMess(self);
+}
+
 // Shows every level in the menu and passes the bounce gate for the rest of
 // this game session, for the measurement tour. Never writes the grants file.
 exec function APLevelsUnlockAll()

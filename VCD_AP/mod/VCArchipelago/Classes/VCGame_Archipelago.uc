@@ -1473,6 +1473,78 @@ function CleanAllMoppableSplats(PlayerController Requester)
     Requester.ClientMessage("Removed "$Removed$" moppable splats.");
 }
 
+// Clears the mess a core kit (mop, buckets, hands, incinerator) disposes: the
+// moppable splats plus the hand-disposable mess debris (bodies, body parts,
+// gore, trash, gibs), mirroring the scan's Mop and HandsDisposal categories so
+// the cleanliness readout afterwards is the level's core-kit ceiling. Uses the
+// scan's own discriminators, not the base-debris default flags (a bare VCDebris
+// is a gib, so bMustStackUpright and bIsCollectible default true and would wrong
+// a gib for a stackable or a collectible). Kept out: welder and vendor marks
+// (bullet-hole and lightning splats the mop does not own), barrels (by Id),
+// buckets and bins, dropped welders, medkits (a plain Actor, never in this
+// loop), and the check items (collectibles are VCSpecialDrop classes, Bob notes
+// carry a Note_Bob_ archetype, and neither counts as mess anyway). Anything else
+// the game counts as mess is cleared. Measurement aid; never wired to gameplay.
+function CleanAllCoreKitMess(PlayerController Requester)
+{
+    local VCPunchoutHandler_General Handler;
+    local VCMapInfo MapInfo;
+    local VCSplat Splat;
+    local VCDebris Debris;
+    local string DebrisId;
+    local int Removed;
+
+    Handler = VCPunchoutHandler_General(PunchoutHandler);
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (Handler == None || Handler.StartingCleanupScore <= 0.0
+        || MapInfo == None || MapInfo.bIsOfficeLevel)
+    {
+        Requester.ClientMessage("APCleanCoreKit: no cleanable level is loaded.");
+        return;
+    }
+
+    foreach AllActors(class'VCSplat', Splat)
+    {
+        if (Splat.bHidden && Splat.Physics == PHYS_None)
+            continue;
+        if (Splat.SplatType != 1 && Splat.SplatType != 2
+            && !Splat.IsA('VCSplat_GooJar'))
+        {
+            continue;
+        }
+        Splat.Die();
+        Removed++;
+    }
+    foreach AllActors(class'VCDebris', Debris)
+    {
+        // CountAsMess is the game's own mess flag, so tools and other non-mess
+        // debris never qualify. The skips below keep the mess a core kit cannot
+        // dispose or should not destroy, matching the scan's classification.
+        if (Debris.bShutdown || !Debris.CountAsMess())
+            continue;
+        if (VCBucket(Debris) != None || VCBin(Debris) != None)
+            continue;
+        if (VCItemDrop_WeldingLaser(Debris) != None)
+            continue;
+        DebrisId = string(Debris.Id);
+        if (InStr(DebrisId, "Barrel",, true) != -1)
+            continue;
+        if (InStr(string(Debris.Class.Name), "VCSpecialDrop") == 0)
+            continue;
+        if (Debris.ObjectArchetype != None
+            && InStr(string(Debris.ObjectArchetype.Name), "Note_Bob_") == 0)
+        {
+            continue;
+        }
+        Debris.Die();
+        Removed++;
+    }
+    Requester.ClientMessage("APCleanCoreKit: cleared "$Removed$" core-kit mess"
+        $" actors. Read the cleanliness readout for the core-kit ceiling. Welder"
+        $" and vendor marks, barrels, buckets, bins, collectibles, and Bob notes"
+        $" stay; any other loose prop the game counts as mess is cleared too.");
+}
+
 // Sprays blood splats on the floor around the janitor. Splats spawn the same
 // way the game's own footprints and mop drips do (a plain Spawn on a downward
 // trace), and the live scan counts every VCSplat, so cleanliness drops
