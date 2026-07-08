@@ -19,6 +19,11 @@ var config string APSeedTag;
 var config string APMap;
 var config int APCleanPct;
 
+// The level's own StartingCleanupScore, published once per shift and cleared
+// on level start. The client cross-checks it against the shipped scan table
+// and warns when a measured constant no longer matches the live level.
+var config int APStartScore;
+
 // Comma-separated cleanliness rungs reached in the current map, e.g. "5,10,15".
 // TODO: widen to the full per-seed checked set (collectibles, Bob) once those
 // checks are detected, so the file is the whole reconnect-safe state and not
@@ -50,9 +55,11 @@ var config int APFoundBob;
 var config string APTrapSeed;
 var config int APTrapsApplied;
 
-// The map whose gravity volumes a zero gravity trap flipped without the
-// restore running yet. Persistent, so a quit or crash mid-trap cannot leave
-// the flip baked into the level save: the next load of the named map forces
-// the volumes back to the level default and clears this. Empty when nothing
-// is pending.
+// "MapName:states", the gravity volumes a zero gravity trap flipped with the
+// captured pre-trap enabled flags ("0,1" in capture order). Persistent, so a
+// save that baked the flip mid-trap (an autosave, then a quit or crash) gets
+// undone: the next load of the named map restores the carried states. Lifted
+// by a level save that confirms the volumes with no trap in play, by the
+// punch-out flow, or by the load that consumes it. Empty when nothing is
+// pending.
 var config string APGravityRestoreMap;

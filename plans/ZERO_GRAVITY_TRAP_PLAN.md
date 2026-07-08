@@ -159,18 +159,23 @@ for leaving low gravity on).
    gravity penalty never bakes into the published rungs; the shift's own
    pass-or-fired verdict keeps it, which is the game's rule for gravity left
    off either way.
-   - Decided: the quit path gets a defensive backstop instead of a measured
-     ordering guarantee. Whether `GameEnding` beats the quit save is
-     unmeasured, so the volume flip also records a persistent marker
-     (`APGravityRestoreMap` in the config state, class-defaults mirror) that
-     every trap teardown lifts. A load of the marked map waits for the game's
-     save-state load to finish (`bMatchHasBegun`; both load paths apply
-     `GameStateLoaded` to every `SaveGameStateInterface` actor before
-     `super(GameInfo).StartMatch()`), then forces the volumes back to the
-     level default, zero gravity on, and lifts the marker. This also covers a
-     crash mid-trap. The known cost, accepted: a gravity-on choice the player
-     made before the trap is stomped back to the level default in the rare
-     marked-load case, and the console fixes it.
+   - Decided (revised after adversarial review): the flip records a
+     persistent marker (`APGravityRestoreMap`, config state with the
+     class-defaults mirror) that carries the captured pre-trap volume states
+     as `MapName:0,1`. Quitting a work level does not save it (only the
+     periodic autosave and the punch-out flow do), so the danger case is an
+     autosave landing inside the 30-second window and a quit or crash
+     following before another save. The marker therefore survives every trap
+     teardown and lifts only where the disk is known correct: a level save
+     that runs with no trap active and none just ended (the `savegamestate`
+     and `StepAutosave` overrides, the stepped one deferred past the save's
+     span), the punch-out flow (its save runs after the restore), or the
+     marked map's next load, which waits for the save-state load to finish
+     (`bMatchHasBegun`; both load paths apply `GameStateLoaded` to every
+     `SaveGameStateInterface` actor before `super(GameInfo).StartMatch()`),
+     restores the carried states verbatim, and consumes the marker. An
+     unsaved post-trap console choice can still be lost to the last save,
+     which is the game's own quit semantics for the volumes.
 4. **Duration**: reuse the 30-second shape. Rename or share
    `SpeedEffectDurationSeconds` (a shared `TimedEffectDurationSeconds` const)
    rather than adding a second magic number.

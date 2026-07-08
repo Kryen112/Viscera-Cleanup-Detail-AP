@@ -81,12 +81,20 @@ const ZeroGravityWorldGravityZ = -60.0;
 
 // The gravity console is watched while the trap holds the volumes: a player
 // toggle mid-trap ends the effect instead of being reverted by the restore.
+// The cancel waits one extra watch tick so a staggered Kismet cycle finishes.
 const GravityConsoleWatchInterval = 0.25;
+var int GravityToggleTicksSeen;
 
 // A pending defensive gravity restore rechecks at this interval until the
 // game's own save-state load has finished (bMatchHasBegun), because the
 // volumes' saved flip applies during that load.
 const PendingGravityRestorePollInterval = 0.5;
+
+// The save hooks lift the pending marker only when no trap runs and none
+// ended within this grace, because a stepped save spans ticks and its volume
+// snapshot may predate a restore by a moment.
+const GravityMarkerSaveGraceSeconds = 10.0;
+var float LastZeroGravityEndSeconds;
 
 // The magnet trap's reach and pull speeds. The pull sets rigid-body velocity
 // instead of adding an impulse, so every piece moves at a bounded speed no
@@ -189,6 +197,7 @@ event InitGame(string Options, out string ErrorMessage)
     // own rungs from its own cleanliness instead of inheriting the last level's.
     APState.APMilestones = "";
     APState.APCleanPct = 0;
+    APState.APStartScore = 0;
     APState.APPunchedOut = 0;
     APState.APFired = 0;
     APState.APSpeedrun = 0;
@@ -210,10 +219,10 @@ event InitGame(string Options, out string ErrorMessage)
     SetTimer(SelfCleaningMopPollInterval, true, 'PollSelfCleaningMop');
     SetTimer(SqueakyBootsPollInterval, true, 'PollSqueakyBoots');
     // A pending marker for this map means a zero gravity trap flipped its
-    // volumes and no restore ran (a quit or crash mid-trap); force the level
-    // default back once the save-state load finishes.
+    // volumes and no save has confirmed them since; put the captured states
+    // back once the save-state load finishes.
     if (APState.APGravityRestoreMap != ""
-        && APState.APGravityRestoreMap ~= WorldInfo.GetMapName(true))
+        && PendingGravityRestoreMap() ~= WorldInfo.GetMapName(true))
     {
         SetTimer(PendingGravityRestorePollInterval, true,
                  'ApplyPendingGravityRestore');
@@ -242,10 +251,16 @@ function AddDefaultInventory(Pawn PlayerPawn)
     SwapInHandsSubclass(PlayerPawn);
     SwapInMopSubclass(PlayerPawn);
     if (VCPawn(PlayerPawn) != None)
-    {
         ApplyPawnInventoryLocks(VCPawn(PlayerPawn), CurrentToolsMask());
-        ScaleOneJanitor(VCPawn(PlayerPawn));
-    }
+}
+
+// Runs on every spawn after the engine resets GroundSpeed to the class
+// default (which happens after the inventory grant), so a mid-effect scale
+// applied any earlier would be wiped; it lands here instead.
+function SetPlayerDefaults(Pawn PlayerPawn)
+{
+    super.SetPlayerDefaults(PlayerPawn);
+    ScaleOneJanitor(VCPawn(PlayerPawn));
 }
 
 function SwapInHandsSubclass(Pawn PlayerPawn)
@@ -1845,14 +1860,17 @@ function StartZeroGravity()
     {
         for (I = 0; I < ZeroGravityVolumes.Length; I++)
             ZeroGravityVolumes[I].SetEnabled(true);
-        // The flip serializes into the level save, so a persistent marker
-        // survives a quit or crash mid-trap; the next load of this map forces
-        // the volumes back to the level default.
+        // Only a level save persists the flip, so a persistent marker carries
+        // the captured pre-trap states; a load of this map restores them when
+        // no save has confirmed the volumes since (a crash, or a save that
+        // fired mid-trap).
         if (APState != None)
         {
-            APState.APGravityRestoreMap = WorldInfo.GetMapName(true);
+            APState.APGravityRestoreMap = WorldInfo.GetMapName(true) $ ":"
+                $ EncodeZeroGravityVolumeStates();
             SaveAPState();
         }
+        GravityToggleTicksSeen = 0;
         SetTimer(GravityConsoleWatchInterval, true, 'WatchGravityConsole');
     }
     else
@@ -1872,10 +1890,9 @@ function StartZeroGravity()
 }
 
 // Puts gravity back to the captured pre-trap state. The volume flip would
-// persist into the level save on a quit to the menu, so the teardown paths
-// call this too; the guard makes those calls free when no effect runs. Debris
-// wakes again on the world path so pieces asleep mid-float notice the restore
-// and drop.
+// persist into the level save, so the teardown paths call this too; the
+// guard makes those calls free when no effect runs. Debris wakes again on
+// the world path so pieces asleep mid-float notice the restore and drop.
 function RestoreGravity()
 {
     local int I;
@@ -1884,6 +1901,17 @@ function RestoreGravity()
         return;
     if (ZeroGravityVolumes.Length > 0)
     {
+        // A console toggle that landed inside the last watch interval ends
+        // the effect the way the watch would: the player's choice stands and
+        // the capture is not re-applied over it.
+        for (I = 0; I < ZeroGravityVolumes.Length; I++)
+        {
+            if (ZeroGravityVolumes[I] != None && !ZeroGravityVolumes[I].bEnabled)
+            {
+                EndZeroGravity();
+                return;
+            }
+        }
         for (I = 0; I < ZeroGravityVolumes.Length; I++)
         {
             if (ZeroGravityVolumes[I] != None)
@@ -1899,12 +1927,15 @@ function RestoreGravity()
 }
 
 // The gravity console is the trap's escape hatch: a toggle during the effect
-// is the janitor fixing gravity, so the effect ends at once and no restore
-// overrides the choice. Only the volume path arms this watch; the world
-// gravity levels have no console.
+// is the janitor fixing gravity, so the effect ends and no restore overrides
+// the choice. The cancel waits one extra tick after the first flipped volume,
+// so a Kismet cycle that staggers the flips finishes before the effect ends.
+// Only the volume path arms this watch; the world gravity levels have no
+// console.
 function WatchGravityConsole()
 {
     local int I;
+    local bool bToggleSeen;
 
     if (!bZeroGravityActive || ZeroGravityVolumes.Length == 0)
     {
@@ -1915,16 +1946,26 @@ function WatchGravityConsole()
     {
         if (ZeroGravityVolumes[I] != None && !ZeroGravityVolumes[I].bEnabled)
         {
-            EndZeroGravity();
-            return;
+            bToggleSeen = true;
+            break;
         }
     }
+    if (!bToggleSeen)
+    {
+        GravityToggleTicksSeen = 0;
+        return;
+    }
+    GravityToggleTicksSeen++;
+    if (GravityToggleTicksSeen >= 2)
+        EndZeroGravity();
 }
 
-// Shared trap teardown: stops the clocks, drops the captured baseline, lifts
-// the pending-restore marker, and clears the HUD countdown. Gravity itself is
-// the caller's business: RestoreGravity re-applies the capture first, the
-// console watch leaves the player's choice standing.
+// Shared trap teardown: stops the clocks, drops the captured baseline, and
+// clears the HUD countdown. Gravity itself is the caller's business:
+// RestoreGravity re-applies the capture first, the console watch leaves the
+// player's choice standing. The pending marker deliberately survives: only a
+// level save persists volume state, so the save hooks lift it once a save
+// confirms the volumes with no trap in play.
 function EndZeroGravity()
 {
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
@@ -1934,14 +1975,8 @@ function EndZeroGravity()
     ZeroGravityVolumes.Length = 0;
     ZeroGravityVolumeWasEnabled.Length = 0;
     bZeroGravityActive = false;
-    // Only this map's marker is lifted: a marker a crash left on another map
-    // keeps waiting for that map's own load.
-    if (APState != None && APState.APGravityRestoreMap != ""
-        && APState.APGravityRestoreMap ~= WorldInfo.GetMapName(true))
-    {
-        APState.APGravityRestoreMap = "";
-        SaveAPState();
-    }
+    GravityToggleTicksSeen = 0;
+    LastZeroGravityEndSeconds = WorldInfo.TimeSeconds;
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
     if (ReplicatedInfo != None)
     {
@@ -1950,32 +1985,127 @@ function EndZeroGravity()
     }
 }
 
+// The captured pre-trap volume states, paired index for index with the
+// capture order, as the "0,1" tail of the pending marker.
+function string EncodeZeroGravityVolumeStates()
+{
+    local string Encoded;
+    local int I;
+
+    for (I = 0; I < ZeroGravityVolumeWasEnabled.Length; I++)
+    {
+        if (I > 0)
+            Encoded $= ",";
+        Encoded $= string(int(ZeroGravityVolumeWasEnabled[I]));
+    }
+    return Encoded;
+}
+
+// The map a pending marker belongs to: the marker is "MapName:states", or a
+// bare map name written by an older build.
+function string PendingGravityRestoreMap()
+{
+    local int ColonAt;
+
+    if (APState == None)
+        return "";
+    ColonAt = InStr(APState.APGravityRestoreMap, ":");
+    if (ColonAt == -1)
+        return APState.APGravityRestoreMap;
+    return Left(APState.APGravityRestoreMap, ColonAt);
+}
+
+// Lifts the marker when it belongs to this map. Punch-out calls this (the
+// shift is over and its save runs after the restore); the save hooks call it
+// through LiftGravityMarkerIfSafe.
+function ClearPendingGravityRestoreMarker()
+{
+    if (APState != None && APState.APGravityRestoreMap != ""
+        && PendingGravityRestoreMap() ~= WorldInfo.GetMapName(true))
+    {
+        APState.APGravityRestoreMap = "";
+        SaveAPState();
+    }
+}
+
+// A save is the only thing that persists volume state, so it is also the only
+// safe point to lift the marker: no trap running, and none that just ended (a
+// stepped save spans ticks, so its volume snapshot may predate the restore by
+// a moment).
+function LiftGravityMarkerIfSafe()
+{
+    if (bZeroGravityActive
+        || WorldInfo.TimeSeconds - LastZeroGravityEndSeconds
+            < GravityMarkerSaveGraceSeconds)
+    {
+        return;
+    }
+    ClearPendingGravityRestoreMarker();
+}
+
+function savegamestate(optional string SaveFileName)
+{
+    super.savegamestate(SaveFileName);
+    LiftGravityMarkerIfSafe();
+}
+
+// A stepped save serializes across later ticks, so the lift is deferred past
+// the save's whole span; a crash mid-save leaves the marker standing, which
+// is the conservative side.
+function StepAutosave(optional string SaveFileName)
+{
+    super.StepAutosave(SaveFileName);
+    SetTimer(GravityMarkerSaveGraceSeconds, false, 'LiftGravityMarkerIfSafe');
+}
+
 // Runs only while a pending marker names this map: waits for the game's own
 // save-state load to finish (the volumes' saved flip applies during it), then
-// forces the gravity volumes back to the level default, zero gravity on. Both
-// gravity levels ship in zero gravity, so the default is SetEnabled(true).
+// restores the captured pre-trap volume states the marker carries. A bare
+// marker from an older build falls back to the level default, zero gravity
+// on, which both gravity levels ship with.
 function ApplyPendingGravityRestore()
 {
     local VCMapInfo MapInfo;
-    local int I;
+    local array<string> StateTexts;
+    local int I, StateIndex, ColonAt;
+    local string States;
 
     if (GameReplicationInfo == None || !GameReplicationInfo.bMatchHasBegun)
         return;
     ClearTimer('ApplyPendingGravityRestore');
+    if (APState == None)
+        return;
     // A trap that started meanwhile owns the volumes and the marker again;
     // its own restore or the console watch settles both.
     if (bZeroGravityActive)
         return;
+    ColonAt = InStr(APState.APGravityRestoreMap, ":");
+    if (ColonAt != -1)
+    {
+        States = Mid(APState.APGravityRestoreMap, ColonAt + 1);
+        ParseStringIntoArray(States, StateTexts, ",", true);
+    }
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
     if (MapInfo != None)
     {
+        StateIndex = 0;
         for (I = 0; I < MapInfo.GravityVolumes.Length; I++)
         {
-            if (MapInfo.GravityVolumes[I] != None)
+            if (MapInfo.GravityVolumes[I] == None)
+                continue;
+            if (StateIndex < StateTexts.Length)
+            {
+                MapInfo.GravityVolumes[I].SetEnabled(
+                    StateTexts[StateIndex] == "1");
+            }
+            else
+            {
                 MapInfo.GravityVolumes[I].SetEnabled(true);
+            }
+            StateIndex++;
         }
     }
-    if (APState != None && APState.APGravityRestoreMap != "")
+    if (APState.APGravityRestoreMap != "")
     {
         APState.APGravityRestoreMap = "";
         SaveAPState();
@@ -1995,8 +2125,10 @@ function WakeAllDebris()
     }
 }
 
-// Quitting to the menu saves the level state on the way out, so a
-// trap-flipped gravity volume must be back to the player's state first.
+// Quitting a work level does not save it (only the periodic autosave and the
+// punch-out flow do), so this restore is best effort for the dying world; a
+// flip a mid-trap autosave already persisted stays covered by the pending
+// marker, which survives this teardown on purpose.
 event GameEnding()
 {
     RestoreGravity();
@@ -2056,8 +2188,10 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     // Gravity goes back before the final rung capture, so a trap-flipped
     // volume's transient penalty never bakes into the published rungs. The
     // shift's own results keep it: leaving gravity off costs points, the
-    // game's rule either way.
+    // game's rule either way. The shift is over, so this map's pending
+    // marker lifts with it (the punch-out flow saves after the restore).
     RestoreGravity();
+    ClearPendingGravityRestoreMarker();
     PublishCleanliness();
     bCleanlinessProbeStopped = true;
     ClearTimer('PublishCleanliness');
@@ -2198,6 +2332,15 @@ function PublishCleanliness()
         LastPublishedPercent = percent;
         APState.APCleanPct = percent;
         APState.APMap = WorldInfo.GetMapName(true);
+        changed = true;
+    }
+
+    // The level's starting score publishes once per shift, so the client can
+    // cross-check it against the shipped scan table and warn loudly when a
+    // measured constant no longer matches the live level.
+    if (APState.APStartScore == 0)
+    {
+        APState.APStartScore = int(Handler.StartingCleanupScore);
         changed = true;
     }
 
