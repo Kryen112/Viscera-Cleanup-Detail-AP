@@ -39,13 +39,10 @@ class TestDefault(VCDTestBase):
         gated += [collectible_name(DISPLAY_BY_MAP[m], c)
                   for m, t, c in COLLECTIBLES if t in GATED_COLLECTIBLE_TOKENS]
         for name in gated:
-            # Any single missing piece (the last is a Digsite clean tool) blocks it.
-            self.assertFalse(
-                self.multiworld.get_location(name, self.player).can_reach(
-                    self.state_with(needed[:-1])), name)
-            self.assertTrue(
-                self.multiworld.get_location(name, self.player).can_reach(
-                    self.state_with(needed)), name)
+            # Any single missing piece (an access item or a clean tool on any
+            # chain level) blocks it.
+            location = self.multiworld.get_location(name, self.player)
+            self.assert_needs_every_item(location.can_reach, needed, name)
 
     def test_collectibles_need_the_clean_kit(self):
         # Banking a collectible needs a not-fired shift, so it needs the level's
@@ -60,12 +57,9 @@ class TestDefault(VCDTestBase):
             pickup = self.pickup_kit(map_name, extra)
             location = self.multiworld.get_location(
                 collectible_name(display, collectible), self.player)
-            self.assertFalse(
-                location.can_reach(self.state_with(
-                    [access_item_name(display)] + pickup[:-1])), display)
-            self.assertTrue(
-                location.can_reach(self.state_with(
-                    [access_item_name(display)] + pickup)), display)
+            self.assert_needs_every_item(
+                location.can_reach,
+                [access_item_name(display)] + pickup, display)
 
     def test_tool_items_follow_presence_and_skip_the_free_pair(self):
         pool = self.created_item_names()
@@ -152,8 +146,8 @@ class TestDefault(VCDTestBase):
         kit = self.pickup_kit("VC_Sewer")
         location = self.multiworld.get_location(
             employee_of_the_month_name("Waste Disposal"), self.player)
-        self.assertFalse(location.can_reach(self.state_with(access + kit[:-1])))
-        self.assertTrue(location.can_reach(self.state_with(access + kit)))
+        self.assert_needs_every_item(location.can_reach, access + kit,
+                                     "Employee of the Month")
 
     def test_punch_out_needs_the_clean_kit_not_hands_alone(self):
         # A not-fired shift needs the core kit; hands alone leaves the level
@@ -442,12 +436,9 @@ class TestFindBobGoal(VCDTestBase):
                   for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
         for m in BOB_NOTE_MAPS + ["VC_Digsite"]:
             needed.extend(self.pickup_kit(m))
-        self.assertFalse(
-            self.multiworld.completion_condition[self.player](
-                self.state_with(needed[:-1])))
-        self.assertTrue(
-            self.multiworld.completion_condition[self.player](
-                self.state_with(needed)))
+        self.assert_needs_every_item(
+            self.multiworld.completion_condition[self.player], needed,
+            "find_bob")
 
 
 class TestCollectiblesGoal(VCDTestBase):

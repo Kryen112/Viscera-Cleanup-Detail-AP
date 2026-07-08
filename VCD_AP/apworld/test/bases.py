@@ -65,6 +65,16 @@ class VCDTestBase(WorldTestBase):
             self.player) if loc.item is not None and loc.locked]
         return names
 
+    def assert_needs_every_item(self, satisfied, needed: list[str],
+                                label: str = "") -> None:
+        """Asserts the state predicate holds with the full item list and fails
+        with any single element removed, so no requirement can silently drop."""
+        for index, item in enumerate(needed):
+            partial = needed[:index] + needed[index + 1:]
+            self.assertFalse(satisfied(self.state_with(partial)),
+                             f"{label} satisfied without {item}")
+        self.assertTrue(satisfied(self.state_with(needed)), label)
+
     def assert_location_exists(self, name: str) -> None:
         try:
             self.world.get_location(name)
