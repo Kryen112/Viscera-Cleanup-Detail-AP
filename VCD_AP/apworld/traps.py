@@ -29,6 +29,7 @@ TRAP_TYPE_BY_NAME: dict[str, str] = {
     "Slowdown Trap": "Slowdown",
     "Speedup Trap": "Speedup",
     "Magnetize Trap": "Magnetize",
+    "Zero Gravity Trap": "ZeroGravity",
 }
 TRAP_NAMES: list[str] = list(TRAP_TYPE_BY_NAME)
 

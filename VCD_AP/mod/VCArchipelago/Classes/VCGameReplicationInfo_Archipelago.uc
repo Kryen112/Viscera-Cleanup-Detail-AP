@@ -70,9 +70,10 @@ var bool bSelfCleaningMop;
 
 // Timed trap effects for the on-screen countdown. Fixed slots because
 // dynamic arrays do not replicate; the None type marks an empty slot.
-const TimedEffectNone     = 0;
-const TimedEffectSlowdown = 1;
-const TimedEffectSpeedup  = 2;
+const TimedEffectNone        = 0;
+const TimedEffectSlowdown    = 1;
+const TimedEffectSpeedup     = 2;
+const TimedEffectZeroGravity = 3;
 
 var byte  TimedEffectTypes[4];
 var float TimedEffectRemaining[4];

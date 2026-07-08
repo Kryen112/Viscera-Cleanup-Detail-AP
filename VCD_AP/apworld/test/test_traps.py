@@ -15,6 +15,7 @@ MESS_DUMP = ITEM_NAME_TO_ID["Mess Dump Trap"]
 SLOWDOWN = ITEM_NAME_TO_ID["Slowdown Trap"]
 SPEEDUP = ITEM_NAME_TO_ID["Speedup Trap"]
 MAGNETIZE = ITEM_NAME_TO_ID["Magnetize Trap"]
+ZERO_GRAVITY = ITEM_NAME_TO_ID["Zero Gravity Trap"]
 CLEAN_BUCKET = ITEM_NAME_TO_ID["Clean Water Bucket"]
 EMPTY_BIN = ITEM_NAME_TO_ID["Empty Bin"]
 FILLER = ITEM_NAME_TO_ID["Overtime Pay"]
@@ -61,6 +62,11 @@ class TestBuildQueue(unittest.TestCase):
         self.assertEqual(traps.build_queue(received, QUEUE_ID_TO_TYPE),
                          "2:Magnetize,3:MessDump")
 
+    def test_zero_gravity_rides_the_queue_with_its_own_token(self) -> None:
+        received = [ZERO_GRAVITY, FILLER, SLOWDOWN]
+        self.assertEqual(traps.build_queue(received, QUEUE_ID_TO_TYPE),
+                         "1:ZeroGravity,3:Slowdown")
+
     def test_no_queued_items_is_empty(self) -> None:
         self.assertEqual(traps.build_queue([FILLER, FILLER], QUEUE_ID_TO_TYPE), "")
 
@@ -81,11 +87,17 @@ class TestItemIdStability(unittest.TestCase):
                          ITEM_NAME_TO_ID["Empty Bin"] + 1)
 
     def test_magnetize_appends_after_the_frozen_tail(self) -> None:
-        # The magnetize trap sits after the last Squeaky Clean Boots id and
-        # holds the highest id in the table, so no earlier id can shift.
+        # The magnetize trap sits after the last Squeaky Clean Boots id, so no
+        # earlier id can shift.
         self.assertEqual(ITEM_NAME_TO_ID["Magnetize Trap"],
                          ITEM_NAME_TO_ID[SQUEAKY_BOOTS_ITEMS[-1]] + 1)
-        self.assertEqual(ITEM_NAME_TO_ID["Magnetize Trap"],
+
+    def test_zero_gravity_appends_after_the_frozen_tail(self) -> None:
+        # The zero gravity trap is the newest name, so it sits after the
+        # magnetize trap and holds the highest id in the table.
+        self.assertEqual(ITEM_NAME_TO_ID["Zero Gravity Trap"],
+                         ITEM_NAME_TO_ID["Magnetize Trap"] + 1)
+        self.assertEqual(ITEM_NAME_TO_ID["Zero Gravity Trap"],
                          max(ITEM_NAME_TO_ID.values()))
 
     def test_retired_names_hold_their_id_slot_but_leave_the_table(self) -> None:

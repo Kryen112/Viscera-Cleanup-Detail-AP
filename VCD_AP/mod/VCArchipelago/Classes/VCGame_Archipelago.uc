@@ -60,9 +60,22 @@ var array<float> SpeedAffectedBaseSpeeds;
 // speeds are at base.
 var byte ActiveSpeedEffectType;
 
-// Seconds a speed effect lasts; the HUD countdown shares this value through
-// the replicated GRI slot.
-const SpeedEffectDurationSeconds = 30.0;
+// Seconds a timed trap effect lasts (speed and gravity alike); the HUD
+// countdown shares this value through the replicated GRI slot.
+const TimedEffectDurationSeconds = 30.0;
+
+// Zero gravity trap state: what to put back when the effect ends. The two
+// volume arrays pair index for index. The active flag guards the restore
+// paths and keeps a second trap from capturing trap state as the baseline.
+var bool bZeroGravityActive;
+var float ZeroGravitySavedWorldGravityZ;
+var array<VCLowGravityVolume> ZeroGravityVolumes;
+var array<byte> ZeroGravityVolumeWasEnabled;
+
+// The world gravity a zero gravity trap applies outside the gravity levels.
+// Mildly negative, never zero or positive: everything still settles, so a
+// missed restore self-recovers and a jumping janitor always lands.
+const ZeroGravityWorldGravityZ = -60.0;
 
 // The magnet trap's reach and pull speeds. The pull sets rigid-body velocity
 // instead of adding an impulse, so every piece moves at a bounded speed no
@@ -337,6 +350,7 @@ function BounceLockedLevel()
     ClearTimer('EnforceToolLocks');
     ClearTimer('PollSelfCleaningMop');
     ClearTimer('PollSqueakyBoots');
+    RestoreGravity();
 
     // The trophy handler is persistent (it lives on the viewport client and
     // survives travel) and holds a reference to this level's punchout handler.
@@ -463,6 +477,10 @@ function ApplyQueueEntry(string QueueType)
     else if (QueueType ~= "Magnetize")
     {
         Magnetize();
+    }
+    else if (QueueType ~= "ZeroGravity")
+    {
+        StartZeroGravity();
     }
     else if (QueueType ~= "CleanBucket")
     {
@@ -1674,7 +1692,7 @@ function ScaleJanitorSpeeds(float Multiplier, byte EffectType)
         }
         Janitor.GroundSpeed = SpeedAffectedBaseSpeeds[Index] * Multiplier;
     }
-    SetTimer(SpeedEffectDurationSeconds, false, 'RestoreJanitorSpeeds');
+    SetTimer(TimedEffectDurationSeconds, false, 'RestoreJanitorSpeeds');
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
     if (ReplicatedInfo != None)
     {
@@ -1684,7 +1702,7 @@ function ScaleJanitorSpeeds(float Multiplier, byte EffectType)
         {
             ReplicatedInfo.ClearTimedEffect(ActiveSpeedEffectType);
         }
-        ReplicatedInfo.StartTimedEffect(EffectType, SpeedEffectDurationSeconds);
+        ReplicatedInfo.StartTimedEffect(EffectType, TimedEffectDurationSeconds);
     }
     ActiveSpeedEffectType = EffectType;
 }
@@ -1709,6 +1727,118 @@ function RestoreJanitorSpeeds()
         ReplicatedInfo.ClearTimedEffect(ActiveSpeedEffectType);
     }
     ActiveSpeedEffectType = class'VCGameReplicationInfo_Archipelago'.const.TimedEffectNone;
+}
+
+// Drops the level into low gravity for the effect duration. The two gravity
+// levels use their own placed volumes (the same switch the map Kismet drives),
+// which replicate and wake debris themselves; on a level still in its starting
+// zero-g that flip changes nothing and the entry is spent as a no-op.
+// Everywhere else the replicated world gravity value drives pawn falling
+// physics and the rigid body scene together, so one write covers co-op guests
+// too. A second trap while one runs restarts the clock from the same captured
+// baseline.
+function StartZeroGravity()
+{
+    local VCMapInfo MapInfo;
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local VCLowGravityVolume Volume;
+    local int I;
+
+    if (!bZeroGravityActive)
+    {
+        MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+        ZeroGravityVolumes.Length = 0;
+        ZeroGravityVolumeWasEnabled.Length = 0;
+        if (MapInfo != None)
+        {
+            for (I = 0; I < MapInfo.GravityVolumes.Length; I++)
+            {
+                Volume = MapInfo.GravityVolumes[I];
+                if (Volume == None)
+                    continue;
+                ZeroGravityVolumes.AddItem(Volume);
+                ZeroGravityVolumeWasEnabled.AddItem(Volume.bEnabled ? 1 : 0);
+            }
+        }
+        ZeroGravitySavedWorldGravityZ = WorldInfo.WorldGravityZ;
+    }
+    if (ZeroGravityVolumes.Length > 0)
+    {
+        for (I = 0; I < ZeroGravityVolumes.Length; I++)
+            ZeroGravityVolumes[I].SetEnabled(true);
+    }
+    else
+    {
+        WorldInfo.WorldGravityZ = ZeroGravityWorldGravityZ;
+        WakeAllDebris();
+    }
+    bZeroGravityActive = true;
+    SetTimer(TimedEffectDurationSeconds, false, 'RestoreGravity');
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None)
+    {
+        ReplicatedInfo.StartTimedEffect(
+            class'VCGameReplicationInfo_Archipelago'.const.TimedEffectZeroGravity,
+            TimedEffectDurationSeconds);
+    }
+}
+
+// Puts gravity back to the captured pre-trap state. The volume flip would
+// persist into the level save on a quit to the menu, so the teardown paths
+// call this too; the guard makes those calls free when no effect runs. Debris
+// wakes again on the world path so pieces asleep mid-float notice the restore
+// and drop.
+function RestoreGravity()
+{
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local int I;
+
+    if (!bZeroGravityActive)
+        return;
+    ClearTimer('RestoreGravity');
+    if (ZeroGravityVolumes.Length > 0)
+    {
+        for (I = 0; I < ZeroGravityVolumes.Length; I++)
+        {
+            if (ZeroGravityVolumes[I] != None)
+                ZeroGravityVolumes[I].SetEnabled(ZeroGravityVolumeWasEnabled[I] == 1);
+        }
+        ZeroGravityVolumes.Length = 0;
+        ZeroGravityVolumeWasEnabled.Length = 0;
+    }
+    else
+    {
+        WorldInfo.WorldGravityZ = ZeroGravitySavedWorldGravityZ;
+        WakeAllDebris();
+    }
+    bZeroGravityActive = false;
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo != None)
+    {
+        ReplicatedInfo.ClearTimedEffect(
+            class'VCGameReplicationInfo_Archipelago'.const.TimedEffectZeroGravity);
+    }
+}
+
+// Wakes every loose debris rigid body, the same pass the gravity volumes' own
+// switch runs, so sleeping pieces notice a world gravity change.
+function WakeAllDebris()
+{
+    local VCDebris Debris;
+
+    foreach DynamicActors(class'VCDebris', Debris)
+    {
+        if (Debris.Mesh != None)
+            Debris.Mesh.WakeRigidBody();
+    }
+}
+
+// Quitting to the menu saves the level state on the way out, so a
+// trap-flipped gravity volume must be back to the player's state first.
+event GameEnding()
+{
+    RestoreGravity();
+    super.GameEnding();
 }
 
 // Drops a supply item on the floor near the janitor. A plain spawn is exactly
@@ -1762,6 +1892,11 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     // the level is on its way out, and the handler's results are final now.
     // The milestone poll keeps running so the indicator can still flip once
     // the server confirms the final rungs before the travel.
+    // Gravity goes back before the final rung capture, so a trap-flipped
+    // volume's transient penalty never bakes into the published rungs. The
+    // shift's own results keep it: leaving gravity off costs points, the
+    // game's rule either way.
+    RestoreGravity();
     PublishCleanliness();
     bCleanlinessProbeStopped = true;
     ClearTimer('PublishCleanliness');

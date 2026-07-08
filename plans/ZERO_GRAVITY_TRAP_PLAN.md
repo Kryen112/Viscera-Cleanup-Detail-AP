@@ -151,7 +151,11 @@ for leaving low gravity on).
 3. **Restore-before-anything-persists**: on the gravity-level path the volume
    state serializes into the level save, so the restore must also run from
    the level-teardown paths that already clear `PollTraps` timers (punch-out
-   and quit), not only from the 30-second timer.
+   and quit), not only from the 30-second timer. On the punch-out path the
+   restore runs before the final rung capture, so the trap's transient
+   gravity penalty never bakes into the published rungs; the shift's own
+   pass-or-fired verdict keeps it, which is the game's rule for gravity left
+   off either way.
 4. **Duration**: reuse the 30-second shape. Rename or share
    `SpeedEffectDurationSeconds` (a shared `TimedEffectDurationSeconds` const)
    rather than adding a second magic number.
