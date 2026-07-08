@@ -1,20 +1,26 @@
-﻿"""Toolsanity: per-level tool and machine lock items and the band-based
-milestone logic they gate.
+﻿"""Toolsanity: per-level tool and machine lock items and the cleanliness logic
+they gate.
 
 The scan table below is transcribed from the mod's APScanReport dev command,
 run once per level on an untouched level (raw penalty-point sums straight from
 the game's own punchout scoring). Presence tables come from the same scan's
-machine counts plus a map-package search for the floor pickups. Hand-measured
-knowledge fills the two holes a scan cannot see: which remainders belong to
-which tool, and the J-HARM's spatial share (a flat reservation).
+machine counts plus a map-package search for the floor pickups. The core-kit
+ceiling for the suspect levels is measured in game with APCleanCoreKit, since a
+scan cannot tell how far the core kit reaches on its own.
 
-The logic model is additive bands. Each level's regular milestone ladder is
-carved into bands owned by item sets; a toolset's cap is the sum of the bands
-it holds, and a rung is in logic when the cap clears it by one full step. The
-full kit always caps at the level's usable total (map-specific mess lives in
-the unclaimed remainder, so band sums alone would strand the upper ladder on
-remainder-heavy levels). Employee of the Month, Speedrun, over-100 rungs, the
-punch-out check, collectibles, and Bob notes all require the full kit.
+The logic model is a core-kit ceiling. The core kit (hands, incinerator, mop,
+and buckets) cleans a level to 100 percent on its own, so every cleanliness
+check up to and including 100 percent, and the over-100 rungs the report and
+stacking then reach, come with the core kit alone. A few levels leave a large
+share of mess only one situational tool can clear (measured with APCleanCoreKit
+and recorded in CORE_KIT_CEILING_PERCENT): the core kit tops out around that
+ceiling there, and every cleanliness check above it waits for the one
+EXTRA_CLEAN_TOOL that closes the gap to 100. The other situational tools (the
+J-HARM everywhere, and the welder, vendor, and shovel on levels that do not
+need them for 100 percent) clean only mess the core kit already reaches, so
+they gate no cleanliness check. Physical pickups (collectibles and Bob notes)
+need the same clean kit, because a trophy only banks on a not-fired punch-out;
+the Overgrowth pickaxe also needs the shovel to dig it out.
 """
 
 from __future__ import annotations
@@ -56,6 +62,14 @@ USEFUL_TOOL_KEYS: frozenset[str] = frozenset({"Sniffer", "Broom", "Bins"})
 # and Shovel are situational and left to the normal shuffle.
 CORE_CLEANING_KEYS: frozenset[str] = frozenset({
     "Hands", "Incinerator", "Welder", "Mop", "SloshOMatic",
+})
+
+# The core kit: the tools that clean a level to 100 percent on their own (blood
+# and scorch with the mop and buckets, debris with the hands and incinerator).
+# Every level has all four. A level's full clean kit is this set plus any one
+# EXTRA_CLEAN_TOOL the level needs on top (see below).
+CORE_KIT_KEYS: frozenset[str] = frozenset({
+    "Hands", "Incinerator", "Mop", "SloshOMatic",
 })
 
 # The default free pair and the hard-start free pair (the random_starting_kit
@@ -124,13 +138,21 @@ VENDOR_MAPS: frozenset[str] = frozenset({
     "VC_Vulcan_01",
 })
 
-# Played knowledge: which tool a level's scan remainder belongs to. Uprinsing
-# leans on vendor restocking; Incubation Emergency's creep and hive debris are
-# welder work. Shovel levels claim their own remainder by default; anything
-# else stays unclaimed as safety margin.
-_REMAINDER_TOOL: dict[str, str] = {
-    "VC_Uprinsing": "Vendor",
+# Measured with the APCleanCoreKit dev command: levels the core kit alone
+# cannot clean to 100 percent, with the percent it tops out at and the one
+# situational tool that clears the rest. Incubation Emergency and Core Sample
+# leave welder mess (bullet holes and creep); Uprinsing leaves vendor mess
+# (graffiti that needs acid vials). A level absent here is fully cleaned by the
+# core kit (ceiling 100, no extra tool). Refine a ceiling if a rung strands.
+CORE_KIT_CEILING_PERCENT: dict[str, float] = {
+    "VC_Incubator": 80.0,
+    "VC_Uprinsing": 80.0,
+    "VC_Energy_01": 80.0,
+}
+EXTRA_CLEAN_TOOL: dict[str, str] = {
     "VC_Incubator": "Welder",
+    "VC_Uprinsing": "Vendor",
+    "VC_Energy_01": "Welder",
 }
 
 # Played knowledge: levels whose deeper areas sit behind carried keys, so any
@@ -141,16 +163,16 @@ NO_HANDS_CEILING_PERCENT: dict[str, float] = {
     "VC_Horror_01": 45.0,
 }
 
-# The flat reservation for the one share no scan can produce: mess only the
-# J-HARM reaches. Subtracted from any cap missing Hands plus Lift.
-LIFT_RESERVATION_PERCENT = 10.0
-
-# The band value cap for the special tools.
-BAND_CAP_PERCENT = 10.0
-
 # A hands-and-incinerator start without a mop spreads bloody footprints while
 # it works; its opening credit is capped low.
 HARD_START_OPENING_CAP_PERCENT = 15.0
+
+# The cleanliness a shift needs to punch out in good standing (not fired). The
+# Punch Out and Speedrun checks gate on reaching it. With the one-step slack
+# this clears only once the full clean kit is held, matching the game: a
+# barely-cleaned shift gets the janitor fired and a fired punch-out never
+# counts.
+PUNCHOUT_CLEAN_PERCENT = 95
 
 
 def tool_item_name(display_name: str, tool_key: str) -> str:
@@ -185,47 +207,33 @@ def item_keys(map_name: str, hard_start_maps: "set[str]") -> list[str]:
     return [k for k in tools_present(map_name) if k not in free]
 
 
-def full_kit_keys(map_name: str) -> frozenset[str]:
-    """The progression tools of the level's full kit; the free pair counts as
-    held, so this set works for either starting kit."""
-    return frozenset(k for k in tools_present(map_name)
-                     if k in PROGRESSION_TOOL_KEYS)
+def core_kit_ceiling(map_name: str) -> float:
+    """The percent the core kit alone reaches on the level: 100 unless a
+    measured suspect level leaves mess only its extra tool can clear."""
+    return CORE_KIT_CEILING_PERCENT.get(map_name, 100.0)
+
+
+def full_clean_keys(map_name: str) -> frozenset[str]:
+    """The tools that clean the level to 100 percent: the core kit, plus the
+    one extra tool a suspect level needs on top. The free pair counts as held,
+    so this set works for either starting kit. Once these are held the report
+    and stacking reach the level's over-100 maximum, so this set gates every
+    cleanliness check at or above 100 percent."""
+    extra = EXTRA_CLEAN_TOOL.get(map_name)
+    return CORE_KIT_KEYS | ({extra} if extra is not None else frozenset())
 
 
 class _Bands:
-    """Precomputed percent shares for one level."""
+    """Precomputed core-kit mess shares for one level, as percents of the
+    starting cleanup score. `free` is machine-use work no lock gates; `mop` is
+    the blood and scorch the mop and buckets clear. The hands and incinerator
+    clear the rest of the mess up to the level's core-kit ceiling."""
 
     def __init__(self, map_name: str) -> None:
-        (start, mop, welder, hands_disposal, barrels, equipment, vendor,
-         free, remainder) = _SCAN[map_name]
-        remainder_percent = remainder / start * 100.0
-        attributed = _REMAINDER_TOOL.get(map_name)
+        (start, _mop, _welder, _hands_disposal, _barrels, _equipment,
+         _vendor, free, _remainder) = _SCAN[map_name]
         self.free = free / start * 100.0
-        self.mop = mop / start * 100.0
-        self.welder = min(
-            BAND_CAP_PERCENT,
-            (welder / start * 100.0)
-            + (remainder_percent if attributed == "Welder" else 0.0),
-        ) if map_name in WELDER_MAPS else 0.0
-        self.vendor = min(
-            BAND_CAP_PERCENT,
-            (vendor / start * 100.0)
-            + (remainder_percent if attributed == "Vendor" else 0.0),
-        ) if map_name in VENDOR_MAPS else 0.0
-        self.shovel = min(
-            BAND_CAP_PERCENT, max(remainder_percent, 0.0),
-        ) if map_name in SHOVEL_MAPS and attributed is None else 0.0
-        # The hands-and-incinerator clamp: the scanned debris share plus the
-        # over-100 headroom (reports, stacking, and restoration are clipboard
-        # and hands work), minus any negative remainder (a per-map handler
-        # scoring actors differently than the base classification).
-        headroom = MAX_CLEAN_PERCENT_BY_MAP[map_name] - 100.0
-        self.hands_incinerator_clamp = max(
-            0.0,
-            (hands_disposal + barrels + equipment) / start * 100.0
-            + headroom + min(remainder_percent, 0.0),
-        )
-        self.lift_reserved = map_name in LIFT_MAPS
+        self.mop = _mop / start * 100.0
 
 
 _BANDS: dict[str, _Bands] = {m: _Bands(m) for m, _, _ in LEVELS}
@@ -247,37 +255,29 @@ def usable_total(map_name: str, step: int) -> int:
 
 
 def toolset_cap(map_name: str, step: int, unlocked: "frozenset[str]") -> float:
-    """The percent the unlocked tool set reaches on the level. The caller
-    folds the level's free pair into the unlocked set."""
-    bands = _BANDS[map_name]
-    if full_kit_keys(map_name) <= unlocked:
+    """The percent the unlocked tool set reaches on the level. The caller folds
+    the level's free pair into the unlocked set. The full clean kit reaches the
+    over-100 maximum (once the mess is fully cleaned the report and stacking do
+    the rest); a partial core kit reaches only its share of the mess, up to the
+    level's core-kit ceiling."""
+    if full_clean_keys(map_name) <= unlocked:
         return float(usable_total(map_name, step))
+    bands = _BANDS[map_name]
+    ceiling = core_kit_ceiling(map_name)
     hands = "Hands" in unlocked
     mop = "Mop" in unlocked and "SloshOMatic" in unlocked
     cap = bands.free
     if mop:
         cap += bands.mop
     if hands and "Incinerator" in unlocked:
-        leftover = (usable_total(map_name, step) - bands.free - bands.mop
-                    - bands.welder - bands.vendor - bands.shovel
-                    - (LIFT_RESERVATION_PERCENT if bands.lift_reserved else 0.0))
-        share = max(0.0, min(leftover, bands.hands_incinerator_clamp))
+        # Hands and the incinerator clear the rest of the mess up to the
+        # ceiling. Without the mop the credit is capped low: working
+        # bare-handed spreads bloody footprints until the mop arrives.
+        share = ceiling - bands.free - bands.mop
         if not mop:
-            # Working bare-handed spreads bloody footprints; the credit is
-            # deliberately low until the mop arrives.
             share = min(share, HARD_START_OPENING_CAP_PERCENT)
-        cap += share
-    # The welder leaves soot behind as it works, and vendor restock work can
-    # end in scrubbing (Uprinsing's graffiti takes acid vials, hands, and a
-    # wet mop), so both bands need the mop as well.
-    if hands and mop and "Welder" in unlocked:
-        cap += bands.welder
-    if hands and mop and "Vendor" in unlocked:
-        cap += bands.vendor
-    if hands and "Shovel" in unlocked:
-        cap += bands.shovel
-    if bands.lift_reserved and not (hands and "Lift" in unlocked):
-        cap -= LIFT_RESERVATION_PERCENT
+        cap += max(0.0, share)
+    cap = min(cap, ceiling)
     if not hands and map_name in NO_HANDS_CEILING_PERCENT:
         cap = min(cap, NO_HANDS_CEILING_PERCENT[map_name])
     return cap
@@ -285,9 +285,11 @@ def toolset_cap(map_name: str, step: int, unlocked: "frozenset[str]") -> float:
 
 def rung_in_logic(map_name: str, rung: int, step: int,
                   unlocked: "frozenset[str]") -> bool:
-    """A regular ladder rung is in logic when the toolset's cap clears it by
-    one slack-grid step (at least 5 points, so fine steps keep the step-5
-    margins). Rungs at or past 100 use the full-kit rule instead."""
+    """A milestone rung is in logic when the toolset's cap clears it by one
+    slack-grid step (at least 5 points, so fine steps keep the step-5 margins).
+    Every rung uses this, including Employee of the Month at 100 and the
+    over-100 ladder: the full clean kit caps at the over-100 maximum, so those
+    all come with it."""
     return rung + _slack_step(step) <= toolset_cap(map_name, step, unlocked)
 
 

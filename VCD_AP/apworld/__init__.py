@@ -23,8 +23,8 @@ from worlds.AutoWorld import World
 from worlds.LauncherComponents import (Component, Type, components,
                                        launch_subprocess)
 
-from .collectibles import (BOB_ALTAR_MAP, BOB_NOTE_MAPS, COLLECTIBLES,
-                           GATED_COLLECTIBLE_TOKENS)
+from .collectibles import (BOB_ALTAR_MAP, BOB_NOTE_MAPS, COLLECTIBLE_EXTRA_TOOLS,
+                           COLLECTIBLES, GATED_COLLECTIBLE_TOKENS)
 from .items import (CLEAN_MOP_ITEMS, FILLER_NAMES, ITEM_GROUPS,
                     ITEM_NAME_TO_ID, LEVEL_ACCESS_ITEMS,
                     PROGRESSION_TOOL_ITEMS, SQUEAKY_BOOTS_ITEMS, TOOL_ITEMS,
@@ -34,13 +34,14 @@ from .traps import TRAP_NAMES, USEFUL_NAMES
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (BOB_GATED_LOCATIONS, FIND_BOB_LOCATION,
                         LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
-                        MILESTONE_PERCENT, collectible_name,
+                        MILESTONE_PERCENT, bob_note_name, collectible_name,
                         employee_of_the_month_name, location_enabled,
-                        milestone_name, punch_out_name)
+                        milestone_name, punch_out_name, speedrun_name)
 from .options import VCDOptions
 from .toolsanity import (CORE_CLEANING_KEYS, PROGRESSION_TOOL_KEYS,
-                         free_keys, free_kit_rungs, full_kit_keys,
-                         item_keys, rung_in_logic, tool_item_name)
+                         PUNCHOUT_CLEAN_PERCENT, free_keys, free_kit_rungs,
+                         full_clean_keys, item_keys, rung_in_logic,
+                         tool_item_name)
 
 GAME_NAME = "Viscera Cleanup Detail"
 PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(
@@ -386,13 +387,42 @@ class VCDWorld(World):
                      for k in item_keys(map_name, self.hard_start_maps)
                      if k in PROGRESSION_TOOL_KEYS)
 
-    def _full_kit_items(self, map_name: str) -> "tuple[str, ...]":
-        """The item names of the level's full progression kit, minus its free
-        starting pair."""
+    def _pickup_items(self, map_name: str,
+                      extra_keys: "tuple[str, ...]" = ()) -> "tuple[str, ...]":
+        """The item names gating a physical pickup on the level. A trophy only
+        banks on a punch-out in good standing (a fired shift clears the trunk),
+        so a pickup needs the level's full clean kit, the same tools the
+        punch-out check needs, which includes the Hands that grab it. Any extra
+        pickup tool (the Overgrowth pickaxe is dug out with the shovel) is added
+        on top. The free pair drops out."""
+        display = DISPLAY_BY_MAP[map_name]
+        free = free_keys(map_name, self.hard_start_maps)
+        keys = set(full_clean_keys(map_name)) | set(extra_keys)
+        return tuple(tool_item_name(display, k)
+                     for k in sorted(keys) if k not in free)
+
+    def _full_clean_items(self, map_name: str) -> "tuple[str, ...]":
+        """The tool items that clean the level to 100 percent: the full clean
+        kit (core kit plus any suspect level's extra tool) minus the free pair.
+        These gate every cleanliness check at or above 100 percent."""
         display = DISPLAY_BY_MAP[map_name]
         free = free_keys(map_name, self.hard_start_maps)
         return tuple(tool_item_name(display, k)
-                     for k in sorted(full_kit_keys(map_name)) if k not in free)
+                     for k in sorted(full_clean_keys(map_name))
+                     if k not in free)
+
+    def _pickup_rule(self, map_name: str,
+                     extra_keys: "tuple[str, ...]" = ()):
+        """A physical pickup's access rule: the level's full clean kit (so the
+        punch-out that banks the trophy is not fired), plus any extra pickup
+        tool, must be held (the free pair counts as held)."""
+        player = self.player
+        items = self._pickup_items(map_name, tuple(extra_keys))
+
+        def rule(state, needed=items) -> bool:
+            return state.has_all(needed, player)
+
+        return rule
 
     def _rung_rule(self, map_name: str, rung: int, step: int):
         """A regular ladder rung's access rule: the held toolset's band cap
@@ -416,41 +446,55 @@ class VCDWorld(World):
         toolsanity = bool(self.options.toolsanity)
         step = self._step()
 
-        # Toolsanity gates every check on the tools that physically reach it:
-        # regular ladder rungs follow the band logic, and everything else on a
-        # level (Employee of the Month, over-100 rungs, the punch-out, the
-        # speedrun, collectibles, the Bob note) takes the level's full kit. A
-        # barely-cleaned punch-out gets the janitor fired, and a fired
-        # punch-out never counts, so the punch-out gate matches the game.
+        # Toolsanity gates each check on the tools that reach it. Cleanliness
+        # checks (every milestone rung, Employee of the Month at 100, and the
+        # over-100 ladder) follow the band cap: the core kit reaches 100 (the
+        # report and stacking then reach the over-100 maximum), so a situational
+        # tool a level does not need for 100 gates none of them. The Punch Out
+        # and Speedrun checks need a not-fired shift, and physical pickups
+        # (collectibles, Bob notes) need the same clean kit (a trophy only banks
+        # on a not-fired punch-out) plus any extra pickup tool.
         if toolsanity:
+            token_by_collectible = {
+                collectible_name(DISPLAY_BY_MAP[m], c): t
+                for m, t, c in COLLECTIBLES}
             for map_name in self.pooled_maps:
-                kit_items = self._full_kit_items(map_name)
+                display = DISPLAY_BY_MAP[map_name]
+                punch_or_speedrun = {punch_out_name(display),
+                                     speedrun_name(display)}
+                note_name = bob_note_name(display)
                 for name in self._enabled_locations_for(map_name):
                     if name in BOB_GATED_LOCATIONS:
                         continue
                     percent = MILESTONE_PERCENT.get(name)
-                    if percent is not None and percent < 100:
-                        self.get_location(name).access_rule = self._rung_rule(
-                            map_name, percent, step)
+                    if percent is not None:
+                        rule = self._rung_rule(map_name, percent, step)
+                    elif name in punch_or_speedrun:
+                        rule = self._rung_rule(
+                            map_name, PUNCHOUT_CLEAN_PERCENT, step)
+                    elif name == note_name:
+                        rule = self._pickup_rule(map_name)
                     else:
-                        self.get_location(name).access_rule = (
-                            lambda state, items=kit_items:
-                                state.has_all(items, player))
+                        token = token_by_collectible.get(name)
+                        extra = tuple(COLLECTIBLE_EXTRA_TOOLS.get(
+                            token, frozenset()))
+                        rule = self._pickup_rule(map_name, extra)
+                    self.get_location(name).access_rule = rule
 
         # The Digsite gate needs all nine Bob notes on the pedestal: six live in
         # the note levels (three are Office freebies), and Bob and the Red
         # Keycard sit behind the gate. So those checks need every note level on
         # top of the Digsite access their region already requires; under
-        # toolsanity they also need the chain's full kits, because the notes
-        # are collected and carried by hand. They only exist when the pool
-        # holds the whole chain, whose access items are all progression, so
-        # they are guaranteed reachable.
+        # toolsanity they also need each note level's clean kit, because a note
+        # only banks on a not-fired punch-out on its own level. They only exist
+        # when the pool holds the whole chain, whose access items are all
+        # progression, so they are guaranteed reachable.
         if self.bob_chain_pooled:
             required = [access_item_name(DISPLAY_BY_MAP[m])
                         for m in BOB_NOTE_MAPS]
             if toolsanity:
                 for m in list(BOB_NOTE_MAPS) + [BOB_ALTAR_MAP]:
-                    required.extend(self._full_kit_items(m))
+                    required.extend(self._pickup_items(m))
             for name in BOB_GATED_LOCATIONS:
                 self.get_location(name).access_rule = (
                     lambda state, items=tuple(required):

@@ -86,23 +86,30 @@ The reviewer treats a violation of any of these as a correctness blocker.
   Mop and Slosh-O-Matic under the hard start). Every per-level check requires
   that level's access item; with toolsanity off that is the whole predicate.
 - Toolsanity logic (on by default) lives entirely in `toolsanity.py` and is a
-  band model: regular milestone rungs need the toolset whose band cap clears
-  the rung with one step of slack, and everything else on a level (Employee
-  of the Month, over-100 rungs, speedrun, punch-out, collectibles, the Bob
-  note) needs the level's full progression kit. The scan table there is
-  transcribed from the mod's APScanReport run on every level; never
-  hand-guess its numbers, and never credit a band to a toolset that cannot
-  physically clear it (the welder and vendor bands also need the mop, every
-  special band needs Hands, the lift is a flat reservation). The full kit
+  core-kit ceiling model: the core kit (Hands, Incinerator, Mop, Slosh-O-Matic)
+  cleans a level to 100 percent on its own, so every cleanliness check up to and
+  past 100 (regular rungs by the band cap with one step of slack, Employee of
+  the Month, over-100 rungs, punch-out, speedrun) comes with the core kit, and a
+  situational tool a level does not need for 100 gates no cleanliness check.
+  Three measured suspect levels leave mess only one tool can clear
+  (`CORE_KIT_CEILING_PERCENT`: VC_Incubator and VC_Energy_01 need the Welder,
+  VC_Uprinsing the Vendor); there the core kit tops out around 80 and the checks
+  above it wait for that one `EXTRA_CLEAN_TOOL`. Physical pickups (collectibles,
+  Bob notes) need the level's full clean kit (`full_clean_keys`, the core kit
+  plus any suspect extra tool), because a trophy only banks on a not-fired
+  punch-out; the Overgrowth pickaxe also needs the Shovel. The scan table there
+  is transcribed from the mod's APScanReport run on every level, and the suspect
+  ceilings from APCleanCoreKit; never hand-guess either. The full clean kit
   always caps at the level's known-maximum usable total.
 - The Digsite gate exceptions: the two Bob events (Open the Digsite Gates,
   Find Bob) and the Red Keycard collectible additionally require the six
   note-level access items (the pedestal needs all nine notes; three are
-  Office freebies), plus the chain's full kits under toolsanity.
+  Office freebies), plus each note level's clean kit under toolsanity (a note
+  banks on a not-fired shift on its own level).
 - `completion_condition` is a solvability contract and switches on the `goal`
   option. Treat edits to it as high-risk. Named count-based traps:
   - `find_bob` resolves to the Find Bob location, whose rule carries the six
-    note levels plus the Digsite (and their full kits under toolsanity).
+    note levels plus the Digsite (and their clean kits under toolsanity).
     Those items must be progression and reachable, or the goal is unsolvable.
   - `collect_collectibles` with amount N requires access to the levels that hold
     N collectibles; the amount is clamped to the 39 that exist.

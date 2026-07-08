@@ -9,8 +9,8 @@ import unittest
 from Options import OptionError
 
 from .bases import VCDTestBase
-from ..collectibles import (BOB_NOTE_MAPS, BOB_NOTES, COLLECTIBLES,
-                            GATED_COLLECTIBLE_TOKENS)
+from ..collectibles import (BOB_NOTE_MAPS, BOB_NOTES, COLLECTIBLE_EXTRA_TOOLS,
+                            COLLECTIBLES, GATED_COLLECTIBLE_TOKENS)
 from ..items import ITEM_NAME_TO_ID, TOOL_ITEMS, access_item_name
 from ..levels import DISPLAY_BY_MAP, LEVELS, MAP_NAMES
 from ..locations import (BOB_GATED_LOCATIONS, DIGSITE_GATES_LOCATION,
@@ -30,16 +30,16 @@ class TestDefault(VCDTestBase):
         for _map, display, _title in LEVELS:
             self.assertNotIn(speedrun_name(display), names)
 
-    def test_bob_gated_checks_need_the_chain_accesses_and_full_kits(self):
+    def test_bob_gated_checks_need_the_chain_accesses_and_clean_kits(self):
         needed = [access_item_name(DISPLAY_BY_MAP[m])
                   for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
         for m in BOB_NOTE_MAPS + ["VC_Digsite"]:
-            needed.extend(self.world._full_kit_items(m))
+            needed.extend(self.world._pickup_items(m))
         gated = [DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION]
         gated += [collectible_name(DISPLAY_BY_MAP[m], c)
                   for m, t, c in COLLECTIBLES if t in GATED_COLLECTIBLE_TOKENS]
         for name in gated:
-            # Any single missing piece (the last is a Digsite tool) blocks it.
+            # Any single missing piece (the last is a Digsite clean tool) blocks it.
             self.assertFalse(
                 self.multiworld.get_location(name, self.player).can_reach(
                     self.state_with(needed[:-1])), name)
@@ -47,21 +47,25 @@ class TestDefault(VCDTestBase):
                 self.multiworld.get_location(name, self.player).can_reach(
                     self.state_with(needed)), name)
 
-    def test_collectibles_need_their_level_and_its_full_kit(self):
-        # Except the gate-locked ones, which the Bob-gated test covers.
+    def test_collectibles_need_the_clean_kit(self):
+        # Banking a collectible needs a not-fired shift, so it needs the level's
+        # clean kit (which includes the hands that grab it); the gate-locked
+        # ones the Bob-gated test covers. The Overgrowth pickaxe also needs the
+        # shovel to dig it out.
         for map_name, token, collectible in COLLECTIBLES:
             if token in GATED_COLLECTIBLE_TOKENS:
                 continue
             display = DISPLAY_BY_MAP[map_name]
-            kit = list(self.world._full_kit_items(map_name))
+            extra = tuple(COLLECTIBLE_EXTRA_TOOLS.get(token, frozenset()))
+            pickup = list(self.world._pickup_items(map_name, extra))
             location = self.multiworld.get_location(
                 collectible_name(display, collectible), self.player)
             self.assertFalse(
                 location.can_reach(self.state_with(
-                    [access_item_name(display)] + kit[:-1])), display)
+                    [access_item_name(display)] + pickup[:-1])), display)
             self.assertTrue(
                 location.can_reach(self.state_with(
-                    [access_item_name(display)] + kit)), display)
+                    [access_item_name(display)] + pickup)), display)
 
     def test_tool_items_follow_presence_and_skip_the_free_pair(self):
         pool = self.created_item_names()
@@ -100,10 +104,10 @@ class TestDefault(VCDTestBase):
         # A useful item is never required, so no location's rule references it.
         from ..items import self_cleaning_mop_name
         access = [access_item_name("Waste Disposal")]
-        kit = list(self.world._full_kit_items("VC_Sewer"))
+        kit = list(self.world._full_clean_items("VC_Sewer"))
         location = self.multiworld.get_location(
             employee_of_the_month_name("Waste Disposal"), self.player)
-        # The full kit alone reaches it; the mop item is not part of the kit.
+        # The clean kit alone reaches it; the mop item is not part of the kit.
         self.assertNotIn(self_cleaning_mop_name("Waste Disposal"), kit)
         self.assertTrue(location.can_reach(self.state_with(access + kit)))
 
@@ -122,18 +126,18 @@ class TestDefault(VCDTestBase):
         # A useful item is never required, so no location's rule references it.
         from ..items import squeaky_boots_name
         access = [access_item_name("Waste Disposal")]
-        kit = list(self.world._full_kit_items("VC_Sewer"))
+        kit = list(self.world._full_clean_items("VC_Sewer"))
         location = self.multiworld.get_location(
             employee_of_the_month_name("Waste Disposal"), self.player)
-        # The full kit alone reaches it; the boots item is not part of the kit.
+        # The clean kit alone reaches it; the boots item is not part of the kit.
         self.assertNotIn(squeaky_boots_name("Waste Disposal"), kit)
         self.assertTrue(location.can_reach(self.state_with(access + kit)))
 
     def test_low_rungs_open_with_access_high_rungs_need_the_kit(self):
         # Waste Disposal is 73 percent moppable, so mid rungs open with the
-        # starting kit but the top of the ladder waits for the tools.
+        # starting kit but the top of the ladder waits for the core kit.
         access = [access_item_name("Waste Disposal")]
-        kit = list(self.world._full_kit_items("VC_Sewer"))
+        kit = list(self.world._full_clean_items("VC_Sewer"))
         low = self.multiworld.get_location(
             milestone_name("Waste Disposal", 45), self.player)
         high = self.multiworld.get_location(
@@ -142,13 +146,24 @@ class TestDefault(VCDTestBase):
         self.assertFalse(high.can_reach(self.state_with(access)))
         self.assertTrue(high.can_reach(self.state_with(access + kit)))
 
-    def test_employee_of_the_month_needs_the_full_kit(self):
+    def test_employee_of_the_month_needs_the_clean_kit(self):
         access = [access_item_name("Waste Disposal")]
-        kit = list(self.world._full_kit_items("VC_Sewer"))
+        kit = list(self.world._full_clean_items("VC_Sewer"))
         location = self.multiworld.get_location(
             employee_of_the_month_name("Waste Disposal"), self.player)
         self.assertFalse(location.can_reach(self.state_with(access + kit[:-1])))
         self.assertTrue(location.can_reach(self.state_with(access + kit)))
+
+    def test_punch_out_needs_the_clean_kit_not_hands_alone(self):
+        # A not-fired shift needs the core kit; hands alone leaves the level
+        # too dirty to clock off, so the punch-out check waits for the kit.
+        access = [access_item_name("Waste Disposal")]
+        hands = [tool_item_name("Waste Disposal", "Hands")]
+        kit = list(self.world._full_clean_items("VC_Sewer"))
+        punch = self.multiworld.get_location(
+            punch_out_name("Waste Disposal"), self.player)
+        self.assertFalse(punch.can_reach(self.state_with(access + hands)))
+        self.assertTrue(punch.can_reach(self.state_with(access + kit)))
 
 
 class TestSpeedrunsanity(VCDTestBase):
@@ -392,7 +407,7 @@ class TestFindBobGoal(VCDTestBase):
         needed = [access_item_name(DISPLAY_BY_MAP[m])
                   for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
         for m in BOB_NOTE_MAPS + ["VC_Digsite"]:
-            needed.extend(self.world._full_kit_items(m))
+            needed.extend(self.world._pickup_items(m))
         self.assertFalse(
             self.multiworld.completion_condition[self.player](
                 self.state_with(needed[:-1])))
@@ -407,11 +422,11 @@ class TestCollectiblesGoal(VCDTestBase):
     def test_completion_counts_reachable_collectibles(self):
         # Cryogenesis and Gravity Drive hold two collectibles each; the two
         # levels together clear the three-collectible bar. Collectibles need
-        # their level's full kit on top of its access.
+        # their level's hands on top of its access.
         cryo = ([access_item_name("Cryogenesis")]
-                + list(self.world._full_kit_items("VC_Cryo")))
+                + list(self.world._pickup_items("VC_Cryo")))
         both_kits = cryo + [access_item_name("Gravity Drive")] + list(
-            self.world._full_kit_items("VC_ZeroG_New"))
+            self.world._pickup_items("VC_ZeroG_New"))
         self.assertFalse(self.multiworld.completion_condition[self.player](
             self.state_with(cryo)))
         self.assertTrue(self.multiworld.completion_condition[self.player](
@@ -480,9 +495,9 @@ class TestCollectiblesGoalPooled(VCDTestBase):
 
     def test_completion_needs_both_pooled_levels(self):
         cryo = ([access_item_name("Cryogenesis")]
-                + list(self.world._full_kit_items("VC_Cryo")))
+                + list(self.world._pickup_items("VC_Cryo")))
         both_kits = cryo + [access_item_name("Gravity Drive")] + list(
-            self.world._full_kit_items("VC_ZeroG_New"))
+            self.world._pickup_items("VC_ZeroG_New"))
         self.assertFalse(self.multiworld.completion_condition[self.player](
             self.state_with(cryo)))
         self.assertTrue(self.multiworld.completion_condition[self.player](
@@ -608,27 +623,29 @@ class TestToolsanityBands(unittest.TestCase):
     def test_mop_only_caps(self):
         from ..toolsanity import DEFAULT_FREE_KEYS, rung_in_logic
         kit = frozenset(DEFAULT_FREE_KEYS)
-        # Waste Disposal is 73 percent moppable with no lift on the level.
+        # Waste Disposal is 73 percent moppable with mop and buckets alone.
         self.assertTrue(rung_in_logic("VC_Sewer", 65, 5, kit))
         self.assertFalse(rung_in_logic("VC_Sewer", 70, 5, kit))
-        # Incubation Emergency is 16 percent moppable minus the lift
-        # reservation: not even the first rung clears with slack.
-        self.assertFalse(rung_in_logic("VC_Incubator", 5, 5, kit))
+        # Incubation Emergency is 16 percent moppable: the first rung clears,
+        # but the ladder stalls low until hands and the incinerator arrive.
+        self.assertTrue(rung_in_logic("VC_Incubator", 5, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Incubator", 15, 5, kit))
 
     def test_no_hands_ceiling_on_key_gated_levels(self):
         from ..toolsanity import DEFAULT_FREE_KEYS, rung_in_logic, toolset_cap
         kit = frozenset(DEFAULT_FREE_KEYS)
         # House of Horror walls its deeper areas behind carried keys: without
-        # hands the measured ceiling is 45 percent, well under the 56 the mop
-        # share minus the lift reservation would otherwise credit.
+        # hands the measured ceiling is 45 percent, under the 66 the mop share
+        # alone would otherwise credit.
         self.assertEqual(toolset_cap("VC_Horror_01", 5, kit), 45.0)
         self.assertTrue(rung_in_logic("VC_Horror_01", 40, 5, kit))
         self.assertFalse(rung_in_logic("VC_Horror_01", 45, 5, kit))
-        # With hands the ceiling lifts and the mop share carries further.
+        # With hands and the incinerator the whole core kit is held, so the
+        # level reaches its over-100 maximum.
         self.assertTrue(rung_in_logic(
             "VC_Horror_01", 45, 5, kit | {"Hands", "Incinerator"}))
-        # A map absent from the ceiling table keeps its pure band arithmetic:
-        # Waste Disposal mop-only is exactly its scanned mop share.
+        # A map absent from the ceiling table with mop only is exactly its
+        # scanned mop share.
         self.assertAlmostEqual(toolset_cap("VC_Sewer", 5, kit),
                                15940.0 / 21758.5 * 100.0)
 
@@ -640,21 +657,35 @@ class TestToolsanityBands(unittest.TestCase):
         self.assertTrue(rung_in_logic("VC_Sewer", 68, 1, kit))
         self.assertFalse(rung_in_logic("VC_Sewer", 69, 1, kit))
 
-    def test_full_kit_reaches_the_usable_total(self):
-        from ..toolsanity import full_kit_keys, toolset_cap
-        held = frozenset(full_kit_keys("VC_Incubator"))
-        # Incubation Emergency's known maximum is 117.67; the ladder tops out
-        # at the floored 115 even though its bands sum to far less.
-        self.assertEqual(toolset_cap("VC_Incubator", 5, held), 115.0)
+    def test_core_kit_reaches_the_usable_total_on_a_normal_level(self):
+        from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
+        # A normal level: the core kit alone reaches the over-100 maximum (the
+        # report and stacking do the rest), so no situational tool gates any
+        # cleanliness check there.
+        self.assertEqual(toolset_cap("VC_Sewer", 5, CORE_KIT_KEYS),
+                         float(usable_total("VC_Sewer", 5)))
 
-    def test_welder_and_vendor_bands_need_the_mop(self):
+    def test_suspect_level_needs_its_extra_tool(self):
+        from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
+        # Incubation Emergency's core kit tops out at its 80 percent ceiling;
+        # only the welder closes the gap to the over-100 maximum.
+        self.assertEqual(toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS), 80.0)
+        self.assertEqual(
+            toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS | {"Welder"}),
+            float(usable_total("VC_Incubator", 5)))
+        # Uprinsing leans on the vendor instead.
+        self.assertEqual(toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS), 80.0)
+        self.assertEqual(
+            toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS | {"Vendor"}),
+            float(usable_total("VC_Uprinsing", 5)))
+
+    def test_situational_tool_does_not_help_where_unneeded(self):
         from ..toolsanity import toolset_cap
-        # A hard start holding welder and vendor but no mop gains neither
-        # band: the welder leaves soot and restocking ends in scrubbing.
-        without_mop = frozenset({"Hands", "Incinerator", "Welder", "Vendor"})
-        with_mop = without_mop | {"Mop", "SloshOMatic"}
-        self.assertGreater(toolset_cap("VC_Uprinsing", 5, with_mop),
-                           toolset_cap("VC_Uprinsing", 5, without_mop) + 15.0)
+        # A partial core kit on a normal level gains nothing from the J-HARM: it
+        # cleans only mess the core kit already reaches.
+        partial = frozenset({"Mop", "SloshOMatic"})
+        self.assertEqual(toolset_cap("VC_Sewer", 5, partial),
+                         toolset_cap("VC_Sewer", 5, partial | {"Lift"}))
 
 
 class TestData(unittest.TestCase):
