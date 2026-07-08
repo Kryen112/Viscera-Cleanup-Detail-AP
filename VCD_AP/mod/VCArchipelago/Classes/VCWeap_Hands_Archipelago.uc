@@ -9,8 +9,9 @@
 // The dispatch below mirrors the stock HandleInstantHit order with the grab
 // branches removed.
 //
-// Locked machines and locked floor tools deny with a message here too, so a
-// dead click never reads as a bug.
+// Locked machines deny with a message here too, so a dead click never reads
+// as a bug. A locked floor tool (welder, broom, shovel) still grabs as a
+// plain carried item; only the weapon grant is withheld until its unlock.
 class VCWeap_Hands_Archipelago extends VCWeap_Hands;
 
 // Seconds between deny messages, so holding the button does not flood the HUD.
@@ -26,7 +27,7 @@ simulated function bool IsToolUnlocked(int ToolBit)
 
 simulated function bool HandleInstantHit(byte FiringMode, ImpactInfo Impact, optional int NumHits)
 {
-    local string LockedToolName;
+    local bool bHandled;
 
     // The stock dispatch runs on fire mode 0 only; mirror that before the
     // lock checks so mode 1 swings never trip a deny message.
@@ -63,19 +64,15 @@ simulated function bool HandleInstantHit(byte FiringMode, ImpactInfo Impact, opt
             NotifyToolLocked("Incinerator");
             return true;
         }
-        LockedToolName = LockedToolPickupName(Impact.HitActor);
-        if (LockedToolName != "")
-        {
-            NotifyToolLocked(LockedToolName);
-            return true;
-        }
     }
     if (!IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolHands)
         && !IsEquipmentGrab(Impact.HitActor))
     {
         return HandleCarryLockedHit(FiringMode, Impact);
     }
-    return super.HandleInstantHit(FiringMode, Impact, NumHits);
+    bHandled = super.HandleInstantHit(FiringMode, Impact, NumHits);
+    KeepLockedToolDropCarried();
+    return bHandled;
 }
 
 // Equipment stays carryable under the carry-lock: buckets (the mop needs its
@@ -107,27 +104,49 @@ simulated function bool IsEquipmentGrab(Actor HitActor)
         || VCScissorLift(HitActor) != None;
 }
 
-// The tool a floor pickup would grant, when that tool is still locked. The
-// pickup grab path grants the weapon outside the GameInfo, so it is denied at
-// the hands; the per-second inventory sweep backstops anything that slips in.
-simulated function string LockedToolPickupName(Actor HitActor)
+// True when the actor is a floor tool drop whose weapon is still locked.
+simulated function bool IsLockedToolDrop(Actor DropActor)
 {
-    if (VCItemDrop_WeldingLaser(HitActor) != None
-        && !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolWelder))
-    {
-        return "Laser Welder";
-    }
-    if (VCItemDrop_Broom(HitActor) != None
-        && !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolBroom))
-    {
-        return "Broom";
-    }
-    if (VCItemDrop_Shovel(HitActor) != None
-        && !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolShovel))
-    {
-        return "Shovel";
-    }
-    return "";
+    if (VCItemDrop_WeldingLaser(DropActor) != None)
+        return !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolWelder);
+    if (VCItemDrop_Broom(DropActor) != None)
+        return !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolBroom);
+    if (VCItemDrop_Shovel(DropActor) != None)
+        return !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolShovel);
+    return false;
+}
+
+// A grabbed floor tool whose weapon is still locked stays a plain carried
+// item, the same carry a duplicate pickup gets. The drop's own grab schedules
+// the weapon grant on a short timer (skipped when the pawn already owns the
+// tool), so cancelling the timers right after the grab withholds only the
+// grant and the world copy survives for the unlock. The per-second inventory
+// sweep backstops anything that slips in.
+simulated function KeepLockedToolDropCarried()
+{
+    local Actor HeldDrop;
+
+    HeldDrop = Actor(HeldActor);
+    if (HeldDrop == None || !IsLockedToolDrop(HeldDrop))
+        return;
+    HeldDrop.ClearTimer('SwitchToItemWeapon');
+    HeldDrop.ClearTimer('AdjustHoldMovement');
+}
+
+// The Kismet-driven remote pickup grabs through the same grant timer.
+function RemotePickup(Actor NewItem, optional bool bPlaySounds = true)
+{
+    super.RemotePickup(NewItem, bPlaySounds);
+    KeepLockedToolDropCarried();
+}
+
+// A net guest re-runs the grab locally when the held item replicates; cancel
+// its local copy of the grant timer too, so the guest's hands never play the
+// weapon swap for a grant the server withholds.
+simulated function ReplicatedHold()
+{
+    super.ReplicatedHold();
+    KeepLockedToolDropCarried();
 }
 
 // The stock dispatch with every grab branch removed: machine UI panels, the
