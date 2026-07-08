@@ -657,27 +657,53 @@ class TestToolsanityBands(unittest.TestCase):
         self.assertTrue(rung_in_logic("VC_Sewer", 68, 1, kit))
         self.assertFalse(rung_in_logic("VC_Sewer", 69, 1, kit))
 
-    def test_core_kit_reaches_the_usable_total_on_a_normal_level(self):
+    def _situational_present(self, map_name):
+        from ..toolsanity import SITUATIONAL_TOOL_KEYS, tools_present
+        return frozenset(k for k in tools_present(map_name)
+                         if k in SITUATIONAL_TOOL_KEYS)
+
+    def test_core_kit_reaches_100_and_the_full_kit_reaches_the_max(self):
         from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
-        # A normal level: the core kit alone reaches the over-100 maximum (the
-        # report and stacking do the rest), so no situational tool gates any
-        # cleanliness check there.
-        self.assertEqual(toolset_cap("VC_Sewer", 5, CORE_KIT_KEYS),
-                         float(usable_total("VC_Sewer", 5)))
+        # A normal level: the core kit reaches 100 (with the slack lift, so EotM
+        # and every sub-100 rung clear) but not the over-100 maximum on its own.
+        core = toolset_cap("VC_Sewer", 5, CORE_KIT_KEYS)
+        total = float(usable_total("VC_Sewer", 5))
+        self.assertGreaterEqual(core, 100.0)
+        self.assertLess(core, total)
+        # Holding every situational tool the level has reaches the maximum.
+        present = self._situational_present("VC_Sewer")
+        self.assertEqual(toolset_cap("VC_Sewer", 5, CORE_KIT_KEYS | present),
+                         total)
+
+    def test_each_situational_tool_adds_over_100(self):
+        from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
+        # Athena's Wrath has room over 100: one situational tool credits a share
+        # over 100, and holding all of them reaches the maximum.
+        present = sorted(self._situational_present("VC_Hall"))
+        self.assertGreaterEqual(len(present), 2)
+        core = toolset_cap("VC_Hall", 5, CORE_KIT_KEYS)
+        one = toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | {present[0]})
+        self.assertGreater(one, core)
+        self.assertEqual(
+            toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | set(present)),
+            float(usable_total("VC_Hall", 5)))
 
     def test_suspect_level_needs_its_extra_tool(self):
         from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
         # Incubation Emergency's core kit tops out at its 80 percent ceiling;
-        # only the welder closes the gap to the over-100 maximum.
+        # only the welder lifts it to 100 and opens the over-100 ladder.
         self.assertEqual(toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS), 80.0)
-        self.assertEqual(
-            toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS | {"Welder"}),
-            float(usable_total("VC_Incubator", 5)))
+        self.assertGreaterEqual(
+            toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS | {"Welder"}), 100.0)
         # Uprinsing leans on the vendor instead.
         self.assertEqual(toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS), 80.0)
-        self.assertEqual(
-            toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS | {"Vendor"}),
-            float(usable_total("VC_Uprinsing", 5)))
+        self.assertGreaterEqual(
+            toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS | {"Vendor"}), 100.0)
+        # The full kit reaches each suspect's maximum.
+        for m in ("VC_Incubator", "VC_Uprinsing"):
+            present = self._situational_present(m)
+            self.assertEqual(toolset_cap(m, 5, CORE_KIT_KEYS | present),
+                             float(usable_total(m, 5)))
 
     def test_situational_tool_does_not_help_where_unneeded(self):
         from ..toolsanity import toolset_cap

@@ -10,17 +10,17 @@ scan cannot tell how far the core kit reaches on its own.
 
 The logic model is a core-kit ceiling. The core kit (hands, incinerator, mop,
 and buckets) cleans a level to 100 percent on its own, so every cleanliness
-check up to and including 100 percent, and the over-100 rungs the report and
-stacking then reach, come with the core kit alone. A few levels leave a large
-share of mess only one situational tool can clear (measured with APCleanCoreKit
-and recorded in CORE_KIT_CEILING_PERCENT): the core kit tops out around that
-ceiling there, and every cleanliness check above it waits for the one
-EXTRA_CLEAN_TOOL that closes the gap to 100. The other situational tools (the
-J-HARM everywhere, and the welder, vendor, and shovel on levels that do not
-need them for 100 percent) clean only mess the core kit already reaches, so
-they gate no cleanliness check. Physical pickups (collectibles and Bob notes)
-need the same clean kit, because a trophy only banks on a not-fired punch-out;
-the Overgrowth pickaxe also needs the shovel to dig it out.
+check up to and including 100 percent (regular rungs and Employee of the Month)
+comes with the core kit alone. Over 100 percent, each situational tool the level
+has adds a fixed share (OVER_100_PER_TOOL_PERCENT), a conservative floor: the
+report and stacking usually reach more, so higher rungs are often obtainable out
+of logic, but the full kit always reaches the level's over-100 maximum. A few
+levels leave a large share of mess only one situational tool can clear (measured
+with APCleanCoreKit and recorded in CORE_KIT_CEILING_PERCENT): the core kit tops
+out around that ceiling there, and every check above it waits for the one
+EXTRA_CLEAN_TOOL that closes the gap to 100. Physical pickups (collectibles and
+Bob notes) need the level's clean kit, because a trophy only banks on a
+not-fired punch-out; the Overgrowth pickaxe also needs the shovel to dig it out.
 """
 
 from __future__ import annotations
@@ -71,6 +71,16 @@ CORE_CLEANING_KEYS: frozenset[str] = frozenset({
 CORE_KIT_KEYS: frozenset[str] = frozenset({
     "Hands", "Incinerator", "Mop", "SloshOMatic",
 })
+
+# The situational progression tools: everything the core kit does not cover.
+# Each one a level has adds a fixed share over 100 percent (see toolset_cap);
+# they gate no sub-100 or 100 check, only the over-100 ladder.
+SITUATIONAL_TOOL_KEYS: frozenset[str] = PROGRESSION_TOOL_KEYS - CORE_KIT_KEYS
+
+# Percent each situational tool a level has adds over 100. A conservative floor:
+# the report and stacking usually reach more, so higher rungs are often
+# obtainable out of logic, but the full kit always reaches the level's maximum.
+OVER_100_PER_TOOL_PERCENT = 10.0
 
 # The default free pair and the hard-start free pair (the random_starting_kit
 # option rolls per level). The displaced pair becomes that level's items.
@@ -216,9 +226,9 @@ def core_kit_ceiling(map_name: str) -> float:
 def full_clean_keys(map_name: str) -> frozenset[str]:
     """The tools that clean the level to 100 percent: the core kit, plus the
     one extra tool a suspect level needs on top. The free pair counts as held,
-    so this set works for either starting kit. Once these are held the report
-    and stacking reach the level's over-100 maximum, so this set gates every
-    cleanliness check at or above 100 percent."""
+    so this set works for either starting kit. Holding it gates every
+    cleanliness check up to and including 100 percent; each situational tool the
+    level has then adds a share over 100 (see toolset_cap)."""
     extra = EXTRA_CLEAN_TOOL.get(map_name)
     return CORE_KIT_KEYS | ({extra} if extra is not None else frozenset())
 
@@ -256,12 +266,23 @@ def usable_total(map_name: str, step: int) -> int:
 
 def toolset_cap(map_name: str, step: int, unlocked: "frozenset[str]") -> float:
     """The percent the unlocked tool set reaches on the level. The caller folds
-    the level's free pair into the unlocked set. The full clean kit reaches the
-    over-100 maximum (once the mess is fully cleaned the report and stacking do
-    the rest); a partial core kit reaches only its share of the mess, up to the
-    level's core-kit ceiling."""
+    the level's free pair into the unlocked set. The full clean kit reaches 100
+    percent (and Employee of the Month and every sub-100 rung with it); each
+    situational tool the level has then adds a fixed share over 100, and the
+    full kit reaches the level's over-100 maximum. A partial core kit reaches
+    only its share of the mess, up to the level's core-kit ceiling."""
     if full_clean_keys(map_name) <= unlocked:
-        return float(usable_total(map_name, step))
+        # The slack-step lift keeps every sub-100 rung and the 100 rung in logic
+        # at 100 with the clean kit alone; each situational tool the level has
+        # adds a fixed share over that, and the full kit reaches the maximum.
+        total = float(usable_total(map_name, step))
+        present = frozenset(k for k in tools_present(map_name)
+                            if k in SITUATIONAL_TOOL_KEYS)
+        held = present & unlocked
+        if present <= held:
+            return total
+        return min(total, 100.0 + float(_slack_step(step))
+                   + OVER_100_PER_TOOL_PERCENT * float(len(held)))
     bands = _BANDS[map_name]
     ceiling = core_kit_ceiling(map_name)
     hands = "Hands" in unlocked
@@ -287,9 +308,9 @@ def rung_in_logic(map_name: str, rung: int, step: int,
                   unlocked: "frozenset[str]") -> bool:
     """A milestone rung is in logic when the toolset's cap clears it by one
     slack-grid step (at least 5 points, so fine steps keep the step-5 margins).
-    Every rung uses this, including Employee of the Month at 100 and the
-    over-100 ladder: the full clean kit caps at the over-100 maximum, so those
-    all come with it."""
+    Every rung uses this: the clean kit clears Employee of the Month at 100 and
+    every sub-100 rung, and each situational tool the level has opens more of
+    the over-100 ladder, the full kit reaching the top."""
     return rung + _slack_step(step) <= toolset_cap(map_name, step, unlocked)
 
 

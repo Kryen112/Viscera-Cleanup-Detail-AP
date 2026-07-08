@@ -447,10 +447,10 @@ class VCDWorld(World):
         step = self._step()
 
         # Toolsanity gates each check on the tools that reach it. Cleanliness
-        # checks (every milestone rung, Employee of the Month at 100, and the
-        # over-100 ladder) follow the band cap: the core kit reaches 100 (the
-        # report and stacking then reach the over-100 maximum), so a situational
-        # tool a level does not need for 100 gates none of them. The Punch Out
+        # checks follow the band cap: the core kit reaches 100, so every
+        # sub-100 rung and Employee of the Month come with it and no situational
+        # tool a level does not need for 100 gates them; each situational tool
+        # the level has then opens more of the over-100 ladder. The Punch Out
         # and Speedrun checks need a not-fired shift, and physical pickups
         # (collectibles, Bob notes) need the same clean kit (a trophy only banks
         # on a not-fired punch-out) plus any extra pickup tool.

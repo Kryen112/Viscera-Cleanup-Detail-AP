@@ -88,10 +88,15 @@ The reviewer treats a violation of any of these as a correctness blocker.
 - Toolsanity logic (on by default) lives entirely in `toolsanity.py` and is a
   core-kit ceiling model: the core kit (Hands, Incinerator, Mop, Slosh-O-Matic)
   cleans a level to 100 percent on its own, so every cleanliness check up to and
-  past 100 (regular rungs by the band cap with one step of slack, Employee of
-  the Month, over-100 rungs, punch-out, speedrun) comes with the core kit, and a
-  situational tool a level does not need for 100 gates no cleanliness check.
-  Three measured suspect levels leave mess only one tool can clear
+  including 100 (regular rungs by the band cap with one step of slack, Employee
+  of the Month, punch-out, speedrun) comes with the core kit, and no situational
+  tool a level does not need for 100 gates any of them. Over 100, each
+  situational tool the level has (`SITUATIONAL_TOOL_KEYS`) adds a fixed share
+  (`OVER_100_PER_TOOL_PERCENT`) so the over-100 ladder is a per-tool climb; it is
+  a conservative floor (the report and stacking usually reach more, so higher
+  rungs are often obtainable out of logic), and the full kit reaches the level's
+  over-100 maximum with margin. Three measured suspect levels leave mess only
+  one tool can clear
   (`CORE_KIT_CEILING_PERCENT`: VC_Incubator and VC_Energy_01 need the Welder,
   VC_Uprinsing the Vendor); there the core kit tops out around 80 and the checks
   above it wait for that one `EXTRA_CLEAN_TOOL`. Physical pickups (collectibles,
