@@ -48,8 +48,10 @@ PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(
     LEVEL_ACCESS_ITEMS) | PROGRESSION_TOOL_ITEMS
 TRAP_ITEM_NAMES: frozenset[str] = frozenset(TRAP_NAMES)
 # The quality-of-life tool unlocks, the per-level Self-Cleaning Mop, and the
-# per-level Squeaky Clean Boots classify useful like the supply drops: never
-# progression, never in logic.
+# per-level Squeaky Clean Boots classify useful like the supply drops.
+# One exception: on a hard-start level the Self-Cleaning Mop stands in for
+# the itemized Slosh-O-Matic in logic, so create_item promotes that level's
+# copy to progression.
 USEFUL_ITEM_NAMES: frozenset[str] = (
     frozenset(USEFUL_NAMES)
     | (frozenset(TOOL_ITEMS) - PROGRESSION_TOOL_ITEMS)
@@ -124,6 +126,10 @@ class VCDWorld(World):
     pooled_maps: ClassVar[list[str]]
     bob_chain_pooled: ClassVar[bool]
     hard_start_maps: ClassVar[set[str]]
+    # The Self-Cleaning Mop copies that classify progression this seed: one
+    # per hard-start level, where the mop stands in for the itemized
+    # Slosh-O-Matic in logic. Empty until generate_early rolls the kits.
+    progression_clean_mop_items: frozenset[str] = frozenset()
 
     @staticmethod
     def _countable_collectibles(maps: set[str]) -> int:
@@ -202,6 +208,12 @@ class VCDWorld(World):
         if self.options.toolsanity and self.options.random_starting_kit:
             self.hard_start_maps = {
                 m for m in candidates if self.random.random() < 0.5}
+        # On a hard-start level the Slosh-O-Matic is an item and the level's
+        # Self-Cleaning Mop can stand in for it in logic, so that copy
+        # classifies progression.
+        self.progression_clean_mop_items = frozenset(
+            self_cleaning_mop_name(DISPLAY_BY_MAP[m])
+            for m in self.hard_start_maps)
         start_n = min(int(self.options.starting_levels.value), len(candidates))
         self.started_maps = self._draw_started_maps(candidates, start_n)
 
@@ -239,7 +251,8 @@ class VCDWorld(World):
         return {first} | set(self.random.sample(rest, start_n - 1))
 
     def create_item(self, name: str) -> VCDItem:
-        if name in PROGRESSION_ITEM_NAMES:
+        if (name in PROGRESSION_ITEM_NAMES
+                or name in self.progression_clean_mop_items):
             classification = ItemClassification.progression
         elif name in TRAP_ITEM_NAMES:
             classification = ItemClassification.trap
@@ -377,39 +390,46 @@ class VCDWorld(World):
                          or t not in GATED_COLLECTIBLE_TOKENS)], amount
         return [punch_out_name(d) for m, d, _ in LEVELS if m in pooled], amount
 
-    def _tool_state_pairs(self, map_name: str) -> "tuple[tuple[str, str], ...]":
-        """(tool key, item name) for the level's progression tool items; the
-        free pair is not itemized and folds in as always held, and the
-        quality-of-life unlocks never gate a band, so the hot rung predicate
-        skips them."""
+    def _tool_state_pairs(
+            self, map_name: str) -> "tuple[tuple[str, tuple[str, ...]], ...]":
+        """(tool key, item names that count as holding it) for the level's
+        progression tool items; the free pair is not itemized and folds in as
+        always held, and the quality-of-life unlocks never gate a band, so the
+        hot rung predicate skips them. The level's Self-Cleaning Mop counts as
+        the Slosh-O-Matic: a mop that never dirties needs no rinse bucket."""
         display = DISPLAY_BY_MAP[map_name]
-        return tuple((k, tool_item_name(display, k))
-                     for k in item_keys(map_name, self.hard_start_maps)
-                     if k in PROGRESSION_TOOL_KEYS)
+        return tuple(
+            (k, ((tool_item_name(display, k), self_cleaning_mop_name(display))
+                 if k == "SloshOMatic" else (tool_item_name(display, k),)))
+            for k in item_keys(map_name, self.hard_start_maps)
+            if k in PROGRESSION_TOOL_KEYS)
 
-    def _pickup_items(self, map_name: str,
-                      extra_keys: "tuple[str, ...]" = ()) -> "tuple[str, ...]":
-        """The item names gating a physical pickup on the level. A trophy only
-        banks on a punch-out in good standing (a fired shift clears the trunk),
-        so a pickup needs the level's full clean kit, the same tools the
-        punch-out check needs, which includes the Hands that grab it. Any extra
-        pickup tool (the Overgrowth pickaxe is dug out with the shovel) is added
-        on top. The free pair drops out."""
+    def _pickup_requirements(
+            self, map_name: str, extra_keys: "tuple[str, ...]" = ()
+    ) -> "tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]":
+        """The items gating a physical pickup on the level, as (items all
+        required, any-of groups). A trophy only banks on a punch-out in good
+        standing (a fired shift clears the trunk), so a pickup needs the
+        level's full clean kit, the same tools the punch-out check needs,
+        which includes the Hands that grab it. Any extra pickup tool (the
+        Overgrowth pickaxe is dug out with the shovel) is added on top. The
+        free pair drops out. An itemized Slosh-O-Matic slot is an any-of group
+        with the level's Self-Cleaning Mop: a mop that never dirties needs no
+        rinse bucket."""
         display = DISPLAY_BY_MAP[map_name]
         free = free_keys(map_name, self.hard_start_maps)
         keys = set(full_clean_keys(map_name)) | set(extra_keys)
-        return tuple(tool_item_name(display, k)
-                     for k in sorted(keys) if k not in free)
-
-    def _full_clean_items(self, map_name: str) -> "tuple[str, ...]":
-        """The tool items that clean the level to 100 percent: the full clean
-        kit (core kit plus any suspect level's extra tool) minus the free pair.
-        These gate every cleanliness check at or above 100 percent."""
-        display = DISPLAY_BY_MAP[map_name]
-        free = free_keys(map_name, self.hard_start_maps)
-        return tuple(tool_item_name(display, k)
-                     for k in sorted(full_clean_keys(map_name))
-                     if k not in free)
+        needed: "list[str]" = []
+        groups: "list[tuple[str, ...]]" = []
+        for k in sorted(keys):
+            if k in free:
+                continue
+            if k == "SloshOMatic":
+                groups.append((tool_item_name(display, k),
+                               self_cleaning_mop_name(display)))
+            else:
+                needed.append(tool_item_name(display, k))
+        return tuple(needed), tuple(groups)
 
     def _pickup_rule(self, map_name: str,
                      extra_keys: "tuple[str, ...]" = ()):
@@ -417,10 +437,11 @@ class VCDWorld(World):
         punch-out that banks the trophy is not fired), plus any extra pickup
         tool, must be held (the free pair counts as held)."""
         player = self.player
-        items = self._pickup_items(map_name, tuple(extra_keys))
+        needed, groups = self._pickup_requirements(map_name, tuple(extra_keys))
 
-        def rule(state, needed=items) -> bool:
-            return state.has_all(needed, player)
+        def rule(state, all_items=needed, any_groups=groups) -> bool:
+            return (state.has_all(all_items, player)
+                    and all(state.has_any(g, player) for g in any_groups))
 
         return rule
 
@@ -434,8 +455,8 @@ class VCDWorld(World):
         def rule(state, m=map_name, r=rung, s=step, kit=base,
                  tool_pairs=pairs) -> bool:
             unlocked = set(kit)
-            for key, item in tool_pairs:
-                if state.has(item, player):
+            for key, items in tool_pairs:
+                if state.has_any(items, player):
                     unlocked.add(key)
             return rung_in_logic(m, r, s, frozenset(unlocked))
 
@@ -492,13 +513,18 @@ class VCDWorld(World):
         if self.bob_chain_pooled:
             required = [access_item_name(DISPLAY_BY_MAP[m])
                         for m in BOB_NOTE_MAPS]
+            required_any: "list[tuple[str, ...]]" = []
             if toolsanity:
                 for m in list(BOB_NOTE_MAPS) + [BOB_ALTAR_MAP]:
-                    required.extend(self._pickup_items(m))
+                    needed, groups = self._pickup_requirements(m)
+                    required.extend(needed)
+                    required_any.extend(groups)
             for name in BOB_GATED_LOCATIONS:
                 self.get_location(name).access_rule = (
-                    lambda state, items=tuple(required):
+                    lambda state, items=tuple(required),
+                    any_groups=tuple(required_any):
                         state.has_all(items, player)
+                        and all(state.has_any(g, player) for g in any_groups)
                 )
 
         locations, need = self._goal_locations()

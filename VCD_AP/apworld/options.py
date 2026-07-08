@@ -56,7 +56,9 @@ class RandomStartingKit(Toggle):
     """With toolsanity on, each level independently rolls its free starting
     pair: mop plus Slosh-O-Matic, or hands plus incinerator (the displaced
     pair becomes that level's items). A hands start is the hard way: debris
-    can burn, but blood waits for the mop. Off by default (every level starts
+    can burn, but blood waits for the mop. On a hands-start level the
+    Self-Cleaning Mop counts as the Slosh-O-Matic in logic, since a mop that
+    never dirties needs no rinse bucket. Off by default (every level starts
     mop and Slosh-O-Matic)."""
     display_name = "Random starting kit"
 

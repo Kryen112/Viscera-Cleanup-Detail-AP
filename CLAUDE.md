@@ -105,7 +105,11 @@ The reviewer treats a violation of any of these as a correctness blocker.
   punch-out; the Overgrowth pickaxe also needs the Shovel. The scan table there
   is transcribed from the mod's APScanReport run on every level, and the suspect
   ceilings from APCleanCoreKit; never hand-guess either. The full clean kit
-  always caps at the level's known-maximum usable total.
+  always caps at the level's known-maximum usable total. An itemized
+  Slosh-O-Matic (a hard-start level under `random_starting_kit`) is satisfiable
+  two ways in every rule: the machine unlock or the level's Self-Cleaning Mop,
+  since a mop that never dirties needs no rinse bucket; that mop copy
+  classifies progression there.
 - The Digsite gate exceptions: the two Bob events (Open the Digsite Gates,
   Find Bob) and the Red Keycard collectible additionally require the six
   note-level access items (the pedestal needs all nine notes; three are
@@ -126,8 +130,11 @@ The reviewer treats a violation of any of these as a correctness blocker.
   useful supply items and the quality-of-life tool unlocks (Sniffer, Broom,
   Bin Dispenser) are `ItemClassification.useful`, the rest is filler. Traps,
   supplies, and useful tool unlocks are never progression and never required
-  by logic; the `trap_percentage` (default 5) and `useful_percentage`
-  (default 15) options convert shares of filler slots, traps first.
+  by logic, with one exception: a hard-start level's Self-Cleaning Mop
+  classifies progression because it stands in for that level's itemized
+  Slosh-O-Matic in logic. The `trap_percentage` (default 5) and
+  `useful_percentage` (default 15) options convert shares of filler slots,
+  traps first.
 - Toolsanity state travels client to mod inside the grants file as the
   `UnlockedTools` string (`"VC_Hall:Hands Welder,VC_Cryo:"`); a map absent
   from it means toolsanity off for that map, so old clients and

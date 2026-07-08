@@ -34,7 +34,7 @@ class TestDefault(VCDTestBase):
         needed = [access_item_name(DISPLAY_BY_MAP[m])
                   for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
         for m in BOB_NOTE_MAPS + ["VC_Digsite"]:
-            needed.extend(self.world._pickup_items(m))
+            needed.extend(self.pickup_kit(m))
         gated = [DIGSITE_GATES_LOCATION, FIND_BOB_LOCATION]
         gated += [collectible_name(DISPLAY_BY_MAP[m], c)
                   for m, t, c in COLLECTIBLES if t in GATED_COLLECTIBLE_TOKENS]
@@ -57,7 +57,7 @@ class TestDefault(VCDTestBase):
                 continue
             display = DISPLAY_BY_MAP[map_name]
             extra = tuple(COLLECTIBLE_EXTRA_TOOLS.get(token, frozenset()))
-            pickup = list(self.world._pickup_items(map_name, extra))
+            pickup = self.pickup_kit(map_name, extra)
             location = self.multiworld.get_location(
                 collectible_name(display, collectible), self.player)
             self.assertFalse(
@@ -101,10 +101,11 @@ class TestDefault(VCDTestBase):
                 map_name)
 
     def test_self_cleaning_mop_never_gates_a_location(self):
-        # A useful item is never required, so no location's rule references it.
+        # Under the default kit the Slosh-O-Matic is free, so the mop has
+        # nothing to stand in for and no location's rule references it.
         from ..items import self_cleaning_mop_name
         access = [access_item_name("Waste Disposal")]
-        kit = list(self.world._full_clean_items("VC_Sewer"))
+        kit = self.pickup_kit("VC_Sewer")
         location = self.multiworld.get_location(
             employee_of_the_month_name("Waste Disposal"), self.player)
         # The clean kit alone reaches it; the mop item is not part of the kit.
@@ -126,7 +127,7 @@ class TestDefault(VCDTestBase):
         # A useful item is never required, so no location's rule references it.
         from ..items import squeaky_boots_name
         access = [access_item_name("Waste Disposal")]
-        kit = list(self.world._full_clean_items("VC_Sewer"))
+        kit = self.pickup_kit("VC_Sewer")
         location = self.multiworld.get_location(
             employee_of_the_month_name("Waste Disposal"), self.player)
         # The clean kit alone reaches it; the boots item is not part of the kit.
@@ -137,7 +138,7 @@ class TestDefault(VCDTestBase):
         # Waste Disposal is 73 percent moppable, so mid rungs open with the
         # starting kit but the top of the ladder waits for the core kit.
         access = [access_item_name("Waste Disposal")]
-        kit = list(self.world._full_clean_items("VC_Sewer"))
+        kit = self.pickup_kit("VC_Sewer")
         low = self.multiworld.get_location(
             milestone_name("Waste Disposal", 45), self.player)
         high = self.multiworld.get_location(
@@ -148,7 +149,7 @@ class TestDefault(VCDTestBase):
 
     def test_employee_of_the_month_needs_the_clean_kit(self):
         access = [access_item_name("Waste Disposal")]
-        kit = list(self.world._full_clean_items("VC_Sewer"))
+        kit = self.pickup_kit("VC_Sewer")
         location = self.multiworld.get_location(
             employee_of_the_month_name("Waste Disposal"), self.player)
         self.assertFalse(location.can_reach(self.state_with(access + kit[:-1])))
@@ -159,7 +160,7 @@ class TestDefault(VCDTestBase):
         # too dirty to clock off, so the punch-out check waits for the kit.
         access = [access_item_name("Waste Disposal")]
         hands = [tool_item_name("Waste Disposal", "Hands")]
-        kit = list(self.world._full_clean_items("VC_Sewer"))
+        kit = self.pickup_kit("VC_Sewer")
         punch = self.multiworld.get_location(
             punch_out_name("Waste Disposal"), self.player)
         self.assertFalse(punch.can_reach(self.state_with(access + hands)))
@@ -361,6 +362,39 @@ class TestRandomStartingKit(VCDTestBase):
         self.assertEqual(self.world.fill_slot_data()["hard_start_maps"],
                          sorted(self.world.hard_start_maps))
 
+    def test_clean_mop_classifies_progression_only_on_hard_start_levels(self):
+        from BaseClasses import ItemClassification
+        from ..items import self_cleaning_mop_name
+        for map_name in self.world.pooled_maps:
+            item = self.world.create_item(
+                self_cleaning_mop_name(DISPLAY_BY_MAP[map_name]))
+            expected = (ItemClassification.progression
+                        if map_name in self.world.hard_start_maps
+                        else ItemClassification.useful)
+            self.assertEqual(item.classification, expected, map_name)
+
+    def test_clean_mop_stands_in_for_the_slosh_o_matic(self):
+        # On a hard-start level the Slosh-O-Matic is itemized, and the level's
+        # Self-Cleaning Mop satisfies its slot: a mop that never dirties needs
+        # no rinse bucket. Either item clears the punch-out; neither leaves it
+        # out of reach.
+        from ..items import self_cleaning_mop_name
+        if not self.world.hard_start_maps:
+            self.skipTest("no hard-start roll this seed")
+        map_name = sorted(self.world.hard_start_maps)[0]
+        display = DISPLAY_BY_MAP[map_name]
+        needed, groups = self.world._pickup_requirements(map_name)
+        self.assertIn((tool_item_name(display, "SloshOMatic"),
+                       self_cleaning_mop_name(display)), groups)
+        base = [access_item_name(display)] + list(needed)
+        punch = self.multiworld.get_location(
+            punch_out_name(display), self.player)
+        self.assertFalse(punch.can_reach(self.state_with(base)))
+        self.assertTrue(punch.can_reach(self.state_with(
+            base + [tool_item_name(display, "SloshOMatic")])))
+        self.assertTrue(punch.can_reach(self.state_with(
+            base + [self_cleaning_mop_name(display)])))
+
 
 class TestStep1(VCDTestBase):
     # A small pool keeps the fill fast; step 1 on the full 26 levels holds
@@ -407,7 +441,7 @@ class TestFindBobGoal(VCDTestBase):
         needed = [access_item_name(DISPLAY_BY_MAP[m])
                   for m in BOB_NOTE_MAPS + ["VC_Digsite"]]
         for m in BOB_NOTE_MAPS + ["VC_Digsite"]:
-            needed.extend(self.world._pickup_items(m))
+            needed.extend(self.pickup_kit(m))
         self.assertFalse(
             self.multiworld.completion_condition[self.player](
                 self.state_with(needed[:-1])))
@@ -424,9 +458,9 @@ class TestCollectiblesGoal(VCDTestBase):
         # levels together clear the three-collectible bar. Collectibles need
         # their level's hands on top of its access.
         cryo = ([access_item_name("Cryogenesis")]
-                + list(self.world._pickup_items("VC_Cryo")))
-        both_kits = cryo + [access_item_name("Gravity Drive")] + list(
-            self.world._pickup_items("VC_ZeroG_New"))
+                + self.pickup_kit("VC_Cryo"))
+        both_kits = (cryo + [access_item_name("Gravity Drive")]
+                     + self.pickup_kit("VC_ZeroG_New"))
         self.assertFalse(self.multiworld.completion_condition[self.player](
             self.state_with(cryo)))
         self.assertTrue(self.multiworld.completion_condition[self.player](
@@ -495,9 +529,9 @@ class TestCollectiblesGoalPooled(VCDTestBase):
 
     def test_completion_needs_both_pooled_levels(self):
         cryo = ([access_item_name("Cryogenesis")]
-                + list(self.world._pickup_items("VC_Cryo")))
-        both_kits = cryo + [access_item_name("Gravity Drive")] + list(
-            self.world._pickup_items("VC_ZeroG_New"))
+                + self.pickup_kit("VC_Cryo"))
+        both_kits = (cryo + [access_item_name("Gravity Drive")]
+                     + self.pickup_kit("VC_ZeroG_New"))
         self.assertFalse(self.multiworld.completion_condition[self.player](
             self.state_with(cryo)))
         self.assertTrue(self.multiworld.completion_condition[self.player](

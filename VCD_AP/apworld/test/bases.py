@@ -46,6 +46,14 @@ class VCDTestBase(WorldTestBase):
             state.collect(self.world.create_item(name), prevent_sweep=True)
         return state
 
+    def pickup_kit(self, map_name: str,
+                   extra: "tuple[str, ...]" = ()) -> list[str]:
+        """A flat satisfying kit for the level's pickup and clean-kit rules:
+        every required item plus the first member of each any-of group (the
+        tool unlock, not its Self-Cleaning Mop stand-in)."""
+        needed, groups = self.world._pickup_requirements(map_name, tuple(extra))
+        return list(needed) + [group[0] for group in groups]
+
     def created_item_names(self) -> list[str]:
         """Every item the seed created for the player: the itempool, the
         precollected starting items, and any items locked into locations by

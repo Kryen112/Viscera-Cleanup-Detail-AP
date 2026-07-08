@@ -48,8 +48,10 @@ def self_cleaning_mop_name(display_name: str) -> str:
     return f"{display_name} - Self-Cleaning Mop"
 
 
-# One per level in table order: a useful unlock that keeps the level's mop from
-# ever dirtying. Always created, independent of toolsanity.
+# One per level in table order: an unlock that keeps the level's mop from
+# ever dirtying. Always created, independent of toolsanity. Classifies useful,
+# except on a hard-start level where it stands in for the itemized
+# Slosh-O-Matic in logic and classifies progression (see create_item).
 CLEAN_MOP_ITEMS: list[str] = [
     self_cleaning_mop_name(_display) for _, _display, _ in LEVELS
 ]

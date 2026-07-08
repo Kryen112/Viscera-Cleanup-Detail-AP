@@ -21,6 +21,11 @@ out around that ceiling there, and every check above it waits for the one
 EXTRA_CLEAN_TOOL that closes the gap to 100. Physical pickups (collectibles and
 Bob notes) need the level's clean kit, because a trophy only banks on a
 not-fired punch-out; the Overgrowth pickaxe also needs the shovel to dig it out.
+
+The Slosh-O-Matic slot in this model is satisfiable two ways: the machine
+unlock itself, or the level's Self-Cleaning Mop (a mop that never dirties needs
+no rinse bucket). The rules layer folds either into the unlocked key set before
+calling in here; this module only sees tool keys.
 """
 
 from __future__ import annotations
