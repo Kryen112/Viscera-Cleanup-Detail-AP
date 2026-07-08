@@ -139,6 +139,21 @@ class TestDeploy(InstallerCase):
         self.assertTrue((self.install / installer.BACKUP_DIR_NAME
                          / "UDKEngine.ini").is_file())
 
+    def test_utf16_generated_engine_ini_is_edited_not_cleared(self) -> None:
+        # The engine rewrites a config as UTF-16 once a non-ANSI character
+        # lands in a setting; such a file must be wired in place in its own
+        # encoding, never treated as unrecognizable and cleared.
+        generated = self.config / "UDKEngine.ini"
+        generated.write_text(GENERATED_ENGINE, encoding="utf-16")
+        installer.deploy(self.install)
+        self.assertTrue(generated.exists())
+        raw = generated.read_bytes()
+        self.assertEqual(raw[:2], b"\xff\xfe")
+        text = raw.decode("utf-16")
+        self.assertIn(installer.VIEWPORT_ARCHIPELAGO, text)
+        self.assertIn("NonNativePackages=VCArchipelago", text)
+        self.assertNotIn("EditPackages=VCArchipelago", text)
+
     def test_deploy_is_idempotent(self) -> None:
         installer.deploy(self.install)
         first = (self.config / "DefaultEngine.ini").read_text(encoding="ascii")

@@ -70,14 +70,25 @@ def _packaged_module_bytes() -> "bytes | None":
         return None
 
 
+def _ini_encoding(path: Path) -> str:
+    """The engine rewrites a config as UTF-16 once any non-ANSI character
+    lands in a saved setting. Detecting that by BOM keeps such a file
+    editable; anything else reads as latin-1, which round-trips every byte,
+    so a stray non-ASCII character can never corrupt a rewrite."""
+    with path.open("rb") as handle:
+        head = handle.read(2)
+    if head in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16"
+    return "latin-1"
+
+
 def _read_ini_lines(path: Path) -> list[str]:
-    # latin-1 round-trips every byte, so a stray non-ASCII character in a
-    # player's ini can never corrupt a rewrite.
-    return path.read_text(encoding="latin-1").splitlines()
+    return path.read_text(encoding=_ini_encoding(path)).splitlines()
 
 
 def _write_ini_lines(path: Path, lines: "list[str]") -> None:
-    path.write_text("\r\n".join(lines) + "\r\n", encoding="latin-1")
+    encoding = _ini_encoding(path) if path.is_file() else "latin-1"
+    path.write_text("\r\n".join(lines) + "\r\n", encoding=encoding)
 
 
 def _backup_once(config_dir: Path, path: Path) -> None:
