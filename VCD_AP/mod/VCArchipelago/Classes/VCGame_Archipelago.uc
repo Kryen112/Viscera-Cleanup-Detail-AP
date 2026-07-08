@@ -11,9 +11,6 @@
 // Cleanliness is the game's own value: 1 - FinalPenalty / StartingCleanupScore,
 // where the punchout handler's ProcessMapState recomputes FinalPenalty. Every
 // per-map handler extends VCPunchoutHandler_General, which owns those fields.
-// The published percent adds the handler's ReportsPenalty back into
-// FinalPenalty first, so the player-typed report paperwork bonus never inflates
-// the milestone cleanliness (see PublishCleanliness).
 //
 // Level access is gated two ways: the curated menu (VCGameViewportClient_Archipelago
 // hides locked levels from the list) is the front door, and EnforceLevelGate here
@@ -1887,12 +1884,7 @@ function PublishCleanliness()
         return;
 
     Handler.ProcessMapState(self, None);
-    // ProcessMapState folds the punch-out report's paperwork bonus into
-    // FinalPenalty: a length-based reduction the player types on the report
-    // form, worst on the numeric Union ID field at a full penalty point per
-    // character. Left in, filling the form fakes milestone cleanliness without
-    // cleaning, so add it back and gate the rungs on the physical mess alone.
-    clean = 1.0 - ((Handler.FinalPenalty + Handler.ReportsPenalty) / Handler.StartingCleanupScore);
+    clean = 1.0 - (Handler.FinalPenalty / Handler.StartingCleanupScore);
     percent = int(clean * 100.0);
 
     // Hundredths for the on-screen readout, floored so the display never

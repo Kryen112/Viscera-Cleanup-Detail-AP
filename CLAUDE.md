@@ -165,11 +165,10 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   on a timer, then read the two floats. `PunchoutHandler` is an inherited public
   var on `VCGameBase`; every per-map handler extends `VCPunchoutHandler_General`.
   Do NOT call `CalculateResults` live: it replicates results and triggers the
-  end-of-level UI. The AP milestone probe adds the handler's `ReportsPenalty`
-  back into `FinalPenalty` before dividing, so the punch-out report's
-  length-based paperwork bonus (player-typed, worst on the Union ID field at a
-  penalty point per character) can never fake milestone cleanliness. Gate rungs
-  on the physical mess alone.
+  end-of-level UI. The punch-out report's length-based paperwork bonus does
+  count toward cleanliness, but each report field is clamped to its UI maximum
+  server-side (600 characters, or 18 for the numeric Union ID), so a pasted
+  overflow cannot inflate the score past what the fields legitimately hold.
 - Prefer calling the game's own functions over reimplementing them. Read the
   decompiled source first to know which are free of side effects.
 - Detection cross-checks from save files (read-only): `GlobalStatsData.sav` is
