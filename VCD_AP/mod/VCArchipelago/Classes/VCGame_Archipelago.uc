@@ -66,13 +66,15 @@ const SpeedEffectDurationSeconds = 30.0;
 
 // The magnet trap's reach and pull speeds. The pull sets rigid-body velocity
 // instead of adding an impulse, so every piece moves at a bounded speed no
-// matter its mass. Pieces closer than the dead zone are already at the
-// janitor's feet and stay put.
-const MagnetizeRadius       = 1024.0;
-const MagnetizeDeadZone     = 64.0;
-const MagnetizeMinPullSpeed = 250.0;
-const MagnetizeMaxPullSpeed = 750.0;
-const MagnetizeLiftSpeed    = 150.0;
+// matter its mass. The speed grows with distance (scaled, then clamped) so far
+// pieces arrive on the janitor about as fast as near ones. Pieces closer than
+// the dead zone are already at the janitor's feet and stay put.
+const MagnetizeRadius         = 1024.0;
+const MagnetizeDeadZone       = 64.0;
+const MagnetizePullSpeedScale = 2.0;
+const MagnetizeMinPullSpeed   = 600.0;
+const MagnetizeMaxPullSpeed   = 1800.0;
+const MagnetizeLiftSpeed      = 300.0;
 
 // Reused load target for the trap queue file, so the 5 second poll does not
 // pile up garbage objects between collections.
@@ -100,19 +102,19 @@ var int DevToolMask;
 var bool bPresentToolsMaskRead;
 var int PresentToolsMaskCache;
 
-// Self-Cleaning Mop: whether the current level's mop never dirties, read once
-// per level from the grants file. A short poll pins every mop's saturation to
-// zero, faster than the tool-lock pass so a furious mopper cannot reach the
-// paint threshold between ticks.
-var bool bSelfCleaningMapRead;
+// Self-Cleaning Mop: whether the current level's mop never dirties. The client
+// only ever adds a level to the grant list, so this is monotonic: the poll
+// re-reads the grants file while it is still off, then leaves it latched, so a
+// grant received while already in the level takes effect without a reload. A
+// short poll pins every mop's saturation to zero, faster than the tool-lock pass
+// so a furious mopper cannot reach the paint threshold between ticks.
 var bool bSelfCleaningMap;
 const SelfCleaningMopPollInterval = 0.25;
 
 // Squeaky Clean Boots: whether the current level's janitor never tracks bloody
-// footprints, read once per level from the grants file. The same short poll
-// pins every janitor's foot blood to zero, so it never reaches the one-unit
-// threshold a footstep needs to stamp a print.
-var bool bSqueakyBootsMapRead;
+// footprints. Monotonic and re-read the same way as the self-cleaning flag. The
+// same short poll pins every janitor's foot blood to zero, so it never reaches
+// the one-unit threshold a footstep needs to stamp a print.
 var bool bSqueakyBootsMap;
 const SqueakyBootsPollInterval = 0.25;
 
@@ -174,9 +176,7 @@ event InitGame(string Options, out string ErrorMessage)
     LastPublishedPercent = -1;
     bCleanlinessProbeStopped = false;
     bPresentToolsMaskRead = false;
-    bSelfCleaningMapRead = false;
     bSelfCleaningMap = false;
-    bSqueakyBootsMapRead = false;
     bSqueakyBootsMap = false;
     AppliedToolsMask = class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
     SetTimer(1.0, true, 'PublishCleanliness');
@@ -644,9 +644,11 @@ function bool IsSelfCleaningMap(string MapName)
     return InStr("," $ GrantsFile.SelfCleaningMaps $ ",", "," $ MapName $ ",") != -1;
 }
 
-// Reads the level's self-cleaning state (once, cached) and publishes it to the
-// GRI, so the mop weapon subclass sees it. Called from PostBeginPlay before any
-// mop spawns and again each poll.
+// Reads the level's self-cleaning state and publishes it to the GRI, so the mop
+// weapon subclass sees it. Called from PostBeginPlay before any mop spawns and
+// again each poll, so a grant received while in the level takes effect without a
+// reload. Re-reads the grants file only while still off; once on it stays on,
+// because the client never revokes a level's grant.
 function PublishSelfCleaningMopFlag()
 {
     local VCMapInfo MapInfo;
@@ -655,11 +657,8 @@ function PublishSelfCleaningMopFlag()
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
     if (MapInfo != None && MapInfo.bIsOfficeLevel)
         return;
-    if (!bSelfCleaningMapRead)
-    {
+    if (!bSelfCleaningMap)
         bSelfCleaningMap = IsSelfCleaningMap(WorldInfo.GetMapName(true));
-        bSelfCleaningMapRead = true;
-    }
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
     if (ReplicatedInfo != None && ReplicatedInfo.bSelfCleaningMop != bSelfCleaningMap)
         ReplicatedInfo.bSelfCleaningMop = bSelfCleaningMap;
@@ -708,9 +707,12 @@ function bool IsSqueakyBootsMap(string MapName)
     return InStr("," $ GrantsFile.SqueakyBootsMaps $ ",", "," $ MapName $ ",") != -1;
 }
 
-// Reads the level's boots state (once, cached) and publishes it to the GRI, so
-// the pawn subclass sees it. Called from PostBeginPlay before any janitor
-// spawns, so foot blood is refused from the first step, and again each poll.
+// Reads the level's boots state and publishes it to the GRI, so the pawn
+// subclass sees it. Called from PostBeginPlay before any janitor spawns, so foot
+// blood is refused from the first step, and again each poll, so a grant received
+// while in the level takes effect without a reload. Re-reads the grants file
+// only while still off; once on it stays on, because the client never revokes a
+// level's grant.
 function PublishSqueakyBootsFlag()
 {
     local VCMapInfo MapInfo;
@@ -719,11 +721,8 @@ function PublishSqueakyBootsFlag()
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
     if (MapInfo != None && MapInfo.bIsOfficeLevel)
         return;
-    if (!bSqueakyBootsMapRead)
-    {
+    if (!bSqueakyBootsMap)
         bSqueakyBootsMap = IsSqueakyBootsMap(WorldInfo.GetMapName(true));
-        bSqueakyBootsMapRead = true;
-    }
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
     if (ReplicatedInfo != None && ReplicatedInfo.bSqueakyBoots != bSqueakyBootsMap)
         ReplicatedInfo.bSqueakyBoots = bSqueakyBootsMap;
@@ -1647,7 +1646,8 @@ function Magnetize()
         if (Distance > MagnetizeRadius || Distance < MagnetizeDeadZone)
             continue;
         Pull = Normal(Janitor.Location - Debris.Location)
-            * FClamp(Distance, MagnetizeMinPullSpeed, MagnetizeMaxPullSpeed);
+            * FClamp(Distance * MagnetizePullSpeedScale,
+                MagnetizeMinPullSpeed, MagnetizeMaxPullSpeed);
         Pull.Z += MagnetizeLiftSpeed;
         Debris.SpawnKick(Pull,, true);
     }
