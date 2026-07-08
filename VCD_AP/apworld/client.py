@@ -248,6 +248,32 @@ def state_is_current(state: dict[str, str], seed_name: "str | None") -> bool:
     return bool(seed_name) and state.get("APSeedTag") == seed_name
 
 
+# The mod publishes the starting score truncated to an int, so half a point
+# of drift is expected; anything past a whole point means the level changed.
+START_SCORE_TOLERANCE = 1.0
+
+
+def start_score_mismatch(
+        state: dict[str, str]) -> "tuple[str, float, float] | None":
+    """A live starting cleanup score that disagrees with the shipped scan
+    table: (map, live, expected), or None when consistent or not comparable.
+    The logic tables are transcribed measurements, so a mismatch means the
+    live level no longer matches what the logic was built on."""
+    map_name = state.get("APMap", "")
+    expected = toolsanity.scan_start_score(map_name)
+    if expected is None:
+        return None
+    try:
+        live = float(state.get("APStartScore", "0"))
+    except ValueError:
+        return None
+    if live <= 0:
+        return None
+    if abs(live - expected) <= START_SCORE_TOLERANCE:
+        return None
+    return map_name, live, expected
+
+
 def game_process_running() -> bool:
     """Whether any UDK.exe runs, including one the client did not launch."""
     if sys.platform != "win32":
@@ -260,7 +286,9 @@ def game_process_running() -> bool:
             capture_output=True, text=True, timeout=3,
             creationflags=subprocess.CREATE_NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        # The callers guard destructive moves (a save swap, a package
+        # overwrite), so an unanswerable check fails closed: assume running.
+        return True
     return "UDK.exe" in result.stdout
 
 
@@ -326,15 +354,21 @@ class VCDContext(CommonContext):
         self.squeaky_boots_maps: set[str] = set()
         self.last_grants_written: "str | None" = None
         self.last_traps_written: "str | None" = None
-        # Items already held when this session connected; traps at or below
-        # this index are never applied, so a connect cannot dump a backlog.
-        self.trap_baseline: "int | None" = None
-        # The slot's shared applied counter from server data storage. None until
-        # the connect-time Get answers; the traps file is not written before
-        # then, so a too-low baseline can never reach the mod. The counter only
-        # ever rises (the server folds writes with max), so a new co-op host
-        # skips everything another host already applied.
+        # The slot's baseline and applied counter from server data storage.
+        # The baseline is written once at the slot's first-ever connect (the
+        # items held then predate every session, so entries at or below it
+        # never apply and a connect cannot dump a backlog); the server owns it
+        # from then on, so no packet-order inference is ever needed. Both are
+        # None until the connect-time Get answers; the traps file is not
+        # written before then, so a too-low baseline can never reach the mod.
+        # The applied counter only ever rises (the server folds writes with
+        # max), so a new co-op host skips everything another host already
+        # applied and a reconnect never truncates an in-flight burst.
+        self.storage_traps_baseline: "int | None" = None
         self.storage_traps_applied: "int | None" = None
+        # Maps already warned about a stale-looking scan constant, so the
+        # tripwire fires once per level per connect, not once per poll.
+        self.start_score_warned: set[str] = set()
         self.last_traps_pushed: int = 0
         # The toast feed the mod's HUD shows in game. The tag rotates per
         # connect, so the mod replays only this session's unseen entries.
@@ -557,12 +591,17 @@ class VCDContext(CommonContext):
             self._on_connected(args.get("slot_data", {}))
         elif cmd == "Retrieved":
             keys = args.get("keys", {})
-            storage_key = self.traps_applied_storage_key()
-            if storage_key in keys:
-                self._fold_storage_traps_applied(keys[storage_key])
+            applied_key = self.traps_applied_storage_key()
+            if applied_key in keys:
+                self._fold_storage_traps_applied(keys[applied_key])
+            baseline_key = self.traps_baseline_storage_key()
+            if baseline_key in keys:
+                self._resolve_storage_baseline(keys[baseline_key])
         elif cmd == "SetReply":
             if args.get("key") == self.traps_applied_storage_key():
                 self._fold_storage_traps_applied(args.get("value"))
+            elif args.get("key") == self.traps_baseline_storage_key():
+                self._adopt_storage_baseline(args.get("value"))
         elif cmd == "RoomUpdate":
             # The framework has already folded the packet's checked locations
             # into the sets, so this write carries the server-confirmed view.
@@ -573,13 +612,6 @@ class VCDContext(CommonContext):
     def _on_received_items(self, args: dict) -> None:
         """Folds granted level accesses and tool unlocks into the grants
         state, and advances the trap bookkeeping."""
-        # The first packet after connect (index 0) is the full resync list:
-        # everything in it predates this session, so it sets the trap baseline.
-        # A slot with no items gets no resync packet at all; the connect-time
-        # storage answer then resolves the baseline to zero, so a live batch
-        # arriving later at index 0 is never mistaken for the resync.
-        if self.trap_baseline is None and int(args.get("index", 0)) == 0:
-            self.trap_baseline = len(args.get("items", []))
         changed = False
         for item in args.get("items", []):
             map_name = ACCESS_ID_TO_MAP.get(item.item)
@@ -617,11 +649,15 @@ class VCDContext(CommonContext):
         self.squeaky_boots_maps = set()
         self._set_goal(slot_data)
         self.saves_ready = False
-        self.trap_baseline = None
+        # A stale sequence would make the reconnected bridge skip the mod's
+        # re-emitted full state, losing any check that died with the old
+        # socket; re-applying the same state is idempotent.
+        self.last_seq = None
         # A fresh save set swaps in on connect, so every file writes fresh
         # even when its payload matches the previous session's.
         self.last_grants_written = None
         self.last_traps_written = None
+        self.storage_traps_baseline = None
         self.storage_traps_applied = None
         self.last_traps_pushed = 0
         self.message_tag = messages.session_tag(self.seed_name)
@@ -629,13 +665,15 @@ class VCDContext(CommonContext):
         self.message_entries = []
         self.last_messages_written = None
         self.last_milestones_written = None
+        self.start_score_warned = set()
         self.enqueue_message([(messages.WHITE, "Archipelago connected.")])
-        # Subscribe to the slot's shared applied counter and fetch it; the
-        # Retrieved answer releases the traps-file write gate.
-        key = self.traps_applied_storage_key()
+        # Subscribe to the slot's shared baseline and applied counter and
+        # fetch both; the Retrieved answer releases the traps-file write gate.
+        keys = [self.traps_baseline_storage_key(),
+                self.traps_applied_storage_key()]
         asyncio.create_task(self.send_msgs([
-            {"cmd": "SetNotify", "keys": [key]},
-            {"cmd": "Get", "keys": [key]},
+            {"cmd": "SetNotify", "keys": keys},
+            {"cmd": "Get", "keys": keys},
         ]))
         asyncio.create_task(self.setup_and_launch())
 
@@ -687,6 +725,34 @@ class VCDContext(CommonContext):
         # Data storage is room-scoped, so the seed never goes in the key.
         return f"vcd_traps_applied_{self.team}_{self.slot}"
 
+    def traps_baseline_storage_key(self) -> str:
+        return f"vcd_traps_baseline_{self.team}_{self.slot}"
+
+    def _resolve_storage_baseline(self, value: object) -> None:
+        """Answer the connect-time baseline read. An absent key means this is
+        the slot's first-ever connect: everything held right now predates any
+        session, so that count becomes the room's baseline, initialized
+        through the server so it is written exactly once (the default only
+        lands when the key is still absent; a concurrent connect converges
+        through the SetReply)."""
+        if value is not None:
+            self._adopt_storage_baseline(value)
+            return
+        count = len(self.items_received)
+        key = self.traps_baseline_storage_key()
+        asyncio.create_task(self.send_msgs([{
+            "cmd": "Set", "key": key, "default": count, "want_reply": True,
+            "operations": [{"operation": "default", "value": 0}],
+        }]))
+        self._adopt_storage_baseline(count)
+
+    def _adopt_storage_baseline(self, value: object) -> None:
+        try:
+            self.storage_traps_baseline = int(value or 0)
+        except (TypeError, ValueError):
+            self.storage_traps_baseline = 0
+        self.write_traps_if_changed()
+
     def _fold_storage_traps_applied(self, value: object) -> None:
         """Fold a data-storage reading into the applied floor (a missing key
         reads as 0) and rewrite the traps file if the baseline rose."""
@@ -697,11 +763,6 @@ class VCDContext(CommonContext):
         if self.storage_traps_applied is not None:
             number = max(number, self.storage_traps_applied)
         self.storage_traps_applied = number
-        # The server answers the connect-time Get only after the resync
-        # packet, so a baseline still unset here means the slot held no items
-        # at connect and the server skipped the empty resync entirely.
-        if self.trap_baseline is None:
-            self.trap_baseline = 0
         self.write_traps_if_changed()
 
     def _set_goal(self, slot_data: dict) -> None:
@@ -769,10 +830,10 @@ class VCDContext(CommonContext):
         reach a mod that is already hosting a level."""
         if not self.install_dir or not self.saves_ready or not self.seed_name:
             return
-        if self.storage_traps_applied is None:
+        if self.storage_traps_applied is None or self.storage_traps_baseline is None:
             return
         seed_tag, baseline, queue = traps.queue_fields(
-            self.seed_name, self.trap_baseline,
+            self.seed_name, self.storage_traps_baseline,
             [item.item for item in self.items_received], QUEUE_ID_TO_TYPE,
             self.storage_traps_applied)
         payload = f"{seed_tag}|{baseline}|{queue}"
@@ -817,6 +878,14 @@ class VCDContext(CommonContext):
             return
         if not state_is_current(state, self.seed_name):
             return
+        mismatch = start_score_mismatch(state)
+        if mismatch is not None and mismatch[0] not in self.start_score_warned:
+            self.start_score_warned.add(mismatch[0])
+            client_logger.warning(
+                "%s reports a starting cleanup score of %.0f, but the logic "
+                "tables were measured at %.1f. The logic for this level may "
+                "be stale; please report this.",
+                mismatch[0], mismatch[1], mismatch[2])
         new_ids: list[int] = []
         for name in location_names_from_state(state):
             loc_id = LOCATION_NAME_TO_ID.get(name)
@@ -867,6 +936,13 @@ async def vcd_bridge_loop(ctx: VCDContext) -> None:
                 "default": 0, "want_reply": False,
                 "operations": [{"operation": "max", "value": push}],
             }])
+        # A write that failed (a transient share violation) or is still held
+        # (the storage read not answered) retries here: each writer no-ops
+        # when its last write already carries the current payload.
+        ctx.write_grants_if_changed()
+        ctx.write_traps_if_changed()
+        ctx.write_messages_if_changed()
+        ctx.write_milestones_if_changed()
         seq = state.get("APSeq")
         if not seq or seq == ctx.last_seq:
             continue

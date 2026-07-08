@@ -12,8 +12,8 @@ from .bases import read_sav_properties
 from .. import messages, milestones
 from ..client import (VCDContext, goal_locations_from_slot_data,
                       location_names_from_state, message_segments, parse_rungs,
-                      print_json_relevant, state_is_current,
-                      traps_applied_to_push)
+                      print_json_relevant, start_score_mismatch,
+                      state_is_current, traps_applied_to_push)
 from ..levels import LEVELS
 from ..locations import LOCATION_NAME_TO_ID, speedrun_name
 
@@ -176,45 +176,115 @@ class TestTrapsAppliedToPush(unittest.TestCase):
 
 def _traps_context() -> VCDContext:
     """A context carrying only the trap-baseline state, skipping __init__ so
-    no framework plumbing is needed."""
+    no framework plumbing is needed. Sent server messages land in ctx.sent."""
     ctx = VCDContext.__new__(VCDContext)
     ctx.install_dir = None
     ctx.saves_ready = False
     ctx.seed_name = "seed_1"
-    ctx.trap_baseline = None
+    ctx.team = 0
+    ctx.slot = 1
+    ctx.storage_traps_baseline = None
     ctx.storage_traps_applied = None
-    ctx.unlocked_maps = set()
-    ctx.unlocked_tools = {}
-    ctx.clean_mop_maps = set()
-    ctx.squeaky_boots_maps = set()
+    ctx.items_received = [SimpleNamespace(item=-1)] * 3
+    ctx.sent = []
+
+    async def send_msgs(msgs):
+        ctx.sent.extend(msgs)
+    ctx.send_msgs = send_msgs
     return ctx
 
 
+def _run(coroutine_function) -> VCDContext:
+    """Run the test body inside a loop so create_task-based sends execute."""
+    import asyncio
+
+    async def body():
+        ctx = _traps_context()
+        coroutine_function(ctx)
+        await asyncio.sleep(0)
+        return ctx
+    return asyncio.run(body())
+
+
 class TestTrapBaselineResolution(unittest.TestCase):
-    def test_resync_packet_sets_the_baseline(self) -> None:
-        ctx = _traps_context()
-        ctx._on_received_items(
-            {"index": 0, "items": [SimpleNamespace(item=-1)] * 2})
-        self.assertEqual(ctx.trap_baseline, 2)
+    def test_first_connect_initializes_the_room_baseline(self) -> None:
+        # An absent key means the slot's first-ever connect: the items held
+        # now become the baseline, written once through the server's
+        # default-if-absent path.
+        ctx = _run(lambda c: c._resolve_storage_baseline(None))
+        self.assertEqual(ctx.storage_traps_baseline, 3)
+        self.assertEqual(len(ctx.sent), 1)
+        message = ctx.sent[0]
+        self.assertEqual(message["cmd"], "Set")
+        self.assertEqual(message["key"], "vcd_traps_baseline_0_1")
+        self.assertEqual(message["default"], 3)
+        self.assertEqual(message["operations"],
+                         [{"operation": "default", "value": 0}])
+        self.assertTrue(message["want_reply"])
 
-    def test_storage_answer_resolves_a_fresh_slot_to_zero(self) -> None:
-        # A slot holding no items gets no resync packet, so the storage
-        # answer settles the baseline first and a live batch arriving at
-        # index 0 afterwards is never mistaken for the resync.
-        ctx = _traps_context()
-        ctx._fold_storage_traps_applied(0)
-        self.assertEqual(ctx.trap_baseline, 0)
-        ctx._on_received_items(
-            {"index": 0, "items": [SimpleNamespace(item=-1)]})
-        self.assertEqual(ctx.trap_baseline, 0)
+    def test_existing_room_baseline_is_adopted_verbatim(self) -> None:
+        ctx = _run(lambda c: c._resolve_storage_baseline(7))
+        self.assertEqual(ctx.storage_traps_baseline, 7)
+        self.assertEqual(ctx.sent, [])
 
-    def test_storage_answer_keeps_a_resync_baseline(self) -> None:
+    def test_set_reply_overrides_a_racing_first_connect(self) -> None:
+        # Two clients racing the first connect converge on the server's
+        # stored value through the SetReply.
+        ctx = _run(lambda c: c._resolve_storage_baseline(None))
+        ctx._adopt_storage_baseline(2)
+        self.assertEqual(ctx.storage_traps_baseline, 2)
+
+    def test_applied_floor_still_folds(self) -> None:
         ctx = _traps_context()
-        ctx._on_received_items(
-            {"index": 0, "items": [SimpleNamespace(item=-1)] * 3})
+        ctx._fold_storage_traps_applied(5)
         ctx._fold_storage_traps_applied(1)
-        self.assertEqual(ctx.trap_baseline, 3)
-        self.assertEqual(ctx.storage_traps_applied, 1)
+        self.assertEqual(ctx.storage_traps_applied, 5)
+
+
+class TestGameProcessRunning(unittest.TestCase):
+    def test_unanswerable_check_fails_closed(self) -> None:
+        # The callers guard destructive moves (save swaps, package
+        # overwrites), so an error must read as "running", never as safe.
+        from unittest import mock
+        from .. import client
+        with mock.patch.object(client.sys, "platform", "win32"), \
+                mock.patch.object(client.subprocess, "run",
+                                  side_effect=OSError("tasklist missing")):
+            self.assertTrue(client.game_process_running())
+        with mock.patch.object(client.sys, "platform", "win32"), \
+                mock.patch.object(
+                    client.subprocess, "run",
+                    side_effect=client.subprocess.TimeoutExpired("t", 3)):
+            self.assertTrue(client.game_process_running())
+
+    def test_absent_process_reads_not_running(self) -> None:
+        from types import SimpleNamespace as Namespace
+        from unittest import mock
+        from .. import client
+        with mock.patch.object(client.sys, "platform", "win32"), \
+                mock.patch.object(client.subprocess, "run",
+                                  return_value=Namespace(stdout="INFO: none")):
+            self.assertFalse(client.game_process_running())
+
+
+class TestStartScoreMismatch(unittest.TestCase):
+    def test_matching_score_is_quiet(self) -> None:
+        # The mod truncates to an int, so the half-point sits inside the
+        # tolerance.
+        state = {"APMap": "VC_Vulcan_01", "APStartScore": "23311"}
+        self.assertIsNone(start_score_mismatch(state))
+
+    def test_drifted_score_reports_map_live_and_expected(self) -> None:
+        state = {"APMap": "VC_Vulcan_01", "APStartScore": "24000"}
+        self.assertEqual(start_score_mismatch(state),
+                         ("VC_Vulcan_01", 24000.0, 23311.5))
+
+    def test_unknown_map_or_unset_score_is_quiet(self) -> None:
+        self.assertIsNone(start_score_mismatch(
+            {"APMap": "VC_Workshop", "APStartScore": "5000"}))
+        self.assertIsNone(start_score_mismatch({"APMap": "VC_Vulcan_01"}))
+        self.assertIsNone(start_score_mismatch(
+            {"APMap": "VC_Vulcan_01", "APStartScore": "junk"}))
 
 
 class TestGoalLocationsFromSlotData(unittest.TestCase):

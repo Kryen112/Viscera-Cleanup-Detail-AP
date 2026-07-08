@@ -56,17 +56,19 @@ def build_queue(received_item_ids: "list[int]", queue_id_to_type: "dict[int, str
     return ",".join(entries)
 
 
-def queue_fields(seed_name: str, trap_baseline: "int | None",
+def queue_fields(seed_name: str, storage_baseline: "int | None",
                  received_item_ids: "list[int]",
                  queue_id_to_type: "dict[int, str]",
                  applied_floor: "int | None" = None) -> "tuple[str, int, str]":
-    """The (seed tag, baseline, queue) triple the traps file carries. Before the
-    resync packet fixes the baseline, every item known so far counts into it, so
-    the queue and baseline written together are always consistent and a connect
-    can never replay a backlog. ``applied_floor`` is the slot's shared applied
-    counter from server data storage; folding it into the baseline keeps a new
-    co-op host from replaying entries another host already applied."""
-    baseline = (trap_baseline if trap_baseline is not None
+    """The (seed tag, baseline, queue) triple the traps file carries.
+    ``storage_baseline`` is the room's once-written first-connect baseline
+    from server data storage; entries at or below it predate every session,
+    so a connect can never dump a backlog. While it is still unknown every
+    item known so far counts into it, which can only skip, never replay.
+    ``applied_floor`` is the slot's shared applied counter; folding it in
+    keeps a new co-op host from replaying entries another host already
+    applied."""
+    baseline = (storage_baseline if storage_baseline is not None
                 else len(received_item_ids))
     if applied_floor is not None:
         baseline = max(baseline, applied_floor)
