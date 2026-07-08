@@ -33,13 +33,18 @@ esac
 [ "$total" -gt "$last" ] || exit 0
 
 # A transcript line holds one whole message, so an edit shows its tool name
-# and its file path on the same line. The path must sit inside the file_path
-# field itself, or edits whose content merely mentions a watched path would
-# fire the reminder. Paths appear JSON-escaped, hence the doubled backslash
-# alternative.
+# and its file path on the same line. For the file tools the path must sit
+# inside the file_path field itself, or edits whose content merely mentions a
+# watched path would fire the reminder. A Bash command that names a watched
+# source file counts too (sed, python, redirects can all edit); over-matching
+# there only costs one extra reminder, under-matching skips the gate. Paths
+# appear JSON-escaped, hence the doubled backslash alternative.
 if tail -n +"$((last + 1))" "$transcript" \
   | grep -E '"name" *: *"(Write|Edit|NotebookEdit)"' \
-  | grep -qE '"file_path" *: *"[^"]*VCD_AP(/|\\\\)(apworld(/|\\\\)[^"]*\.py"|mod(/|\\\\)[^"]*\.uc")'; then
+  | grep -qE '"file_path" *: *"[^"]*VCD_AP(/|\\\\)(apworld(/|\\\\)[^"]*\.py"|mod(/|\\\\)[^"]*\.uc")' \
+  || tail -n +"$((last + 1))" "$transcript" \
+  | grep -E '"name" *: *"Bash"' \
+  | grep -qE 'VCD_AP(/|\\\\)(apworld|mod)(/|\\\\)[^" ]*\.(py|uc)\b'; then
   cat <<'JSON'
 {"decision": "block", "reason": "This turn changed apworld Python or mod source. Before finishing, run the code-reviewer subagent on the diff and address blockers, and check for documentation drift per CLAUDE.md: VCD_AP/docs (PLAYER_SETUP.md, RELEASE_NOTES.md), the regenerated options template, and the build state in plans/V1_PLAN.md. If the review and the docs pass already happened this turn, or the change was not player-visible, say so and finish."}
 JSON
