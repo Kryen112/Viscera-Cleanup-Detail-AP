@@ -66,9 +66,10 @@ class RandomStartingKit(Toggle):
 class TrapPercentage(Range):
     """The share of filler items that become traps: a mess dump near the
     janitor, a spilled bucket, thirty seconds of walking at half or double
-    speed, or a magnet pull that yanks everything loose nearby toward the
-    janitor. Traps arrive from the multiworld while cleaning; they are never
-    required by logic. 0 disables traps."""
+    speed, a magnet pull that yanks everything loose nearby toward the
+    janitor, or thirty seconds of near-zero gravity. Traps arrive from the
+    multiworld while cleaning; they are never required by logic. 0 disables
+    traps."""
     display_name = "Trap percentage"
     range_start = 0
     range_end = 100
