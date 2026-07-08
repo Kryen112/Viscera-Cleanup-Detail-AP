@@ -171,8 +171,11 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
 
 - Custom UnrealScript compiles and runs: the game is uncooked (no `CookedPC`),
   loads script listed in `[Engine.ScriptPackages] +NonNativePackages=`, and
-  compiles what is in `[UnrealEd.EditorEngine] +EditPackages=`. Add a package to
-  both.
+  compiles what is in `[UnrealEd.EditorEngine] +EditPackages=`. On the dev
+  machine add a package to both. A player install gets the canonical
+  precompiled package through `NonNativePackages` only: the installer
+  deliberately strips `EditPackages` and any deployed source tree, so the game
+  can never rebuild the package locally and fork its GUID out of co-op.
 - The mod enters through a GameInfo subclass of `VisceraGame.VCGame`. The class
   the game uses comes from the map-launch URL `?Game=`, which is set from the
   `GameClass` field of a `VCUIDataProvider_GameInfo` entry in `VCProviders.ini`,
@@ -207,8 +210,10 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   script-only (the `Switch game` menu titles are hardcoded UI and
   `IsValidGameTitle` is a hardcoded static). The mode is a
   `VCUIDataProvider_GameInfo` entry (GameClass `VCArchipelago.VCGame_Archipelago`,
-  `ValidTitles=Viscera`, a FriendlyName) that the data-driven Start Work menu
-  shows next to Cleanup and Speedrun.
+  a FriendlyName) that the data-driven Start Work menu shows next to Cleanup
+  and Speedrun. The entry deliberately carries no `ValidTitles` filter, so the
+  mode exists under every title and granted DLC maps list under whichever
+  title the player is running.
 - Client to mod: the client writes the unlocked-level set (and other granted
   state) to a config ini the mod reads. Level gating is IN-ENGINE: the mod
   refuses to start a level not in that set. Do not gate by rewriting the shared

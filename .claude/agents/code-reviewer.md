@@ -34,10 +34,15 @@ read-only: you never edit files. You read the diff, check it against
 - A behavior change with no added or updated `WorldTestBase` test.
 - A player-visible change (options and their defaults, checks, goals, client
   commands or messages, install or connect flow, save isolation, traps, supply
-  drops) with no matching update under `VCD_AP/docs`.
+  drops) with no matching update under `VCD_AP/docs`. That directory and the
+  options template are gitignored, so no diff ever shows them: Read the
+  on-disk files and judge freshness against the change itself (the latest
+  `RELEASE_NOTES_FULL.md` entry covers it, `RELEASE_NOTES.md` stays under its
+  2000-character cap, `PLAYER_SETUP.md` still matches the flow).
 - An options change without a regenerated `Viscera Cleanup Detail.template.yaml`
-  at the repo root, or any write to `Viscera Cleanup Detail.yaml` (the player's
-  own settings).
+  at the repo root (also gitignored: Read it and check it reflects the changed
+  option text and defaults), or any write to `Viscera Cleanup Detail.yaml`
+  (the player's own settings).
 - Item/location ids that are not unique or drift for an existing name (breaks
   the datapackage).
 - Guessing a map name or display name instead of deriving it from the game
