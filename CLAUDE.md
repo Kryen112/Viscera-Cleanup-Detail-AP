@@ -94,12 +94,20 @@ The reviewer treats a violation of any of these as a correctness blocker.
   situational tool the level has (`SITUATIONAL_TOOL_KEYS`) adds a fixed share
   (`OVER_100_PER_TOOL_PERCENT`) so the over-100 ladder is a per-tool climb; it is
   a conservative floor (the report and stacking usually reach more, so higher
-  rungs are often obtainable out of logic), and the full kit reaches the level's
-  over-100 maximum with margin. Three measured suspect levels leave mess only
-  one tool can clear
-  (`CORE_KIT_CEILING_PERCENT`: VC_Incubator and VC_Energy_01 need the Welder,
-  VC_Uprinsing the Vendor); there the core kit tops out around 80 and the checks
-  above it wait for that one `EXTRA_CLEAN_TOOL`. Physical pickups (collectibles,
+  rungs are often obtainable out of logic), the climb is also capped by the
+  physical ceiling the missing tools leave (a tool's own scanned mess share is
+  unreachable without it, so no toolset is credited a rung it cannot clean to),
+  and the full kit reaches the level's over-100 maximum with margin. Four
+  suspect levels leave mess only one tool can clear
+  (`CORE_KIT_CEILING_PERCENT`: VC_Incubator, VC_Energy_01, and VC_Vulcan_01
+  need the Welder, VC_Uprinsing the Vendor); there the core kit tops out at
+  the recorded ceiling and the checks above it wait for that one
+  `EXTRA_CLEAN_TOOL`. Three ceilings are measured with APCleanCoreKit; the
+  Vulcan ceiling is a conservative floor under the arithmetic bound its scan
+  row proves, pending a measurement. A module-import assert rejects any
+  core-kit-cleans-to-100 claim the scan shares contradict, and the client
+  cross-checks each level's live StartingCleanupScore against the scan table
+  at play time (`APStartScore` in the state ini) and warns on drift. Physical pickups (collectibles,
   Bob notes) need the level's full clean kit (`full_clean_keys`, the core kit
   plus any suspect extra tool), because a trophy only banks on a not-fired
   punch-out; the Overgrowth pickaxe also needs the Shovel. The scan table there
@@ -146,13 +154,17 @@ The reviewer treats a violation of any of these as a correctness blocker.
   "index:Type" queue keyed by received-item position). The mod stores the last
   applied index in its config state, applies one entry per poll, only in
   cleanable levels, and never replays another seed's queue or a pre-connect
-  backlog. The slot's applied high-water mark also lives in server data
-  storage (`vcd_traps_applied_{team}_{slot}`, written with an atomic `max`
-  op); the client folds it into BaselineIndex so a new co-op host never
-  replays entries, and holds the traps file write until the connect-time
-  storage read answers. A trap must never softlock, block a required check, or
-  corrupt a save. Supply drops reuse the game's own dispenser spawns (a plain
-  VCBucket or VCBin) so they score exactly like vended equipment.
+  backlog. Two keys live in server data storage: the slot's baseline
+  (`vcd_traps_baseline_{team}_{slot}`, written exactly once at the slot's
+  first-ever connect via the Set default-if-absent path, so nothing is ever
+  inferred from packet order) and the applied high-water mark
+  (`vcd_traps_applied_{team}_{slot}`, an atomic `max`). BaselineIndex is the
+  larger of the two, so a new co-op host never replays entries and a
+  reconnect never truncates an in-flight burst; the client holds the traps
+  file write until the connect-time storage read answers. A trap must never
+  softlock, block a required check, or corrupt a save. Supply drops reuse the
+  game's own dispenser spawns (a plain VCBucket or VCBin) so they score
+  exactly like vended equipment; both anchor on a random living janitor.
 - Game logic lives in one boolean-predicate access-rule module. Read changes
   there as logic, not plumbing.
 - The apworld is hand-maintained. There is no generator and no `data/*.yaml`
