@@ -58,7 +58,8 @@ simulated function bool HandleInstantHit(byte FiringMode, ImpactInfo Impact, opt
             return true;
         }
         if (VCIncineratorDoorHull(Impact.HitActor) != None
-            && Abs((Impact.HitLocation - Impact.HitActor.Owner.Location) Dot Vector(Impact.HitActor.Owner.Rotation)) > 60.0
+            && Abs((Impact.HitLocation - Impact.HitActor.Owner.Location)
+                Dot Vector(Impact.HitActor.Owner.Rotation)) > 60.0
             && !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolIncinerator))
         {
             NotifyToolLocked("Incinerator");

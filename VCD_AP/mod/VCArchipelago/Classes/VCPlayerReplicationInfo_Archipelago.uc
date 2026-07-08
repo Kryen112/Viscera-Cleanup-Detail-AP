@@ -101,13 +101,15 @@ reliable server function ServerReceiveDeathReportValue(byte ReportID, byte Value
 
 // The standalone and co-op-host drain path. Same clamp as the server RPCs,
 // because the flush routes a local player's own edits through here.
-reliable client simulated function ClientReceiveIncidentReportValue(byte IncidentReportID, byte ValueId, coerce string Value)
+reliable client simulated function ClientReceiveIncidentReportValue(
+    byte IncidentReportID, byte ValueId, coerce string Value)
 {
     super.ClientReceiveIncidentReportValue(IncidentReportID, ValueId,
         ClampReportValue(ValueId, Value));
 }
 
-reliable client simulated function ClientReceiveDeathReportValue(byte IncidentReportID, byte ReportID, byte ValueId, coerce string Value)
+reliable client simulated function ClientReceiveDeathReportValue(
+    byte IncidentReportID, byte ReportID, byte ValueId, coerce string Value)
 {
     super.ClientReceiveDeathReportValue(IncidentReportID, ReportID, ValueId,
         ClampDeathReportValue(ValueId, Value));

@@ -144,10 +144,13 @@ for leaving low gravity on).
    Cycling lockout; calling the volumes directly matches the punch-out
    condition, the scan, and replication, and the console self-corrects on the
    next click. Recommended: volumes directly, console desync accepted.
-   - Alternative worth deciding: in these two levels, skip the auto-restore
-     and let the janitor walk to the console and fix it (authentic sabotage,
-     natural counterplay). Recommended against for consistency with the
-     30-second HUD countdown, but cheap to choose either way.
+   - Decided: the console is the trap's escape hatch. A watch timer
+     (`WatchGravityConsole`, quarter second) runs while the trap holds the
+     volumes; a player toggle mid-trap ends the effect at once (HUD countdown
+     cleared, no restore), so the restore can never override a choice the
+     player made during the window and the punch-out rung capture reflects
+     that choice. The world-gravity levels have no console, so the trap
+     always runs its full 30 seconds there.
 3. **Restore-before-anything-persists**: on the gravity-level path the volume
    state serializes into the level save, so the restore must also run from
    the level-teardown paths that already clear `PollTraps` timers (punch-out
@@ -156,6 +159,18 @@ for leaving low gravity on).
    gravity penalty never bakes into the published rungs; the shift's own
    pass-or-fired verdict keeps it, which is the game's rule for gravity left
    off either way.
+   - Decided: the quit path gets a defensive backstop instead of a measured
+     ordering guarantee. Whether `GameEnding` beats the quit save is
+     unmeasured, so the volume flip also records a persistent marker
+     (`APGravityRestoreMap` in the config state, class-defaults mirror) that
+     every trap teardown lifts. A load of the marked map waits for the game's
+     save-state load to finish (`bMatchHasBegun`; both load paths apply
+     `GameStateLoaded` to every `SaveGameStateInterface` actor before
+     `super(GameInfo).StartMatch()`), then forces the volumes back to the
+     level default, zero gravity on, and lifts the marker. This also covers a
+     crash mid-trap. The known cost, accepted: a gravity-on choice the player
+     made before the trap is stomped back to the level default in the rare
+     marked-load case, and the console fixes it.
 4. **Duration**: reuse the 30-second shape. Rename or share
    `SpeedEffectDurationSeconds` (a shared `TimedEffectDurationSeconds` const)
    rather than adding a second magic number.

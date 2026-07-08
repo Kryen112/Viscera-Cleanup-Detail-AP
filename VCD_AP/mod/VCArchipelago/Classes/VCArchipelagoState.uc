@@ -49,3 +49,10 @@ var config int APFoundBob;
 // so a trap is never applied twice.
 var config string APTrapSeed;
 var config int APTrapsApplied;
+
+// The map whose gravity volumes a zero gravity trap flipped without the
+// restore running yet. Persistent, so a quit or crash mid-trap cannot leave
+// the flip baked into the level save: the next load of the named map forces
+// the volumes back to the level default and clears this. Empty when nothing
+// is pending.
+var config string APGravityRestoreMap;

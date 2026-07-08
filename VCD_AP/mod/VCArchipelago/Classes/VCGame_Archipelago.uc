@@ -57,8 +57,10 @@ var array<VCPawn> SpeedAffectedJanitors;
 var array<float> SpeedAffectedBaseSpeeds;
 
 // The GRI effect type of the running speed effect; TimedEffectNone when the
-// speeds are at base.
+// speeds are at base. The multiplier is kept alongside so a janitor spawning
+// mid effect can be scaled to match.
 var byte ActiveSpeedEffectType;
+var float ActiveSpeedMultiplier;
 
 // Seconds a timed trap effect lasts (speed and gravity alike); the HUD
 // countdown shares this value through the replicated GRI slot.
@@ -76,6 +78,15 @@ var array<byte> ZeroGravityVolumeWasEnabled;
 // Mildly negative, never zero or positive: everything still settles, so a
 // missed restore self-recovers and a jumping janitor always lands.
 const ZeroGravityWorldGravityZ = -60.0;
+
+// The gravity console is watched while the trap holds the volumes: a player
+// toggle mid-trap ends the effect instead of being reverted by the restore.
+const GravityConsoleWatchInterval = 0.25;
+
+// A pending defensive gravity restore rechecks at this interval until the
+// game's own save-state load has finished (bMatchHasBegun), because the
+// volumes' saved flip applies during that load.
+const PendingGravityRestorePollInterval = 0.5;
 
 // The magnet trap's reach and pull speeds. The pull sets rigid-body velocity
 // instead of adding an impulse, so every piece moves at a bounded speed no
@@ -198,6 +209,15 @@ event InitGame(string Options, out string ErrorMessage)
     SetTimer(1.0, true, 'EnforceToolLocks');
     SetTimer(SelfCleaningMopPollInterval, true, 'PollSelfCleaningMop');
     SetTimer(SqueakyBootsPollInterval, true, 'PollSqueakyBoots');
+    // A pending marker for this map means a zero gravity trap flipped its
+    // volumes and no restore ran (a quit or crash mid-trap); force the level
+    // default back once the save-state load finishes.
+    if (APState.APGravityRestoreMap != ""
+        && APState.APGravityRestoreMap ~= WorldInfo.GetMapName(true))
+    {
+        SetTimer(PendingGravityRestorePollInterval, true,
+                 'ApplyPendingGravityRestore');
+    }
     EnforceLevelGate();
 }
 
@@ -209,6 +229,7 @@ event PostBeginPlay()
     super.PostBeginPlay();
     PublishSqueakyBootsFlag();
     PublishSelfCleaningMopFlag();
+    PublishToolMasks(CurrentToolsMask());
 }
 
 // Grants the stock default inventory, then swaps the stock hands for the
@@ -221,7 +242,10 @@ function AddDefaultInventory(Pawn PlayerPawn)
     SwapInHandsSubclass(PlayerPawn);
     SwapInMopSubclass(PlayerPawn);
     if (VCPawn(PlayerPawn) != None)
+    {
         ApplyPawnInventoryLocks(VCPawn(PlayerPawn), CurrentToolsMask());
+        ScaleOneJanitor(VCPawn(PlayerPawn));
+    }
 }
 
 function SwapInHandsSubclass(Pawn PlayerPawn)
@@ -386,6 +410,7 @@ function SaveAPState()
     class'VCArchipelagoState'.default.APSeq = APState.APSeq;
     class'VCArchipelagoState'.default.APTrapSeed = APState.APTrapSeed;
     class'VCArchipelagoState'.default.APTrapsApplied = APState.APTrapsApplied;
+    class'VCArchipelagoState'.default.APGravityRestoreMap = APState.APGravityRestoreMap;
     APState.SaveConfig();
 }
 
@@ -499,54 +524,53 @@ function ApplyQueueEntry(string QueueType)
 function PollMilestones()
 {
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local bool bFileCurrent;
 
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
-    if (ReplicatedInfo != None)
-    {
-        ReplicatedInfo.NextMilestonePercent = ReadNextMilestonePercent();
-        ReplicatedInfo.bSpeedrunOutstanding = ReadSpeedrunOutstanding();
-    }
+    if (ReplicatedInfo == None)
+        return;
+    bFileCurrent = LoadMilestoneFile();
+    ReplicatedInfo.NextMilestonePercent = ReadNextMilestonePercent(bFileCurrent);
+    ReplicatedInfo.bSpeedrunOutstanding = ReadSpeedrunOutstanding(bFileCurrent);
 }
 
-// Whether the current map's Speedrun check is still outstanding, from the
-// client-written milestones file. False without trustworthy same-seed data,
-// so the HUD timer stays hidden until the client confirms the seed.
-function bool ReadSpeedrunOutstanding()
+// Loads the client-written milestones file once per poll, into the reused
+// target. False without trustworthy same-seed data (no connected seed, no
+// file, another seed's file).
+function bool LoadMilestoneFile()
 {
     if (APState == None || APState.APSeedTag == "")
         return false;
     if (MilestoneFile == None)
         MilestoneFile = new class'VCArchipelagoMilestones';
-    if (!class'Engine'.static.BasicLoadObject(MilestoneFile,
+    return class'Engine'.static.BasicLoadObject(MilestoneFile,
         "..\\..\\Saves\\VCArchipelagoMilestones.sav", true, 1)
-        || MilestoneFile.SeedTag != APState.APSeedTag)
-    {
+        && MilestoneFile.SeedTag == APState.APSeedTag;
+}
+
+// Whether the current map's Speedrun check is still outstanding, from the
+// already-loaded milestones file. False without trustworthy same-seed data,
+// so the HUD timer stays hidden until the client confirms the seed.
+function bool ReadSpeedrunOutstanding(bool bFileCurrent)
+{
+    if (!bFileCurrent)
         return false;
-    }
     return InStr("," $ MilestoneFile.SpeedrunOutstandingMaps $ ",",
         "," $ WorldInfo.GetMapName(true) $ ",") != -1;
 }
 
-// The lowest percent the server still misses for the current map: Unknown
-// without trustworthy same-seed data (no connected seed, no file, another
-// seed's file, or a map absent from it), Cleared when the map is listed with
-// nothing remaining.
-function int ReadNextMilestonePercent()
+// The lowest percent the server still misses for the current map, from the
+// already-loaded milestones file: Unknown without trustworthy same-seed data
+// (or a map absent from it), Cleared when the map is listed with nothing
+// remaining.
+function int ReadNextMilestonePercent(bool bFileCurrent)
 {
     local array<string> MapEntries, PercentTexts;
     local string Remaining;
     local int I, J, ColonAt, Percent, Lowest;
 
-    if (APState == None || APState.APSeedTag == "")
+    if (!bFileCurrent)
         return class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneUnknown;
-    if (MilestoneFile == None)
-        MilestoneFile = new class'VCArchipelagoMilestones';
-    if (!class'Engine'.static.BasicLoadObject(MilestoneFile,
-        "..\\..\\Saves\\VCArchipelagoMilestones.sav", true, 1)
-        || MilestoneFile.SeedTag != APState.APSeedTag)
-    {
-        return class'VCGameReplicationInfo_Archipelago'.const.NextMilestoneUnknown;
-    }
 
     ParseStringIntoArray(MilestoneFile.RemainingByMap, MapEntries, ",", true);
     for (I = 0; I < MapEntries.Length; I++)
@@ -777,21 +801,10 @@ function PollSqueakyBoots()
 // stock GiveTools cheat).
 function EnforceToolLocks()
 {
-    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
     local int Mask;
 
     Mask = CurrentToolsMask();
-    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
-    if (ReplicatedInfo != None && ReplicatedInfo.UnlockedToolsMask != Mask)
-        ReplicatedInfo.UnlockedToolsMask = Mask;
-    // Present tools are constant per level; read once and publish for the HUD.
-    if (!bPresentToolsMaskRead)
-    {
-        PresentToolsMaskCache = ReadPresentToolsMask(WorldInfo.GetMapName(true));
-        bPresentToolsMaskRead = true;
-    }
-    if (ReplicatedInfo != None && ReplicatedInfo.PresentToolsMask != PresentToolsMaskCache)
-        ReplicatedInfo.PresentToolsMask = PresentToolsMaskCache;
+    PublishToolMasks(Mask);
     // The steady all-unlocked state (stock behavior, toolsanity off) has
     // nothing to enforce or restore; skip the actor sweeps.
     if (Mask == class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll
@@ -817,6 +830,28 @@ function EnforceToolLocks()
         GrantMops();
     }
     AppliedToolsMask = Mask;
+}
+
+// Publishes the unlocked and present tool masks to the GRI, from every
+// enforcement pass and once from PostBeginPlay before any janitor spawns, so
+// the carry-lock hands never see the all-unlocked default at level start.
+function PublishToolMasks(int Mask)
+{
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+
+    ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
+    if (ReplicatedInfo == None)
+        return;
+    if (ReplicatedInfo.UnlockedToolsMask != Mask)
+        ReplicatedInfo.UnlockedToolsMask = Mask;
+    // Present tools are constant per level; read once and publish for the HUD.
+    if (!bPresentToolsMaskRead)
+    {
+        PresentToolsMaskCache = ReadPresentToolsMask(WorldInfo.GetMapName(true));
+        bPresentToolsMaskRead = true;
+    }
+    if (ReplicatedInfo.PresentToolsMask != PresentToolsMaskCache)
+        ReplicatedInfo.PresentToolsMask = PresentToolsMaskCache;
 }
 
 function ApplyMachineLocks(int Mask)
@@ -1114,19 +1149,25 @@ function GrantSniffers()
 {
     local VCPawn Janitor;
     local VCMapInfo MapInfo;
+    local class<VCWeapon> SnifferClass;
     local VCWeap_Mucktector Existing;
     local bool bHasSniffer;
 
     if (bDisableSniffer)
         return;
+    SnifferClass = class'VCWeap_Mucktector';
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
-    if (MapInfo != None && MapInfo.LevelInventory.Length > 2
-        && (MapInfo.LevelInventory[2] == None
-            || !ClassIsChildOf(MapInfo.LevelInventory[2], class'VCWeap_Mucktector')))
+    if (MapInfo != None && MapInfo.LevelInventory.Length > 2)
     {
         // A blank slot means the map deliberately gives no sniffer; a non-
-        // sniffer override keeps the map's own arrangement.
-        return;
+        // sniffer override keeps the map's own arrangement. A sniffer
+        // subclass is the map's own and is granted as-is, like GrantMops.
+        if (MapInfo.LevelInventory[2] == None
+            || !ClassIsChildOf(MapInfo.LevelInventory[2], class'VCWeap_Mucktector'))
+        {
+            return;
+        }
+        SnifferClass = MapInfo.LevelInventory[2];
     }
     foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
     {
@@ -1139,7 +1180,7 @@ function GrantSniffers()
             break;
         }
         if (!bHasSniffer)
-            Janitor.CreateInventory(class'VCWeap_Mucktector', true);
+            Janitor.CreateInventory(SnifferClass, true);
     }
 }
 
@@ -1559,6 +1600,23 @@ function CleanAllCoreKitMess(PlayerController Requester)
         $" stay; any other loose prop the game counts as mess is cleared too.");
 }
 
+// Picks a random living janitor as a trap or supply anchor, so in co-op the
+// entries spread across the crew instead of always landing on the host.
+function VCPawn PickRandomJanitor()
+{
+    local VCPawn Janitor;
+    local array<VCPawn> Janitors;
+
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+    {
+        if (Janitor.Health > 0)
+            Janitors.AddItem(Janitor);
+    }
+    if (Janitors.Length == 0)
+        return None;
+    return Janitors[Rand(Janitors.Length)];
+}
+
 // Sprays blood splats on the floor around the janitor. Splats spawn the same
 // way the game's own footprints and mop drips do (a plain Spawn on a downward
 // trace), and the live scan counts every VCSplat, so cleanliness drops
@@ -1571,8 +1629,7 @@ function SpawnMessDump()
     local Rotator SplatRotation;
     local int I;
 
-    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
-        break;
+    Janitor = PickRandomJanitor();
     if (Janitor == None)
         return;
 
@@ -1616,8 +1673,7 @@ function bool SpillNearestBucket()
     local VCBucket Bucket, Nearest;
     local float Distance, NearestDistance;
 
-    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
-        break;
+    Janitor = PickRandomJanitor();
     if (Janitor == None)
         return false;
 
@@ -1648,8 +1704,7 @@ function Magnetize()
     local Vector Pull;
     local float Distance;
 
-    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
-        break;
+    Janitor = PickRandomJanitor();
     if (Janitor == None)
         return;
 
@@ -1692,6 +1747,7 @@ function ScaleJanitorSpeeds(float Multiplier, byte EffectType)
         }
         Janitor.GroundSpeed = SpeedAffectedBaseSpeeds[Index] * Multiplier;
     }
+    ActiveSpeedMultiplier = Multiplier;
     SetTimer(TimedEffectDurationSeconds, false, 'RestoreJanitorSpeeds');
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
     if (ReplicatedInfo != None)
@@ -1727,6 +1783,29 @@ function RestoreJanitorSpeeds()
         ReplicatedInfo.ClearTimedEffect(ActiveSpeedEffectType);
     }
     ActiveSpeedEffectType = class'VCGameReplicationInfo_Archipelago'.const.TimedEffectNone;
+    ActiveSpeedMultiplier = 1.0;
+}
+
+// A janitor who spawns or respawns mid speed effect gets the running
+// multiplier too, so the replicated countdown matches what every pawn feels
+// and a death never shakes off a slowdown.
+function ScaleOneJanitor(VCPawn Janitor)
+{
+    local int Index;
+
+    if (Janitor == None || ActiveSpeedEffectType
+        == class'VCGameReplicationInfo_Archipelago'.const.TimedEffectNone)
+    {
+        return;
+    }
+    Index = SpeedAffectedJanitors.Find(Janitor);
+    if (Index == -1)
+    {
+        SpeedAffectedJanitors.AddItem(Janitor);
+        SpeedAffectedBaseSpeeds.AddItem(Janitor.GroundSpeed);
+        Index = SpeedAffectedJanitors.Length - 1;
+    }
+    Janitor.GroundSpeed = SpeedAffectedBaseSpeeds[Index] * ActiveSpeedMultiplier;
 }
 
 // Drops the level into low gravity for the effect duration. The two gravity
@@ -1766,6 +1845,15 @@ function StartZeroGravity()
     {
         for (I = 0; I < ZeroGravityVolumes.Length; I++)
             ZeroGravityVolumes[I].SetEnabled(true);
+        // The flip serializes into the level save, so a persistent marker
+        // survives a quit or crash mid-trap; the next load of this map forces
+        // the volumes back to the level default.
+        if (APState != None)
+        {
+            APState.APGravityRestoreMap = WorldInfo.GetMapName(true);
+            SaveAPState();
+        }
+        SetTimer(GravityConsoleWatchInterval, true, 'WatchGravityConsole');
     }
     else
     {
@@ -1790,12 +1878,10 @@ function StartZeroGravity()
 // and drop.
 function RestoreGravity()
 {
-    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
     local int I;
 
     if (!bZeroGravityActive)
         return;
-    ClearTimer('RestoreGravity');
     if (ZeroGravityVolumes.Length > 0)
     {
         for (I = 0; I < ZeroGravityVolumes.Length; I++)
@@ -1803,20 +1889,96 @@ function RestoreGravity()
             if (ZeroGravityVolumes[I] != None)
                 ZeroGravityVolumes[I].SetEnabled(ZeroGravityVolumeWasEnabled[I] == 1);
         }
-        ZeroGravityVolumes.Length = 0;
-        ZeroGravityVolumeWasEnabled.Length = 0;
     }
     else
     {
         WorldInfo.WorldGravityZ = ZeroGravitySavedWorldGravityZ;
         WakeAllDebris();
     }
+    EndZeroGravity();
+}
+
+// The gravity console is the trap's escape hatch: a toggle during the effect
+// is the janitor fixing gravity, so the effect ends at once and no restore
+// overrides the choice. Only the volume path arms this watch; the world
+// gravity levels have no console.
+function WatchGravityConsole()
+{
+    local int I;
+
+    if (!bZeroGravityActive || ZeroGravityVolumes.Length == 0)
+    {
+        ClearTimer('WatchGravityConsole');
+        return;
+    }
+    for (I = 0; I < ZeroGravityVolumes.Length; I++)
+    {
+        if (ZeroGravityVolumes[I] != None && !ZeroGravityVolumes[I].bEnabled)
+        {
+            EndZeroGravity();
+            return;
+        }
+    }
+}
+
+// Shared trap teardown: stops the clocks, drops the captured baseline, lifts
+// the pending-restore marker, and clears the HUD countdown. Gravity itself is
+// the caller's business: RestoreGravity re-applies the capture first, the
+// console watch leaves the player's choice standing.
+function EndZeroGravity()
+{
+    local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+
+    ClearTimer('RestoreGravity');
+    ClearTimer('WatchGravityConsole');
+    ZeroGravityVolumes.Length = 0;
+    ZeroGravityVolumeWasEnabled.Length = 0;
     bZeroGravityActive = false;
+    // Only this map's marker is lifted: a marker a crash left on another map
+    // keeps waiting for that map's own load.
+    if (APState != None && APState.APGravityRestoreMap != ""
+        && APState.APGravityRestoreMap ~= WorldInfo.GetMapName(true))
+    {
+        APState.APGravityRestoreMap = "";
+        SaveAPState();
+    }
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
     if (ReplicatedInfo != None)
     {
         ReplicatedInfo.ClearTimedEffect(
             class'VCGameReplicationInfo_Archipelago'.const.TimedEffectZeroGravity);
+    }
+}
+
+// Runs only while a pending marker names this map: waits for the game's own
+// save-state load to finish (the volumes' saved flip applies during it), then
+// forces the gravity volumes back to the level default, zero gravity on. Both
+// gravity levels ship in zero gravity, so the default is SetEnabled(true).
+function ApplyPendingGravityRestore()
+{
+    local VCMapInfo MapInfo;
+    local int I;
+
+    if (GameReplicationInfo == None || !GameReplicationInfo.bMatchHasBegun)
+        return;
+    ClearTimer('ApplyPendingGravityRestore');
+    // A trap that started meanwhile owns the volumes and the marker again;
+    // its own restore or the console watch settles both.
+    if (bZeroGravityActive)
+        return;
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None)
+    {
+        for (I = 0; I < MapInfo.GravityVolumes.Length; I++)
+        {
+            if (MapInfo.GravityVolumes[I] != None)
+                MapInfo.GravityVolumes[I].SetEnabled(true);
+        }
+    }
+    if (APState != None && APState.APGravityRestoreMap != "")
+    {
+        APState.APGravityRestoreMap = "";
+        SaveAPState();
     }
 }
 
@@ -1852,8 +2014,7 @@ function SpawnSupplyNearJanitor(class<VCDebris> SupplyClass)
     local Actor Floor;
     local int I;
 
-    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
-        break;
+    Janitor = PickRandomJanitor();
     if (Janitor == None)
         return;
 
