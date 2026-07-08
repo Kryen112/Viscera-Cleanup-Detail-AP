@@ -174,6 +174,49 @@ class TestTrapsAppliedToPush(unittest.TestCase):
         self.assertIsNone(traps_applied_to_push(state, "seed_1", 6))
 
 
+def _traps_context() -> VCDContext:
+    """A context carrying only the trap-baseline state, skipping __init__ so
+    no framework plumbing is needed."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.install_dir = None
+    ctx.saves_ready = False
+    ctx.seed_name = "seed_1"
+    ctx.trap_baseline = None
+    ctx.storage_traps_applied = None
+    ctx.unlocked_maps = set()
+    ctx.unlocked_tools = {}
+    ctx.clean_mop_maps = set()
+    ctx.squeaky_boots_maps = set()
+    return ctx
+
+
+class TestTrapBaselineResolution(unittest.TestCase):
+    def test_resync_packet_sets_the_baseline(self) -> None:
+        ctx = _traps_context()
+        ctx._on_received_items(
+            {"index": 0, "items": [SimpleNamespace(item=-1)] * 2})
+        self.assertEqual(ctx.trap_baseline, 2)
+
+    def test_storage_answer_resolves_a_fresh_slot_to_zero(self) -> None:
+        # A slot holding no items gets no resync packet, so the storage
+        # answer settles the baseline first and a live batch arriving at
+        # index 0 afterwards is never mistaken for the resync.
+        ctx = _traps_context()
+        ctx._fold_storage_traps_applied(0)
+        self.assertEqual(ctx.trap_baseline, 0)
+        ctx._on_received_items(
+            {"index": 0, "items": [SimpleNamespace(item=-1)]})
+        self.assertEqual(ctx.trap_baseline, 0)
+
+    def test_storage_answer_keeps_a_resync_baseline(self) -> None:
+        ctx = _traps_context()
+        ctx._on_received_items(
+            {"index": 0, "items": [SimpleNamespace(item=-1)] * 3})
+        ctx._fold_storage_traps_applied(1)
+        self.assertEqual(ctx.trap_baseline, 3)
+        self.assertEqual(ctx.storage_traps_applied, 1)
+
+
 class TestGoalLocationsFromSlotData(unittest.TestCase):
     def test_level_goal_counts_only_pooled_levels(self) -> None:
         ids, need = goal_locations_from_slot_data({

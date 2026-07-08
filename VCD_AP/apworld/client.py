@@ -575,6 +575,9 @@ class VCDContext(CommonContext):
         state, and advances the trap bookkeeping."""
         # The first packet after connect (index 0) is the full resync list:
         # everything in it predates this session, so it sets the trap baseline.
+        # A slot with no items gets no resync packet at all; the connect-time
+        # storage answer then resolves the baseline to zero, so a live batch
+        # arriving later at index 0 is never mistaken for the resync.
         if self.trap_baseline is None and int(args.get("index", 0)) == 0:
             self.trap_baseline = len(args.get("items", []))
         changed = False
@@ -694,6 +697,11 @@ class VCDContext(CommonContext):
         if self.storage_traps_applied is not None:
             number = max(number, self.storage_traps_applied)
         self.storage_traps_applied = number
+        # The server answers the connect-time Get only after the resync
+        # packet, so a baseline still unset here means the slot held no items
+        # at connect and the server skipped the empty resync entirely.
+        if self.trap_baseline is None:
+            self.trap_baseline = 0
         self.write_traps_if_changed()
 
     def _set_goal(self, slot_data: dict) -> None:
