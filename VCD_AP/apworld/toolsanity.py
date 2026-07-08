@@ -14,12 +14,15 @@ check up to and including 100 percent (regular rungs and Employee of the Month)
 comes with the core kit alone. Over 100 percent, each situational tool the level
 has adds a fixed share (OVER_100_PER_TOOL_PERCENT), a conservative floor: the
 report and stacking usually reach more, so higher rungs are often obtainable out
-of logic, but the full kit always reaches the level's over-100 maximum. A few
-levels leave a large share of mess only one situational tool can clear (measured
-with APCleanCoreKit and recorded in CORE_KIT_CEILING_PERCENT): the core kit tops
-out around that ceiling there, and every check above it waits for the one
-EXTRA_CLEAN_TOOL that closes the gap to 100. Physical pickups (collectibles and
-Bob notes) need the level's clean kit, because a trophy only banks on a
+of logic, but the full kit always reaches the level's over-100 maximum. The
+climb is also capped by the physical ceiling the missing tools leave: a tool's
+own measured mess share (welder marks, vendor graffiti, J-HARM barrels) is
+unreachable without that tool, so no toolset is ever credited a rung the mess it
+cannot clear puts out of reach. A few levels leave a large share of mess only
+one situational tool can clear (recorded in CORE_KIT_CEILING_PERCENT): the core
+kit tops out around that ceiling there, and every check above it waits for the
+one EXTRA_CLEAN_TOOL that closes the gap to 100. Physical pickups (collectibles
+and Bob notes) need the level's clean kit, because a trophy only banks on a
 not-fired punch-out; the Overgrowth pickaxe also needs the shovel to dig it out.
 
 The Slosh-O-Matic slot in this model is satisfiable two ways: the machine
@@ -153,21 +156,28 @@ VENDOR_MAPS: frozenset[str] = frozenset({
     "VC_Vulcan_01",
 })
 
-# Measured with the APCleanCoreKit dev command: levels the core kit alone
-# cannot clean to 100 percent, with the percent it tops out at and the one
-# situational tool that clears the rest. Incubation Emergency and Core Sample
-# leave welder mess (bullet holes and creep); Uprinsing leaves vendor mess
-# (graffiti that needs acid vials). A level absent here is fully cleaned by the
-# core kit (ceiling 100, no extra tool). Refine a ceiling if a rung strands.
+# Levels the core kit alone cannot clean to 100 percent, with the percent it
+# tops out at and the one situational tool that clears the rest. Incubation
+# Emergency, Core Sample, and The Vulcan Affair leave welder mess (bullet
+# holes and creep); Uprinsing leaves vendor mess (graffiti that needs acid
+# vials). The first three ceilings are measured with the APCleanCoreKit dev
+# command. The Vulcan ceiling is a conservative floor under the arithmetic
+# bound of 98.86 (the known maximum 115.90 minus the scanned welder 16.91 and
+# barrel 0.13 shares), pending an APCleanCoreKit measurement; the bound proves
+# the core kit cannot reach 100 there. A level absent here is fully cleaned by
+# the core kit (ceiling 100, no extra tool). Refine a ceiling if a rung
+# strands.
 CORE_KIT_CEILING_PERCENT: dict[str, float] = {
     "VC_Incubator": 80.0,
     "VC_Uprinsing": 80.0,
     "VC_Energy_01": 80.0,
+    "VC_Vulcan_01": 90.0,
 }
 EXTRA_CLEAN_TOOL: dict[str, str] = {
     "VC_Incubator": "Welder",
     "VC_Uprinsing": "Vendor",
     "VC_Energy_01": "Welder",
+    "VC_Vulcan_01": "Welder",
 }
 
 # Played knowledge: levels whose deeper areas sit behind carried keys, so any
@@ -222,6 +232,13 @@ def item_keys(map_name: str, hard_start_maps: "set[str]") -> list[str]:
     return [k for k in tools_present(map_name) if k not in free]
 
 
+def scan_start_score(map_name: str) -> "float | None":
+    """The level's transcribed StartingCleanupScore, for the client's
+    cross-check against the live level. None for a map outside the table."""
+    row = _SCAN.get(map_name)
+    return row[0] if row is not None else None
+
+
 def core_kit_ceiling(map_name: str) -> float:
     """The percent the core kit alone reaches on the level: 100 unless a
     measured suspect level leaves mess only its extra tool can clear."""
@@ -239,19 +256,39 @@ def full_clean_keys(map_name: str) -> frozenset[str]:
 
 
 class _Bands:
-    """Precomputed core-kit mess shares for one level, as percents of the
-    starting cleanup score. `free` is machine-use work no lock gates; `mop` is
-    the blood and scorch the mop and buckets clear. The hands and incinerator
-    clear the rest of the mess up to the level's core-kit ceiling."""
+    """Precomputed mess shares for one level, as percents of the starting
+    cleanup score. `free` is machine-use work no lock gates; `mop` is the
+    blood and scorch the mop and buckets clear; the hands and incinerator
+    clear the rest of the mess up to the level's core-kit ceiling.
+    `situational` holds each situational tool's own measured share (welder
+    marks, vendor graffiti, J-HARM barrels; the shovel has no scanned share),
+    unreachable without that tool."""
 
     def __init__(self, map_name: str) -> None:
         (start, _mop, _welder, _hands_disposal, _barrels, _equipment,
          _vendor, free, _remainder) = _SCAN[map_name]
         self.free = free / start * 100.0
         self.mop = _mop / start * 100.0
+        self.situational = {
+            "Welder": _welder / start * 100.0,
+            "Vendor": _vendor / start * 100.0,
+            "Lift": _barrels / start * 100.0,
+            "Shovel": 0.0,
+        }
 
 
 _BANDS: dict[str, _Bands] = {m: _Bands(m) for m, _, _ in LEVELS}
+
+# A level the suspect table calls core-kit-cleanable must leave at least 100
+# percent reachable without its situational tools, or the table is missing a
+# row and checks strand; the import fails loudly instead.
+for _map, _, _ in LEVELS:
+    if _map not in CORE_KIT_CEILING_PERCENT:
+        _reachable = (MAX_CLEAN_PERCENT_BY_MAP[_map]
+                      - sum(_BANDS[_map].situational.values()))
+        assert _reachable >= 100.0, (
+            f"{_map}: the scan's situational shares contradict the"
+            f" core-kit-cleans-to-100 claim ({_reachable:.2f})")
 
 
 def _slack_step(step: int) -> int:
@@ -280,14 +317,22 @@ def toolset_cap(map_name: str, step: int, unlocked: "frozenset[str]") -> float:
         # The slack-step lift keeps every sub-100 rung and the 100 rung in logic
         # at 100 with the clean kit alone; each situational tool the level has
         # adds a fixed share over that, and the full kit reaches the maximum.
+        # A missing tool's own measured mess share is out of reach without it,
+        # so the climb is also capped by the physical ceiling that remains.
         total = float(usable_total(map_name, step))
         present = frozenset(k for k in tools_present(map_name)
                             if k in SITUATIONAL_TOOL_KEYS)
         held = present & unlocked
         if present <= held:
             return total
-        return min(total, 100.0 + float(_slack_step(step))
-                   + OVER_100_PER_TOOL_PERCENT * float(len(held)))
+        bands = _BANDS[map_name]
+        reachable = total - sum(bands.situational[k] for k in present - held)
+        # The clean kit reaching 100 (with the slack lift) is the measured
+        # claim of the suspect and scan tables, so the deduction never pulls
+        # below it: it only trims the over-100 climb.
+        floor = 100.0 + float(_slack_step(step))
+        return min(total, max(reachable, floor),
+                   floor + OVER_100_PER_TOOL_PERCENT * float(len(held)))
     bands = _BANDS[map_name]
     ceiling = core_kit_ceiling(map_name)
     hands = "Hands" in unlocked

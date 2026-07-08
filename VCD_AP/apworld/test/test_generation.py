@@ -420,6 +420,35 @@ class TestStep2(VCDTestBase):
         self.assertNotIn(milestone_name("Cryogenesis", 5), names)
 
 
+class TestStep10HardStartOpener(VCDTestBase):
+    # Generation itself must never fail on the hard-start roll: at step 10 no
+    # hard-start level clears a rung with its opening kit, so an all-hard roll
+    # would otherwise abort the seed.
+    options = {"milestone_step": 10, "random_starting_kit": True,
+               "level_pool": {"Athena's Wrath", "Cryogenesis"},
+               "goal_amount": 2}
+
+    def test_all_hard_roll_softens_one_level(self):
+        from ..toolsanity import free_kit_rungs
+        world = self.world
+        forced = {"VC_Hall", "VC_Cryo"}
+        world.hard_start_maps = set(forced)
+        # With both levels hard-started nothing opens at step 10.
+        self.assertEqual([m for m in forced
+                          if free_kit_rungs(m, 10, world.hard_start_maps)], [])
+        world._ensure_openable_start(["VC_Hall", "VC_Cryo"])
+        self.assertEqual(len(world.hard_start_maps), 1)
+        softened = forced - world.hard_start_maps
+        self.assertTrue(free_kit_rungs(softened.pop(), 10,
+                                       world.hard_start_maps))
+
+    def test_openable_roll_is_left_alone(self):
+        world = self.world
+        world.hard_start_maps = {"VC_Hall"}
+        world._ensure_openable_start(["VC_Hall", "VC_Cryo"])
+        self.assertEqual(world.hard_start_maps, {"VC_Hall"})
+
+
 class TestFewStartingLevels(VCDTestBase):
     options = {"starting_levels": 3}
 
@@ -737,6 +766,45 @@ class TestToolsanityBands(unittest.TestCase):
         partial = frozenset({"Mop", "SloshOMatic"})
         self.assertEqual(toolset_cap("VC_Sewer", 5, partial),
                          toolset_cap("VC_Sewer", 5, partial | {"Lift"}))
+
+    def test_missing_tool_share_caps_the_over_100_climb(self):
+        from ..toolsanity import CORE_KIT_KEYS, rung_in_logic, toolset_cap
+        # Revolutionary Robotics: the welder's own mess is 5610 of a 32915.5
+        # start (17.04 points), so without it the physical ceiling is the
+        # 131.74 maximum minus that share (114.70). Lift and Vendor alone must
+        # never put rungs 115 or 120 in logic.
+        kit = CORE_KIT_KEYS | {"Lift", "Vendor"}
+        self.assertAlmostEqual(toolset_cap("VC_Robot", 5, kit),
+                               130.0 - 5610.0 / 32915.5 * 100.0)
+        self.assertTrue(rung_in_logic("VC_Robot", 105, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Robot", 115, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Robot", 120, 5, kit))
+        # The welder itself reopens the top of the ladder.
+        self.assertTrue(rung_in_logic("VC_Robot", 120, 5, kit | {"Welder"}))
+
+    def test_deduction_never_pulls_the_clean_kit_below_100(self):
+        from ..toolsanity import CORE_KIT_KEYS, rung_in_logic, toolset_cap
+        # Uprinsing's welder share (23.99) subtracted from its usable total
+        # would land under 110, but the suspect row measured that the vendor
+        # closes the level to 100: the clean kit keeps 100 plus the slack
+        # step, even at coarse steps.
+        kit = CORE_KIT_KEYS | {"Vendor"}
+        self.assertEqual(toolset_cap("VC_Uprinsing", 10, kit), 110.0)
+        self.assertTrue(rung_in_logic("VC_Uprinsing", 100, 10, kit))
+
+    def test_vulcan_waits_for_the_welder(self):
+        from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
+        # The Vulcan Affair's welder share (16.91 points against a 115.90
+        # maximum) proves the core kit cannot reach 100; the conservative 90
+        # ceiling holds the 95-and-up checks (punch-out, Employee of the
+        # Month, speedrun) until the welder arrives.
+        self.assertEqual(toolset_cap("VC_Vulcan_01", 5, CORE_KIT_KEYS), 90.0)
+        self.assertGreaterEqual(
+            toolset_cap("VC_Vulcan_01", 5, CORE_KIT_KEYS | {"Welder"}), 100.0)
+        present = self._situational_present("VC_Vulcan_01")
+        self.assertEqual(
+            toolset_cap("VC_Vulcan_01", 5, CORE_KIT_KEYS | present),
+            float(usable_total("VC_Vulcan_01", 5)))
 
 
 class TestData(unittest.TestCase):

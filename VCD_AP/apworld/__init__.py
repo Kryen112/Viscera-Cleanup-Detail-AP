@@ -122,10 +122,12 @@ class VCDWorld(World):
     item_name_groups = ITEM_GROUPS
     location_name_groups = LOCATION_GROUPS
 
-    started_maps: ClassVar[set[str]]
-    pooled_maps: ClassVar[list[str]]
-    bob_chain_pooled: ClassVar[bool]
-    hard_start_maps: ClassVar[set[str]]
+    # Per-seed state assigned in generate_early; never class-level, or two
+    # players' worlds in one multiworld would cross-talk.
+    started_maps: set[str]
+    pooled_maps: list[str]
+    bob_chain_pooled: bool
+    hard_start_maps: set[str]
     # The Self-Cleaning Mop copies that classify progression this seed: one
     # per hard-start level, where the mop stands in for the itemized
     # Slosh-O-Matic in logic. Empty until generate_early rolls the kits.
@@ -208,6 +210,7 @@ class VCDWorld(World):
         if self.options.toolsanity and self.options.random_starting_kit:
             self.hard_start_maps = {
                 m for m in candidates if self.random.random() < 0.5}
+            self._ensure_openable_start(candidates)
         # On a hard-start level the Slosh-O-Matic is an item and the level's
         # Self-Cleaning Mop can stand in for it in logic, so that copy
         # classifies progression.
@@ -216,6 +219,21 @@ class VCDWorld(World):
             for m in self.hard_start_maps)
         start_n = min(int(self.options.starting_levels.value), len(candidates))
         self.started_maps = self._draw_started_maps(candidates, start_n)
+
+    def _ensure_openable_start(self, candidates: "list[str]") -> None:
+        """A rolled all-hard-start pool can leave no level whose starting kit
+        clears a rung at a coarse milestone step. One rolled level then keeps
+        its default mop and buckets instead, so the same yaml never fails on
+        the kit roll alone. A pool no starting kit can open at all still
+        raises in _draw_started_maps."""
+        step = self._step()
+        if any(free_kit_rungs(m, step, self.hard_start_maps)
+               for m in candidates):
+            return
+        openable = [m for m in sorted(self.hard_start_maps)
+                    if free_kit_rungs(m, step, self.hard_start_maps - {m})]
+        if openable:
+            self.hard_start_maps.discard(self.random.choice(openable))
 
     def _starting_keystone(self, map_name: str) -> "str | None":
         """The one keystone cleaning tool to hand a started level up front: the
