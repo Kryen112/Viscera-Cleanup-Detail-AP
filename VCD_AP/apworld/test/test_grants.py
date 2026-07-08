@@ -4,27 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from .bases import read_fstring, read_sav_properties
 from .. import grants
-
-
-def _read_properties(data: bytes) -> "dict[str, str]":
-    """Decode every string property from the .sav byte layout."""
-    offset = 8
-    out: dict[str, str] = {}
-    while True:
-        name, offset = _read_fstring(data, offset)
-        if name == "None":
-            return out
-        _type, offset = _read_fstring(data, offset)
-        offset += 8
-        out[name], offset = _read_fstring(data, offset)
-
-
-def _read_fstring(data: bytes, offset: int) -> "tuple[str, int]":
-    length = struct.unpack_from("<i", data, offset)[0]
-    offset += 4
-    raw = data[offset:offset + length]
-    return raw[:-1].decode("ascii"), offset + length
 
 
 class TestGrantsCodec(unittest.TestCase):
@@ -35,15 +16,15 @@ class TestGrantsCodec(unittest.TestCase):
         offset += 4
         marker = struct.unpack_from("<i", data, offset)[0]
         offset += 4
-        name, offset = _read_fstring(data, offset)
-        type_name, offset = _read_fstring(data, offset)
+        name, offset = read_fstring(data, offset)
+        type_name, offset = read_fstring(data, offset)
         prop_size = struct.unpack_from("<i", data, offset)[0]
         offset += 4
         array_index = struct.unpack_from("<i", data, offset)[0]
         offset += 4
         value_start = offset
-        value, offset = _read_fstring(data, offset)
-        terminator, offset = _read_fstring(data, offset)
+        value, offset = read_fstring(data, offset)
+        terminator, offset = read_fstring(data, offset)
 
         self.assertEqual(revision, 1)
         self.assertEqual(marker, -1)
@@ -71,7 +52,7 @@ class TestGrantsCodec(unittest.TestCase):
                          "VC_Hall:Hands Welder,VC_Cryo:",
                          "VC_Hall:Hands Welder Incinerator,VC_Cryo:Hands",
                          ["VC_Hall", "VC_Cryo"], ["VC_Cryo"])
-            properties = _read_properties(path.read_bytes())
+            properties = read_sav_properties(path.read_bytes())
         self.assertEqual(properties, {
             "UnlockedMaps": "VC_Hall,VC_Cryo",
             "UnlockedTools": "VC_Hall:Hands Welder,VC_Cryo:",
@@ -89,7 +70,7 @@ class TestGrantsCodec(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "VCArchipelagoGrants.sav"
             grants.write(path, ["VC_Hall"])
-            properties = _read_properties(path.read_bytes())
+            properties = read_sav_properties(path.read_bytes())
         self.assertEqual(properties["UnlockedTools"], "")
         self.assertEqual(properties["PresentTools"], "")
         self.assertEqual(properties["SelfCleaningMaps"], "")

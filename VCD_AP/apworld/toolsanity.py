@@ -1,4 +1,4 @@
-﻿"""Toolsanity: per-level tool and machine lock items and the cleanliness logic
+"""Toolsanity: per-level tool and machine lock items and the cleanliness logic
 they gate.
 
 The scan table below is transcribed from the mod's APScanReport dev command,

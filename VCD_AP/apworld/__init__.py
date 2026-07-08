@@ -30,7 +30,6 @@ from .items import (CLEAN_MOP_ITEMS, FILLER_NAMES, ITEM_GROUPS,
                     PROGRESSION_TOOL_ITEMS, SQUEAKY_BOOTS_ITEMS, TOOL_ITEMS,
                     access_item_name, self_cleaning_mop_name,
                     squeaky_boots_name)
-from .traps import TRAP_NAMES, USEFUL_NAMES
 from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (BOB_GATED_LOCATIONS, FIND_BOB_LOCATION,
                         LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
@@ -42,6 +41,7 @@ from .toolsanity import (CORE_CLEANING_KEYS, PROGRESSION_TOOL_KEYS,
                          PUNCHOUT_CLEAN_PERCENT, free_keys, free_kit_rungs,
                          full_clean_keys, item_keys, rung_in_logic,
                          tool_item_name)
+from .traps import TRAP_NAMES, USEFUL_NAMES
 
 GAME_NAME = "Viscera Cleanup Detail"
 PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(

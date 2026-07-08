@@ -13,9 +13,9 @@ rest), so they are edited, never cleared.
 Nothing compiles on a player machine. Every install runs the same package
 bytes, so the package GUID matches everywhere and co-op joins work; a locally
 compiled package would carry its own GUID and split the players. Deploy
-therefore also removes the compile wiring an older installer left behind (the
-deployed source tree and the EditPackages lines), so the game can never offer
-to rebuild scripts locally and fork the GUID. Idempotent.
+therefore also removes any compile wiring present in the install (a deployed
+source tree and the EditPackages lines), so the game can never offer to
+rebuild scripts locally and fork the GUID. Idempotent.
 """
 from __future__ import annotations
 
