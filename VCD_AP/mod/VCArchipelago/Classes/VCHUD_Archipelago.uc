@@ -47,10 +47,12 @@ const TimedEffectBlinkSeconds = 5.0;
 // Toolsanity unlock panel geometry (pre-ratio units). The width is a floor;
 // the backing widens and grows to the measured text extents. The 11 tool bits
 // are powers of two in TOOL_KEY_ORDER, so bit (1 << index) walks them in order.
+// The side margin doubles as the history column's left inset, so the panel
+// (right-aligned) and the history (left column) frame the screen evenly.
 const ToolPanelTextSize = 18.0;
 const ToolPanelWidth    = 220.0;
 const ToolPanelTop      = 120.0;
-const ToolPanelLeft     = 12.0;
+const PanelSideMargin   = 12.0;
 const ToolBitCount      = 11;
 
 // Reused load target for the feed file, so the poll does not pile up garbage
@@ -75,10 +77,6 @@ var int HighestQueuedIndex;
 // Rolling log of the most recent promoted toast lines, newest last, shown on
 // the Tab history panel. Independent of the visible-toast lifetime.
 var array<string> ToastHistory;
-
-// The tool panel's bottom edge from the last PostRender, so the history panel
-// underneath it never overlaps.
-var float ToolPanelBottomY;
 
 simulated event PostBeginPlay()
 {
@@ -114,6 +112,8 @@ event PostRender()
 // Reads the replicated GRI, so the host and co-op guests see the same panel.
 // The font group can render text larger than the requested size, so the
 // backing sizes from measured extents, never from the requested constants.
+// The panel right-aligns to the screen edge, clear of the centered
+// scoreboard, so the whole left column stays free for the toast history.
 function DrawToolsanityPanel()
 {
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
@@ -125,10 +125,6 @@ function DrawToolsanityPanel()
     local float PanelLeft, PanelTop, PanelWidth, PanelHeight;
     local float LabelLeft, HeadingTop;
     local string HeadingText;
-
-    // A floor so the history panel below still anchors sanely on a transient
-    // no-GRI frame where this returns early.
-    ToolPanelBottomY = ToolPanelTop * RatioY;
 
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(VCGRI);
     if (ReplicatedInfo == None)
@@ -183,15 +179,14 @@ function DrawToolsanityPanel()
             WidestText = TextWidth;
     }
 
-    PanelLeft = ToolPanelLeft * RatioY;
+    PanelWidth = FMax(ToolPanelWidth * RatioY, WidestText + 12.0 * RatioY);
+    PanelHeight = RowHeight * float(RowLabels.Length + 1) + 8.0 * RatioY;
+    PanelLeft = Canvas.SizeX - PanelWidth - PanelSideMargin * RatioY;
     PanelTop = ToolPanelTop * RatioY;
     LabelLeft = PanelLeft + 6.0 * RatioY;
     HeadingTop = PanelTop + 4.0 * RatioY;
-    PanelWidth = FMax(ToolPanelWidth * RatioY, WidestText + 12.0 * RatioY);
-    PanelHeight = RowHeight * float(RowLabels.Length + 1) + 8.0 * RatioY;
 
     DrawToolPanelBacking(PanelLeft, PanelTop, PanelWidth, PanelHeight);
-    ToolPanelBottomY = PanelTop + PanelHeight;
 
     Canvas.SetDrawColor(255, 255, 255, 255);
     DrawTextEx(HeadingText, LabelLeft, HeadingTop,
@@ -553,15 +548,17 @@ function DrawToasts()
 }
 
 // The Tab scrollback: the most recent promoted toast lines, newest at the
-// bottom, in the left column under the tool panel. Bottom-anchored so the
-// newest lines always show; when space between the tool panel and the screen
-// bottom is tight, the oldest lines drop first. Same colored-segment draw as
-// the live toasts.
+// bottom of the left column, bottom-anchored to the screen edge so the
+// newest lines always show and older lines drop first. The tool panel sits
+// on the right, so the whole column is available; its top stops under the
+// centered scoreboard box, whose lines reach into this column's width. A
+// measure pass charges each entry its wrapped row count, so the block
+// anchors exactly. Same colored-segment draw as the live toasts.
 function DrawToastHistoryPanel()
 {
     local float XStart, MaxRight, LineHeight, CharWidth;
-    local float PanelTop, DrawX, DrawY;
-    local int MaxLines, ShowCount, First, I, SegmentIndex;
+    local float PanelTop, TopLimit, BottomLimit, DrawX, DrawY;
+    local int RowBudget, RowsUsed, EntryRows, First, I, SegmentIndex;
     local array<string> Segments;
     local Color HeadingColor;
 
@@ -571,17 +568,44 @@ function DrawToastHistoryPanel()
     Canvas.Font = class'Engine.Engine'.static.GetMediumFont();
     Canvas.TextSize("A", CharWidth, LineHeight, ToastFontScale, ToastFontScale);
 
-    XStart = ToolPanelLeft * RatioY;
+    XStart = PanelSideMargin * RatioY;
     MaxRight = XStart + 0.4 * Canvas.SizeX;
-    // A heading line plus as many entries as fit below the tool panel.
-    PanelTop = ToolPanelBottomY + 16.0 * RatioY;
-    MaxLines = int((Canvas.SizeY - 24.0 * RatioY - PanelTop) / LineHeight) - 1;
-    if (MaxLines < 1)
+    BottomLimit = Canvas.SizeY - 24.0 * RatioY;
+
+    // The scoreboard box bottom (heading band, rows, and the soft edge tile
+    // below them, 148 in the stock pre-ratio units) plus an 8-unit gap.
+    TopLimit = ToolPanelTop * RatioY;
+    if (VCGRI != None)
+        TopLimit = FMax(TopLimit,
+            (156.0 + 26.0 * float(VCGRI.PRIArray.Length)) * RatioY);
+
+    // A heading row plus the entry rows must fit between the limits.
+    RowBudget = int((BottomLimit - TopLimit) / LineHeight) - 1;
+    if (RowBudget < 1)
         return;
-    ShowCount = Min(ToastHistory.Length, MaxHistoryToasts);
-    if (ShowCount > MaxLines)
-        ShowCount = MaxLines;
-    First = ToastHistory.Length - ShowCount;
+
+    // Walk newest to oldest, charging each entry its wrapped rows, until the
+    // budget or the display cap runs out.
+    First = ToastHistory.Length;
+    RowsUsed = 0;
+    while (First > 0 && ToastHistory.Length - First < MaxHistoryToasts)
+    {
+        EntryRows = MeasureToastRows(ToastHistory[First - 1], XStart, MaxRight,
+            LineHeight);
+        if (RowsUsed + EntryRows > RowBudget)
+            break;
+        RowsUsed += EntryRows;
+        First--;
+    }
+    // The newest entry alone can outsize the budget; show it clipped at the
+    // bottom rather than show nothing.
+    if (First == ToastHistory.Length)
+    {
+        First--;
+        RowsUsed = RowBudget;
+    }
+
+    PanelTop = BottomLimit - float(RowsUsed + 1) * LineHeight;
 
     HeadingColor.R = 255;
     HeadingColor.G = 255;
@@ -592,9 +616,9 @@ function DrawToastHistoryPanel()
     DrawY = PanelTop + LineHeight;
     for (I = First; I < ToastHistory.Length; I++)
     {
-        // A wrapped line advances DrawY past one row, so guard the bottom
-        // like the live toasts do rather than trust the per-line budget.
-        if (DrawY + LineHeight > Canvas.SizeY - 24.0 * RatioY)
+        // The measure pass sizes the block, so this guard only trips on the
+        // clipped single-entry case.
+        if (DrawY + LineHeight > BottomLimit)
             break;
         DrawX = XStart;
         ParseStringIntoArray(ToastHistory[I], Segments, Chr(9), true);
@@ -610,12 +634,39 @@ function DrawToastHistoryPanel()
     }
 }
 
+// Counts the rows one history line occupies after soft-wrapping, running the
+// segment cursor in measure-only mode so the count always matches the draw.
+// Expects the caller to have set the toast font on the canvas.
+function int MeasureToastRows(string HistoryLine, float XStart, float MaxRight,
+    float LineHeight)
+{
+    local array<string> Segments;
+    local int SegmentIndex;
+    local float DrawX, DrawY;
+    local Color UnusedColor;
+
+    DrawX = XStart;
+    ParseStringIntoArray(HistoryLine, Segments, Chr(9), true);
+    for (SegmentIndex = 0; SegmentIndex < Segments.Length; SegmentIndex++)
+    {
+        if (Len(Segments[SegmentIndex]) <= 6)
+            continue;
+        DrawToastSegment(Mid(Segments[SegmentIndex], 6), UnusedColor,
+            DrawX, DrawY, XStart, MaxRight, LineHeight, true);
+    }
+    // DrawY accumulates float additions of LineHeight, so round before
+    // truncating or ulp drift can undercount a wrapped row.
+    return int(DrawY / LineHeight + 0.5) + 1;
+}
+
 // Draws one colored segment at the running cursor, soft-wrapping at MaxRight
 // back to XStart. Prefers a space break; a spaceless overlong piece wraps to
 // its own line first and hard-breaks only when even a fresh line cannot hold
-// it. Leaves the cursor after the last character drawn.
+// it. Leaves the cursor after the last character drawn. Measure-only mode
+// runs the same cursor without drawing, so a height count matches the draw.
 function DrawToastSegment(string Text, Color SegmentColor, out float DrawX,
-    out float DrawY, float XStart, float MaxRight, float LineHeight)
+    out float DrawY, float XStart, float MaxRight, float LineHeight,
+    optional bool bMeasureOnly)
 {
     local string Remaining, Piece;
     local float PieceWidth, PieceHeight;
@@ -648,7 +699,8 @@ function DrawToastSegment(string Text, Color SegmentColor, out float DrawX,
             DrawY += LineHeight;
             continue;
         }
-        DrawShadowedText(Piece, SegmentColor, DrawX, DrawY);
+        if (!bMeasureOnly)
+            DrawShadowedText(Piece, SegmentColor, DrawX, DrawY);
         DrawX += PieceWidth;
         Remaining = Mid(Remaining, Len(Piece));
         if (Len(Remaining) > 0)
