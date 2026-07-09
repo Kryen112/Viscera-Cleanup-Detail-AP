@@ -589,6 +589,9 @@ class VCDContext(CommonContext):
                 self.seed_name = args.get("seed_name")
         elif cmd == "Connected":
             self._on_connected(args.get("slot_data", {}))
+            # The connect packet carries the server's checked set, so a goal
+            # reached before a disconnect or client restart resolves here.
+            asyncio.create_task(self.maybe_send_goal())
         elif cmd == "Retrieved":
             keys = args.get("keys", {})
             applied_key = self.traps_applied_storage_key()
@@ -604,8 +607,12 @@ class VCDContext(CommonContext):
                 self._adopt_storage_baseline(args.get("value"))
         elif cmd == "RoomUpdate":
             # The framework has already folded the packet's checked locations
-            # into the sets, so this write carries the server-confirmed view.
+            # into the sets, so this write and the goal count both carry the
+            # server-confirmed view. The goal check must run here: the send in
+            # apply_mod_state races this confirmation, and a punch-out is the
+            # level's last state bump, so no later poll retries it.
             self.write_milestones_if_changed()
+            asyncio.create_task(self.maybe_send_goal())
         elif cmd == "ReceivedItems":
             self._on_received_items(args)
 
@@ -901,8 +908,12 @@ class VCDContext(CommonContext):
         reached = sum(1 for loc_id in self.goal_location_ids
                       if loc_id in self.checked_locations)
         if reached >= self.goal_need:
-            await self.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
+            # The flag flips before the await: a second task entering during
+            # the send must not pass the guard and double-send. A send lost to
+            # a dropped socket recovers via the framework, which re-announces
+            # the goal on reconnect while the flag is set.
             self.finished_game = True
+            await self.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
             client_logger.info("Goal complete. The shift is over.")
             self.enqueue_message([
                 (messages.LOCATION_COLOR, "Goal complete. The shift is over.")])

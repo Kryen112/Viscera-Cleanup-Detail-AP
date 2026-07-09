@@ -3,10 +3,13 @@ snapshot maps to location names (with the punch-out and speedrun policy, and
 only a seed-stamped snapshot counting), PrintJSON traffic filters and encodes
 into the messages file, and the missing-locations set encodes into the
 milestones file that drives the in-game next-milestone indicator."""
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+
+from NetUtils import ClientStatus
 
 from .bases import read_sav_properties
 from .. import messages, milestones
@@ -307,6 +310,81 @@ class TestGoalLocationsFromSlotData(unittest.TestCase):
         ids, need = goal_locations_from_slot_data({"goal": "find_bob"})
         self.assertEqual(len(ids), 1)
         self.assertEqual(need, 1)
+
+
+def _goal_context() -> VCDContext:
+    """A context carrying only the goal and toast-feed state, skipping
+    __init__ so no framework plumbing is needed."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.finished_game = False
+    ctx.goal_location_ids = [
+        LOCATION_NAME_TO_ID["Athena's Wrath - Punch Out"]]
+    ctx.goal_need = 1
+    ctx.checked_locations = set()
+    ctx.sent_messages = []
+
+    async def record(msgs: list) -> None:
+        ctx.sent_messages.extend(msgs)
+    ctx.send_msgs = record
+    ctx.message_tag = "seed_1-1a2b3c4d"
+    ctx.message_index = 0
+    ctx.message_entries = []
+    ctx.last_messages_written = None
+    ctx.install_dir = None
+    ctx.saves_ready = False
+    ctx.seed_name = "seed_1"
+    ctx.last_milestones_written = None
+    return ctx
+
+
+class TestMaybeSendGoal(unittest.TestCase):
+    """The goal counts only the server-confirmed checked set, so the check
+    must re-run when that set changes: on RoomUpdate and on (re)connect."""
+
+    def test_unconfirmed_checks_never_goal(self) -> None:
+        # The punch-out is sent but the server's echo is still in flight.
+        ctx = _goal_context()
+        asyncio.run(ctx.maybe_send_goal())
+        self.assertEqual(ctx.sent_messages, [])
+        self.assertFalse(ctx.finished_game)
+
+    def test_room_update_confirmation_fires_the_goal(self) -> None:
+        ctx = _goal_context()
+        ctx.checked_locations = set(ctx.goal_location_ids)
+
+        async def drive() -> None:
+            ctx.on_package(
+                "RoomUpdate",
+                {"checked_locations": list(ctx.goal_location_ids)})
+            await asyncio.sleep(0)
+
+        asyncio.run(drive())
+        self.assertEqual(ctx.sent_messages, [
+            {"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
+        self.assertTrue(ctx.finished_game)
+
+    def test_goal_sends_only_once(self) -> None:
+        ctx = _goal_context()
+        ctx.checked_locations = set(ctx.goal_location_ids)
+        asyncio.run(ctx.maybe_send_goal())
+        asyncio.run(ctx.maybe_send_goal())
+        self.assertEqual(len(ctx.sent_messages), 1)
+
+    def test_connect_confirmation_fires_the_goal(self) -> None:
+        # A goal reached before a disconnect or client restart resolves from
+        # the connect packet's checked set alone.
+        ctx = _goal_context()
+        ctx.checked_locations = set(ctx.goal_location_ids)
+        ctx._on_connected = lambda slot_data: None
+
+        async def drive() -> None:
+            ctx.on_package("Connected", {"slot_data": {}})
+            await asyncio.sleep(0)
+
+        asyncio.run(drive())
+        self.assertEqual(ctx.sent_messages, [
+            {"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
+        self.assertTrue(ctx.finished_game)
 
 
 def _segments_context() -> SimpleNamespace:
