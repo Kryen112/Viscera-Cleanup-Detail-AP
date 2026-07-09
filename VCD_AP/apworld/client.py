@@ -171,17 +171,28 @@ def location_names_from_state(state: dict[str, str]) -> list[str]:
     return names
 
 
+# PrintJSON types that toast for everyone: chat, joins and parts, goals,
+# release and collect announcements, and the countdown. A packet with no type
+# is a plain server notice (the console /send cheat text travels typeless).
+AMBIENT_MESSAGE_TYPES = frozenset({
+    None, "Chat", "ServerChat", "Join", "Part", "Goal", "Release", "Collect",
+    "Countdown"})
+
+
 def print_json_relevant(args: dict, slot_concerns_self, team: "int | None",
                         ) -> bool:
-    """True when a PrintJSON packet is an item transfer involving this slot:
-    an ItemSend (or same-team ItemCheat) this slot receives or sends."""
-    if args.get("type") not in ("ItemSend", "ItemCheat"):
-        return False
-    if args.get("type") == "ItemCheat" and args.get("team") != team:
-        return False
-    item = args.get("item")
-    return item is not None and (slot_concerns_self(args.get("receiving", -1))
-                                 or slot_concerns_self(item.player))
+    """True when a PrintJSON packet belongs in the toast feed: an item
+    transfer or hint involving this slot (an ItemCheat only from the own
+    team), or an ambient line everyone sees. Command results and protocol
+    bookkeeping stay in the client window."""
+    message_type = args.get("type")
+    if message_type in ("ItemSend", "ItemCheat", "Hint"):
+        if message_type == "ItemCheat" and args.get("team") != team:
+            return False
+        item = args.get("item")
+        return item is not None and (slot_concerns_self(args.get("receiving", -1))
+                                     or slot_concerns_self(item.player))
+    return message_type in AMBIENT_MESSAGE_TYPES
 
 
 def message_segments(parts: "list[dict]", ctx: "VCDContext",
@@ -211,6 +222,9 @@ def message_segments(parts: "list[dict]", ctx: "VCDContext",
             segments.append((messages.LOCATION_COLOR, text))
         elif part_type == "entrance_name":
             segments.append((messages.ENTRANCE_COLOR, text))
+        elif part_type == "hint_status":
+            segments.append((messages.hint_status_color(
+                part.get("hint_status", -1)), text))
         elif part_type == "color":
             segments.append((messages.named_color(part.get("color", "")), text))
         else:

@@ -65,6 +65,14 @@ class TestPalette(unittest.TestCase):
         self.assertEqual(messages.item_color(0b100), "FA8072")
         self.assertEqual(messages.item_color(0), "00EEEE")
 
+    def test_hint_status_colors_match_the_text_client(self) -> None:
+        self.assertEqual(messages.hint_status_color(40), "00FF7F")
+        self.assertEqual(messages.hint_status_color(30), "AF99EF")
+        self.assertEqual(messages.hint_status_color(20), "FA8072")
+        self.assertEqual(messages.hint_status_color(10), "6D8BE8")
+        self.assertEqual(messages.hint_status_color(0), "FFFFFF")
+        self.assertEqual(messages.hint_status_color(99), "EE0000")
+
     def test_named_color_takes_the_first_known_name(self) -> None:
         self.assertEqual(messages.named_color("bold;green"), "00FF7F")
         self.assertEqual(messages.named_color("salmon"), "FA8072")

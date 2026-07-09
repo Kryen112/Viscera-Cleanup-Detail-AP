@@ -16,8 +16,9 @@
 // them too; remaining time reads off locally stamped end times, so expiry
 // hides a slot without waiting on the server.
 //
-// Toasts show what Archipelago is doing: check sends, item receives, goal and
-// connection lines. The feed file is written by this machine's own client and
+// Toasts show what Archipelago is doing: item transfers and hints involving
+// this slot, chat, joins and parts, goals, releases and collects,
+// countdowns, and connection lines. The feed file is written by this machine's own client and
 // read here (the HUD spawns locally on every machine), so each player running
 // a client sees their own toasts with no replication. Segments carry their own
 // colors, matching the Archipelago text client palette. Bookkeeping lives in a

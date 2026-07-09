@@ -436,6 +436,11 @@ class TestMessageSegments(unittest.TestCase):
         self.assertEqual(message_segments(parts, _segments_context()),
                          [("FA8072", "Item7")])
 
+    def test_hint_status_parts_color_by_status(self) -> None:
+        parts = [{"type": "hint_status", "text": "(found)", "hint_status": 40}]
+        self.assertEqual(message_segments(parts, _segments_context()),
+                         [("00FF7F", "(found)")])
+
     def test_untyped_parts_default_to_white_text(self) -> None:
         self.assertEqual(message_segments([{"text": "hello"}],
                                           _segments_context()),
@@ -460,13 +465,10 @@ class TestPrintJsonRelevant(unittest.TestCase):
                  "item": SimpleNamespace(player=1)}
         self.assertTrue(print_json_relevant(found, _concerns_slot_one, 0))
 
-    def test_unrelated_traffic_is_dropped(self) -> None:
+    def test_unrelated_item_traffic_is_dropped(self) -> None:
         other = {"type": "ItemSend", "receiving": 2,
                  "item": SimpleNamespace(player=3)}
         self.assertFalse(print_json_relevant(other, _concerns_slot_one, 0))
-        chat = {"type": "Chat", "receiving": 1,
-                "item": SimpleNamespace(player=1)}
-        self.assertFalse(print_json_relevant(chat, _concerns_slot_one, 0))
         self.assertFalse(print_json_relevant(
             {"type": "ItemSend", "receiving": 1}, _concerns_slot_one, 0))
 
@@ -475,6 +477,38 @@ class TestPrintJsonRelevant(unittest.TestCase):
                  "item": SimpleNamespace(player=0), "team": 1}
         self.assertFalse(print_json_relevant(cheat, _concerns_slot_one, 0))
         self.assertTrue(print_json_relevant(cheat, _concerns_slot_one, 1))
+
+    def test_hints_involving_this_slot_are_relevant(self) -> None:
+        receiving = {"type": "Hint", "receiving": 1,
+                     "item": SimpleNamespace(player=2)}
+        self.assertTrue(print_json_relevant(receiving, _concerns_slot_one, 0))
+        finding = {"type": "Hint", "receiving": 2,
+                   "item": SimpleNamespace(player=1)}
+        self.assertTrue(print_json_relevant(finding, _concerns_slot_one, 0))
+        other = {"type": "Hint", "receiving": 2,
+                 "item": SimpleNamespace(player=3)}
+        self.assertFalse(print_json_relevant(other, _concerns_slot_one, 0))
+
+    def test_ambient_lines_are_relevant_for_everyone(self) -> None:
+        for message_type in ("Chat", "ServerChat", "Join", "Part", "Goal",
+                             "Release", "Collect", "Countdown"):
+            self.assertTrue(
+                print_json_relevant({"type": message_type},
+                                    _concerns_slot_one, 0),
+                message_type)
+
+    def test_typeless_server_notice_is_relevant(self) -> None:
+        # The console /send cheat text travels as a bare PrintJSON.
+        self.assertTrue(print_json_relevant(
+            {"data": [{"text": "Cheat console: ..."}]}, _concerns_slot_one, 0))
+
+    def test_command_results_and_bookkeeping_are_dropped(self) -> None:
+        for message_type in ("CommandResult", "AdminCommandResult",
+                             "Tutorial", "TagsChanged"):
+            self.assertFalse(
+                print_json_relevant({"type": message_type},
+                                    _concerns_slot_one, 0),
+                message_type)
 
 
 class TestUnlockedToolsString(unittest.TestCase):

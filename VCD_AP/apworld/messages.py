@@ -60,6 +60,24 @@ def item_color(flags: int) -> str:
     return COLOR_BY_NAME["cyan"]
 
 
+# Hint-status colors by NetUtils.HintStatus value, matching the text client:
+# found green, priority plum, avoid salmon, no-priority slateblue,
+# unspecified white.
+HINT_STATUS_COLOR_NAMES: dict[int, str] = {
+    0: "white",
+    10: "slateblue",
+    20: "salmon",
+    30: "plum",
+    40: "green",
+}
+
+
+def hint_status_color(status: int) -> str:
+    """The palette hex for a hint-status part; an unknown status reads red,
+    as in the text client."""
+    return COLOR_BY_NAME[HINT_STATUS_COLOR_NAMES.get(status, "red")]
+
+
 def named_color(name: str) -> str:
     """The palette hex for a PrintJSON color name. Compound values like
     "bold;green" keep their first known color; unknown values read as white."""
