@@ -564,8 +564,10 @@ class TestLevelPoolDigsiteWithoutNotes(VCDTestBase):
         names = {loc.name for loc in self.multiworld.get_locations(self.player)}
         for gated in BOB_GATED_LOCATIONS:
             self.assertNotIn(gated, names)
-        self.assert_location_exists(
-            collectible_name("Unearthly Excavation", "Bolter"))
+        self.assertIn(collectible_name("Unearthly Excavation", "Bolter"),
+                      BOB_GATED_LOCATIONS)
+        self.assertIn(collectible_name("Unearthly Excavation", "Red Keycard"),
+                      BOB_GATED_LOCATIONS)
         self.assert_location_exists(
             collectible_name("Unearthly Excavation", "Saber"))
 
@@ -678,7 +680,7 @@ class TestRandomizedPoolAllCollectibles(VCDTestBase):
                "goal_amount": 39}
 
     def test_the_gate_chain_is_forced_in(self):
-        # 39 needs the gate-locked Red Keycard, so the whole chain joins.
+        # 39 needs the gate-locked drops, so the whole chain joins.
         pooled = set(self.world.pooled_maps)
         self.assertTrue(pooled.issuperset(BOB_NOTE_MAPS + ["VC_Digsite"]))
 

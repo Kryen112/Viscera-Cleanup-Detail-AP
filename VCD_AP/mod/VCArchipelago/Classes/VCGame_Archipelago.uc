@@ -1710,9 +1710,10 @@ function CleanAllMoppableSplats(PlayerController Requester)
 // a gib for a stackable or a collectible). Kept out: welder and vendor marks
 // (bullet-hole and lightning splats the mop does not own), barrels (by Id),
 // buckets and bins, dropped welders, medkits (a plain Actor, never in this
-// loop), and the check items (collectibles are VCSpecialDrop classes, Bob notes
-// carry a Note_Bob_ archetype, and neither counts as mess anyway). Anything else
-// the game counts as mess is cleared. Measurement aid; never wired to gameplay.
+// loop), and the check items (collectibles are VCSpecialDrop classes, Bob
+// notes carry an Arc_Page_Bob archetype, and neither counts as mess anyway).
+// Anything else the game counts as mess is cleared. Measurement aid; never
+// wired to gameplay.
 function CleanAllCoreKitMess(PlayerController Requester)
 {
     local VCPunchoutHandler_General Handler;
@@ -1760,7 +1761,7 @@ function CleanAllCoreKitMess(PlayerController Requester)
         if (InStr(string(Debris.Class.Name), "VCSpecialDrop") == 0)
             continue;
         if (Debris.ObjectArchetype != None
-            && InStr(string(Debris.ObjectArchetype.Name), "Note_Bob_") == 0)
+            && InStr(string(Debris.ObjectArchetype.Name), "Arc_Page_Bob") == 0)
         {
             continue;
         }
@@ -2387,9 +2388,10 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
 }
 
 // Tokens for everything in the janitor's trunk that maps to a check: a
-// collectible's class name, or a Bob note's archetype name. Both are unique
-// across the whole game, so the client resolves each token to its home level's
-// location no matter where it was banked.
+// collectible's class name, or a Bob page's archetype name (Arc_Page_Bob*,
+// the shared GP_Notes_Arch names). Both are unique across the whole game, so
+// the client resolves each token to its home level's location no matter where
+// it was banked; tokens with no location (the Office pages) it ignores.
 function string CollectTrunkFinds()
 {
     local VCGameViewportClient ViewportClient;
@@ -2410,7 +2412,7 @@ function string CollectTrunkFinds()
         if (InStr(string(TrunkItems[I].Class.Name), "VCSpecialDrop") == 0)
             Token = string(TrunkItems[I].Class.Name);
         else if (TrunkItems[I].ObjectArchetype != None
-            && InStr(string(TrunkItems[I].ObjectArchetype.Name), "Note_Bob_") == 0)
+            && InStr(string(TrunkItems[I].ObjectArchetype.Name), "Arc_Page_Bob") == 0)
         {
             Token = string(TrunkItems[I].ObjectArchetype.Name);
         }

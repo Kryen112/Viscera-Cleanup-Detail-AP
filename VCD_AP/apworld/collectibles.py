@@ -17,12 +17,20 @@ another level later still maps to its home location.
 
 The Bob chain: six levels hold a Bob note (three more notes are Office
 freebies). All nine notes on the Digsite pedestal open the gates
-(bOpenedDigsiteGates), behind which sit Bob (bFoundBob) and the Red Keycard.
-The gate check, the Find Bob check, and the Red Keycard collectible therefore
-require access to the six note levels plus the Digsite; they are the only
-checks that need more than their own level's access item. The Digsite's other
-drops (the Bolter and the sand-trap Saber) sit in the open dig area, before
-the gates.
+(bOpenedDigsiteGates), behind which sit Bob (bFoundBob), the Red Keycard, and
+the Bolter. The gate check, the Find Bob check, and those two collectibles
+therefore require access to the six note levels plus the Digsite; they are the
+only checks that need more than their own level's access item. The Digsite's
+remaining drop (the sand-trap Saber) sits in the open dig area, before the
+gates.
+
+The note tokens are the shared archetype names in ``GP_Notes_Arch.Bob``, read
+from the game's own save remap (``VCSaveObject.ReplaceObjectNameString``) and
+confirmed against a live trunk save. The package's other pages are not
+checks, so they stay out of the table and the client ignores their tokens:
+the three Office freebies (``Arc_Page_Bob_Office01..03``), the Digsite's
+behind-the-gates pages (``Arc_Page_Bob_Digsite01..04``), and a plain
+``Arc_Page_Bob01``.
 """
 
 from __future__ import annotations
@@ -76,12 +84,12 @@ COLLECTIBLES: list[tuple[str, str, str]] = [
 
 # (map_name, token): the Bob note archetypes and the levels that hold them.
 BOB_NOTES: list[tuple[str, str]] = [
-    ("VC_Caduceus", "Note_Bob_Caduceus01"),
-    ("VC_Cryo", "Note_Bob_Cryo01"),
-    ("VC_Greenhouse", "Note_Bob_Greenhouse01"),
-    ("VC_MedBay", "Note_Bob_Medbay01"),
-    ("VC_Robot", "Note_Bob_Robot01"),
-    ("VC_Sewer", "Note_Bob_Sewer01"),
+    ("VC_Caduceus", "Arc_Page_Bob_Caduceus01"),
+    ("VC_Cryo", "Arc_Page_Bob_Cryo01"),
+    ("VC_Greenhouse", "Arc_Page_Bob_Greenhouse01"),
+    ("VC_MedBay", "Arc_Page_Bob_Medbay01"),
+    ("VC_Robot", "Arc_Page_Bob_Robot01"),
+    ("VC_Sewer", "Arc_Page_Bob_Sewer01"),
 ]
 BOB_NOTE_MAPS: list[str] = [m for m, _ in BOB_NOTES]
 
@@ -96,8 +104,10 @@ COLLECTIBLE_BY_TOKEN: dict[str, tuple[str, str]] = {
 }
 BOB_NOTE_MAP_BY_TOKEN: dict[str, str] = {token: m for m, token in BOB_NOTES}
 
-# Collectibles locked behind the Digsite gates, sharing the Bob events' rule.
-GATED_COLLECTIBLE_TOKENS: frozenset[str] = frozenset({"VCSpecialDrop_Item11"})
+# Collectibles locked behind the Digsite gates, sharing the Bob events' rule:
+# the Red Keycard and the Bolter.
+GATED_COLLECTIBLE_TOKENS: frozenset[str] = frozenset({
+    "VCSpecialDrop_Item7", "VCSpecialDrop_Item11"})
 
 # Collectibles that need a tool beyond the level's clean kit to reach or
 # extract, by token. The clean kit is always implied (a trophy only banks on a

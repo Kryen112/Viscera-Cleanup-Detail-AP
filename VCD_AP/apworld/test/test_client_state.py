@@ -136,11 +136,18 @@ class TestLocationNamesFromState(unittest.TestCase):
         # Tokens resolve to their home level even when banked elsewhere: the
         # glasses and the Cryo note belong to Cryogenesis, banked from VC_Hall.
         state = {"APMap": "VC_Hall",
-                 "APTrunkFinds": "VCSpecialDrop_Item2,Note_Bob_Cryo01,Junk"}
+                 "APTrunkFinds": "VCSpecialDrop_Item2,Arc_Page_Bob_Cryo01,Junk"}
         self.assertEqual(location_names_from_state(state), [
             "Cryogenesis - Glasses",
             "Cryogenesis - Bob Note",
         ])
+
+    def test_office_pages_are_not_checks(self) -> None:
+        # The mod's prefix match also tokens the Office freebie pages; they map
+        # to no location and drop out.
+        state = {"APMap": "VC_Hall",
+                 "APTrunkFinds": "Arc_Page_Bob_Office01,Arc_Page_Bob_Office02"}
+        self.assertEqual(location_names_from_state(state), [])
 
     def test_bob_event_flags(self) -> None:
         state = {"APMap": "VC_Digsite", "APDigsiteGates": "1", "APFoundBob": "1"}

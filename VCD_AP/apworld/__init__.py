@@ -169,7 +169,7 @@ class VCDWorld(World):
                                 for cm, t, _ in COLLECTIBLES)]
             self.random.shuffle(carriers)
             # Exhausting the carriers puts every open-area collectible level in
-            # the pool, and the only gated collectible sits on a chain map, so
+            # the pool, and every gated collectible sits on a chain map, so
             # the count reaches the candidate cap and the pop cannot underrun.
             while self._countable_collectibles(pool) < amount:
                 pool.add(carriers.pop())
@@ -524,14 +524,14 @@ class VCDWorld(World):
                         rule = self._pickup_rule(map_name, extra)
                     self.get_location(name).access_rule = rule
 
-        # The Digsite gate needs all nine Bob notes on the pedestal: six live in
-        # the note levels (three are Office freebies), and Bob and the Red
-        # Keycard sit behind the gate. So those checks need every note level on
-        # top of the Digsite access their region already requires; under
-        # toolsanity they also need each note level's clean kit, because a note
-        # only banks on a not-fired punch-out on its own level. They only exist
-        # when the pool holds the whole chain, whose access items are all
-        # progression, so they are guaranteed reachable.
+        # The Digsite gate needs all nine Bob notes on the pedestal: six live
+        # in the note levels (three are Office freebies), and Bob, the Red
+        # Keycard, and the Bolter sit behind the gate. So those checks need
+        # every note level on top of the Digsite access their region already
+        # requires; under toolsanity they also need each note level's clean
+        # kit, because a note banks on a not-fired punch-out on its own level.
+        # They only exist when the pool holds the whole chain, whose access
+        # items are all progression, so they are guaranteed reachable.
         if self.bob_chain_pooled:
             required = [access_item_name(DISPLAY_BY_MAP[m])
                         for m in BOB_NOTE_MAPS]

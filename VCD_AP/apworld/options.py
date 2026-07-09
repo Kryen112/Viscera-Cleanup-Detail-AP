@@ -112,8 +112,8 @@ class LevelPool(OptionSet):
     no access item. With randomize_level_pool on, this is the set the random
     draw picks from. The find_bob goal forces the Digsite and the six note
     levels into the pool. The Digsite's gate-locked checks (Open the Digsite
-    Gates, Find Bob, the Red Keycard) only exist when the pool holds the
-    Digsite and every note level."""
+    Gates, Find Bob, the Red Keycard, the Bolter) only exist when the pool
+    holds the Digsite and every note level."""
     display_name = "Level pool"
     valid_keys = frozenset(d for _, d, _ in LEVELS)
     # An ordered default keeps the generated template yaml stable.

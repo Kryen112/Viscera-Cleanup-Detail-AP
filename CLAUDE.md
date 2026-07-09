@@ -124,10 +124,10 @@ The reviewer treats a violation of any of these as a correctness blocker.
   since a mop that never dirties needs no rinse bucket; that mop copy
   classifies progression there.
 - The Digsite gate exceptions: the two Bob events (Open the Digsite Gates,
-  Find Bob) and the Red Keycard collectible additionally require the six
-  note-level access items (the pedestal needs all nine notes; three are
-  Office freebies), plus each note level's clean kit under toolsanity (a note
-  banks on a not-fired shift on its own level).
+  Find Bob) and the Red Keycard and Bolter collectibles additionally require
+  the six note-level access items (the pedestal needs all nine notes; three
+  are Office freebies), plus each note level's clean kit under toolsanity (a
+  note banks on a not-fired shift on its own level).
 - `completion_condition` is a solvability contract and switches on the `goal`
   option. Treat edits to it as high-risk. Named count-based traps:
   - `find_bob` resolves to the Find Bob location, whose rule carries the six

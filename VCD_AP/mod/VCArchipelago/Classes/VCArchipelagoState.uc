@@ -40,7 +40,7 @@ var config int APSpeedrun;
 
 // Comma-separated tokens for what banked in the trunk at a punch-out in good
 // standing: collectible class names (VCSpecialDrop_*) and Bob note archetype
-// names (Note_Bob_*). Cleared on level start like the other punch-out fields.
+// names (Arc_Page_Bob*). Cleared on level start like the other punch-out fields.
 var config string APTrunkFinds;
 
 // Bob storyline events for the current map, set live when the game saves the
