@@ -567,4 +567,6 @@ class VCDWorld(World):
             "hard_start_maps": sorted(self.hard_start_maps),
             "started_maps": sorted(self.started_maps),
             "pooled_maps": list(self.pooled_maps),
+            "death_link": bool(self.options.death_link),
+            "trap_link": bool(self.options.trap_link),
         }

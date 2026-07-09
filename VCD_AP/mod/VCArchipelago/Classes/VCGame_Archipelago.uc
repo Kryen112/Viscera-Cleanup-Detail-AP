@@ -115,6 +115,15 @@ var VCArchipelagoTraps TrapQueueFile;
 // Reused load target for the client-written milestones file.
 var VCArchipelagoMilestones MilestoneFile;
 
+// Reused load target for the client-written link-event file, and its death
+// link flag: whether any one janitor's death takes the whole crew with it.
+var VCArchipelagoLinks LinksFile;
+var bool bDeathLinkOn;
+
+// Latched while a link kill runs (an inbound death or the crew sweep), so
+// the deaths it causes never count as organic and never sweep again.
+var bool bLinkDeathSweep;
+
 // Reused load target for the client-written grants file (toolsanity reads).
 var VCArchipelagoGrants GrantsFile;
 
@@ -205,6 +214,9 @@ event InitGame(string Options, out string ErrorMessage)
     APState.APDigsiteGates = 0;
     APState.APFoundBob = 0;
     StampSeedTag();
+    // Link entries pending at level start predate the level and are dropped,
+    // never applied, so a death from minutes ago cannot fire on load.
+    BaselineLinksQueue();
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
     bCleanlinessProbeStopped = false;
@@ -214,6 +226,7 @@ event InitGame(string Options, out string ErrorMessage)
     AppliedToolsMask = class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
     SetTimer(1.0, true, 'PublishCleanliness');
     SetTimer(5.0, true, 'PollTraps');
+    SetTimer(5.0, true, 'PollLinks');
     SetTimer(1.0, true, 'PollMilestones');
     SetTimer(1.0, true, 'EnforceToolLocks');
     SetTimer(SelfCleaningMopPollInterval, true, 'PollSelfCleaningMop');
@@ -385,6 +398,7 @@ function BounceLockedLevel()
     ClearTimer('PublishCleanliness');
     ClearTimer('PublishCleanlinessBurst');
     ClearTimer('PollTraps');
+    ClearTimer('PollLinks');
     ClearTimer('PollMilestones');
     ClearTimer('EnforceToolLocks');
     ClearTimer('PollSelfCleaningMop');
@@ -425,6 +439,10 @@ function SaveAPState()
     class'VCArchipelagoState'.default.APSeq = APState.APSeq;
     class'VCArchipelagoState'.default.APTrapSeed = APState.APTrapSeed;
     class'VCArchipelagoState'.default.APTrapsApplied = APState.APTrapsApplied;
+    class'VCArchipelagoState'.default.APDeathCount = APState.APDeathCount;
+    class'VCArchipelagoState'.default.APLastSpawn = APState.APLastSpawn;
+    class'VCArchipelagoState'.default.APLinkSession = APState.APLinkSession;
+    class'VCArchipelagoState'.default.APLinksApplied = APState.APLinksApplied;
     class'VCArchipelagoState'.default.APGravityRestoreMap = APState.APGravityRestoreMap;
     APState.SaveConfig();
 }
@@ -486,6 +504,9 @@ function PollTraps()
         QueueType = Mid(Entries[I], InStr(Entries[I], ":") + 1);
         ApplyQueueEntry(QueueType);
         APState.APTrapsApplied = EntryIndex;
+        // The marker feeds the client's TrapLink bounce. Item-queue spawns
+        // only: a linked trap from the link queue must never re-broadcast.
+        APState.APLastSpawn = string(EntryIndex) $ ":" $ QueueType;
         SaveAPState();
         return;
     }
@@ -530,6 +551,143 @@ function ApplyQueueEntry(string QueueType)
     {
         SpawnSupplyNearJanitor(class'VCBin');
     }
+}
+
+// Loads the client-written link-event file once per poll, into the reused
+// target, and mirrors its death link flag. False when the file is absent.
+function bool LoadLinksFile()
+{
+    if (APState == None)
+        return false;
+    if (LinksFile == None)
+        LinksFile = new class'VCArchipelagoLinks';
+    if (!class'Engine'.static.BasicLoadObject(LinksFile, "..\\..\\Saves\\VCArchipelagoLinks.sav", true, 1))
+    {
+        bDeathLinkOn = false;
+        return false;
+    }
+    bDeathLinkOn = LinksFile.DeathLinkOn == "1";
+    return true;
+}
+
+// Consumes every pending link entry without applying it: the applied counter
+// jumps to the newest index in the file. Runs at level start, on a session
+// tag change, and on every poll outside a cleanable level, so an entry only
+// ever applies when it arrives while a cleanable level is live.
+function BaselineLinksQueue()
+{
+    local array<string> Entries;
+    local int I, EntryIndex, Highest;
+
+    if (!LoadLinksFile())
+        return;
+    ParseStringIntoArray(LinksFile.Entries, Entries, ",", true);
+    Highest = 0;
+    for (I = 0; I < Entries.Length; I++)
+    {
+        EntryIndex = int(Left(Entries[I], InStr(Entries[I], ":")));
+        if (EntryIndex > Highest)
+            Highest = EntryIndex;
+    }
+    if (LinksFile.SessionTag != APState.APLinkSession
+        || Highest > APState.APLinksApplied)
+    {
+        APState.APLinkSession = LinksFile.SessionTag;
+        APState.APLinksApplied = Highest;
+        SaveAPState();
+    }
+}
+
+// Applies entries from the client-written link-event queue (inbound deaths
+// and linked traps), one per poll like the item queue. A new session tag or
+// a poll outside a cleanable level baselines instead: those entries are
+// dropped, never held, so a stale death cannot fire on a later level load.
+function PollLinks()
+{
+    local VCMapInfo MapInfo;
+    local array<string> Entries;
+    local int I, EntryIndex;
+
+    if (!LoadLinksFile())
+        return;
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (LinksFile.SessionTag != APState.APLinkSession
+        || MapInfo == None || MapInfo.bIsOfficeLevel)
+    {
+        BaselineLinksQueue();
+        return;
+    }
+    ParseStringIntoArray(LinksFile.Entries, Entries, ",", true);
+    for (I = 0; I < Entries.Length; I++)
+    {
+        EntryIndex = int(Left(Entries[I], InStr(Entries[I], ":")));
+        if (EntryIndex <= APState.APLinksApplied)
+            continue;
+        ApplyLinkEntry(Mid(Entries[I], InStr(Entries[I], ":") + 1));
+        APState.APLinksApplied = EntryIndex;
+        SaveAPState();
+        return;
+    }
+}
+
+function ApplyLinkEntry(string EntryType)
+{
+    `log("VCAP LINK type="$EntryType);
+    if (EntryType ~= "Death")
+        KillAllJanitors(None);
+    else
+        ApplyQueueEntry(EntryType);
+}
+
+// Kills every living janitor, barring the one whose death triggered a sweep.
+// The latch keeps the deaths this causes from counting as organic or
+// sweeping again, so a link kill can never echo back out or cascade.
+function KillAllJanitors(Pawn AlreadyDead)
+{
+    local VCPawn Janitor;
+    local array<VCPawn> Janitors;
+    local int I;
+    local class<DamageType> LinkDamageType;
+
+    foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
+    {
+        if (Janitor.Health > 0 && Janitor != AlreadyDead)
+            Janitors.AddItem(Janitor);
+    }
+    if (Janitors.Length == 0)
+        return;
+    // The game's own gib damage type; enough damage to put any janitor down.
+    LinkDamageType = class<DamageType>(DynamicLoadObject(
+        "VisceraGameContent.VCDmgType_Dynamite", class'Core.Class'));
+    bLinkDeathSweep = true;
+    for (I = 0; I < Janitors.Length; I++)
+    {
+        Janitors[I].TakeDamage(1000, None, Janitors[I].Location,
+            vect(0, 0, 0), LinkDamageType);
+    }
+    bLinkDeathSweep = false;
+}
+
+// Counts every organic janitor death for the client's DeathLink bounce and,
+// with death link on, takes the rest of the crew down with it. Deaths a link
+// kill causes are latched out above, so they neither count nor sweep.
+function Killed(Controller Killer, Controller KilledPlayer, Pawn KilledPawn, class<DamageType> DamageType)
+{
+    local VCMapInfo MapInfo;
+
+    super.Killed(Killer, KilledPlayer, KilledPawn, DamageType);
+    if (bLinkDeathSweep || APState == None)
+        return;
+    if (KilledPlayer == None || !KilledPlayer.bIsPlayer)
+        return;
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo == None || MapInfo.bIsOfficeLevel)
+        return;
+    APState.APDeathCount = APState.APDeathCount + 1;
+    SaveAPState();
+    `log("VCAP DEATH count="$APState.APDeathCount);
+    if (bDeathLinkOn)
+        KillAllJanitors(KilledPawn);
 }
 
 // Mirrors the next milestone from the client-written milestones file into the
@@ -2197,6 +2355,7 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     ClearTimer('PublishCleanliness');
     ClearTimer('PublishCleanlinessBurst');
     ClearTimer('PollTraps');
+    ClearTimer('PollLinks');
 
     Handler = VCPunchoutHandler_General(PunchoutHandler);
     if (Handler == None || APState == None)

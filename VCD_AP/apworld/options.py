@@ -6,8 +6,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from Options import (Choice, DefaultOnToggle, NamedRange, OptionSet,
-                     PerGameCommonOptions, Range, StartInventoryPool, Toggle)
+from Options import (Choice, DeathLink, DefaultOnToggle, NamedRange,
+                     OptionSet, PerGameCommonOptions, Range,
+                     StartInventoryPool, Toggle)
 
 from .levels import LEVELS
 
@@ -88,6 +89,23 @@ class UsefulPercentage(Range):
     default = 15
 
 
+class VCDDeathLink(DeathLink):
+    """When you die, everyone who enabled death link dies. Of course, the
+    reverse is true too. Either way the whole shift goes down together: every
+    janitor in the session dies with the first, and the remains are yours to
+    clean up. A death that arrives while no level is loaded is dropped, never
+    held. Off by default."""
+
+
+class TrapLink(Toggle):
+    """Link trap activations with every other player who enabled trap link:
+    when a trap fires in your game it also fires in theirs, and their linked
+    traps arrive here as the closest of this game's traps (one with no close
+    equivalent is ignored). Linked traps arrive even with trap_percentage 0.
+    Off by default."""
+    display_name = "Trap Link"
+
+
 class LevelPool(OptionSet):
     """The levels the seed plays, keyed by display name. Every level is a valid
     key; the default is all of them. A level left out generates no checks and
@@ -162,6 +180,8 @@ class VCDOptions(PerGameCommonOptions):
     random_starting_kit: RandomStartingKit
     trap_percentage: TrapPercentage
     useful_percentage: UsefulPercentage
+    death_link: VCDDeathLink
+    trap_link: TrapLink
     goal: Goal
     goal_amount: GoalAmount
     starting_levels: StartingLevels

@@ -16,11 +16,12 @@ from NetUtils import ClientStatus
 
 from .bases import read_sav_properties
 from .. import _launch_client, messages, milestones
-from ..client import (VCDContext, goal_locations_from_slot_data, launch,
+from ..client import (VCDContext, death_cause, death_count_to_bounce,
+                      goal_locations_from_slot_data, launch,
                       location_names_from_state, message_segments,
                       parse_launch_args, parse_rungs, print_json_relevant,
-                      start_score_mismatch, state_is_current,
-                      traps_applied_to_push)
+                      spawn_marker_to_bounce, start_score_mismatch,
+                      state_is_current, traps_applied_to_push)
 from ..levels import LEVELS
 from ..locations import LOCATION_NAME_TO_ID, speedrun_name
 
@@ -179,6 +180,196 @@ class TestTrapsAppliedToPush(unittest.TestCase):
         state = {"APTrapSeed": "seed_1", "APTrapsApplied": "5"}
         self.assertIsNone(traps_applied_to_push(state, "seed_1", 5))
         self.assertIsNone(traps_applied_to_push(state, "seed_1", 6))
+
+
+class TestDeathCountToBounce(unittest.TestCase):
+    """The DeathLink half of the outbound contract: only a same-seed rise past
+    the adopted baseline bounces, so a reconnect never re-sends an old death."""
+
+    def test_foreign_or_unstamped_state_is_ignored(self) -> None:
+        state = {"APSeedTag": "seed_1", "APDeathCount": "3"}
+        self.assertIsNone(death_count_to_bounce(state, "seed_2", None))
+        self.assertIsNone(death_count_to_bounce({}, "seed_1", 0))
+
+    def test_first_sighting_adopts_silently(self) -> None:
+        state = {"APSeedTag": "seed_1", "APDeathCount": "3"}
+        self.assertEqual(death_count_to_bounce(state, "seed_1", None),
+                         (3, False))
+
+    def test_missing_counter_reads_zero_so_the_first_death_rises(self) -> None:
+        state = {"APSeedTag": "seed_1"}
+        self.assertEqual(death_count_to_bounce(state, "seed_1", None),
+                         (0, False))
+        state["APDeathCount"] = "1"
+        self.assertEqual(death_count_to_bounce(state, "seed_1", 0), (1, True))
+
+    def test_a_rise_bounces_and_no_move_stays_quiet(self) -> None:
+        state = {"APSeedTag": "seed_1", "APDeathCount": "4"}
+        self.assertEqual(death_count_to_bounce(state, "seed_1", 3), (4, True))
+        self.assertIsNone(death_count_to_bounce(state, "seed_1", 4))
+        self.assertIsNone(death_count_to_bounce(state, "seed_1", 5))
+
+
+class TestSpawnMarkerToBounce(unittest.TestCase):
+    """The TrapLink half: only a same-seed marker move past the adopted
+    baseline names a trap, and supply spawns move the marker silently."""
+
+    def test_foreign_state_is_ignored(self) -> None:
+        state = {"APSeedTag": "seed_1", "APLastSpawn": "3:Slowdown"}
+        self.assertIsNone(spawn_marker_to_bounce(state, "seed_2", None))
+
+    def test_first_sighting_adopts_even_an_empty_marker(self) -> None:
+        # A fresh session has no marker yet; adopting "" means the session's
+        # first applied trap still bounces.
+        state = {"APSeedTag": "seed_1"}
+        self.assertEqual(spawn_marker_to_bounce(state, "seed_1", None),
+                         ("", None))
+        state["APLastSpawn"] = "3:Slowdown"
+        self.assertEqual(spawn_marker_to_bounce(state, "seed_1", ""),
+                         ("3:Slowdown", "Slowdown Trap"))
+
+    def test_reconnect_adopts_an_old_marker_without_bouncing(self) -> None:
+        state = {"APSeedTag": "seed_1", "APLastSpawn": "7:MessDump"}
+        self.assertEqual(spawn_marker_to_bounce(state, "seed_1", None),
+                         ("7:MessDump", None))
+
+    def test_supply_and_unknown_spawns_move_the_marker_silently(self) -> None:
+        state = {"APSeedTag": "seed_1", "APLastSpawn": "4:CleanBucket"}
+        self.assertEqual(spawn_marker_to_bounce(state, "seed_1", "3:Slowdown"),
+                         ("4:CleanBucket", None))
+        state["APLastSpawn"] = "5:Junk"
+        self.assertEqual(spawn_marker_to_bounce(state, "seed_1",
+                                                "4:CleanBucket"),
+                         ("5:Junk", None))
+
+    def test_unchanged_marker_stays_quiet(self) -> None:
+        state = {"APSeedTag": "seed_1", "APLastSpawn": "3:Slowdown"}
+        self.assertIsNone(spawn_marker_to_bounce(state, "seed_1",
+                                                 "3:Slowdown"))
+
+
+class TestDeathCause(unittest.TestCase):
+    def test_known_map_names_the_level(self) -> None:
+        self.assertEqual(death_cause("Janitor", {"APMap": "VC_Hall"}),
+                         "Janitor died while cleaning Athena's Wrath.")
+
+    def test_unknown_map_falls_back_plain(self) -> None:
+        self.assertEqual(death_cause("Janitor", {}),
+                         "Janitor died on the job.")
+
+
+def _links_context(install_dir: "Path | None") -> VCDContext:
+    """A context carrying only the link-queue and toast-feed state, skipping
+    __init__ so no framework plumbing is needed."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.install_dir = install_dir
+    ctx.saves_ready = install_dir is not None
+    ctx.death_link_enabled = True
+    ctx.trap_link_enabled = True
+    ctx.link_tag = "seed_1-feedface"
+    ctx.link_index = 0
+    ctx.link_entries = []
+    ctx.last_links_written = None
+    ctx.message_tag = "seed_1-1a2b3c4d"
+    ctx.message_index = 0
+    ctx.message_entries = []
+    ctx.last_messages_written = None
+    ctx.tags = {"AP", "DeathLink", "TrapLink"}
+    ctx.slot = 1
+    ctx.player_names = {1: "Janitor", 2: "Alice"}
+    ctx.last_death_link = 0.0
+    return ctx
+
+
+class TestLinkQueue(unittest.TestCase):
+    def test_enqueued_links_land_in_the_file(self) -> None:
+        from .. import links
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _links_context(Path(tmp))
+            ctx.enqueue_link(links.DEATH_TYPE)
+            ctx.enqueue_link("Slowdown")
+            data = (Path(tmp) / "Saves" / "VCArchipelagoLinks.sav").read_bytes()
+            properties = read_sav_properties(data)
+        self.assertEqual(properties["SessionTag"], "seed_1-feedface")
+        self.assertEqual(properties["DeathLinkOn"], "1")
+        self.assertEqual(properties["Entries"], "1:Death,2:Slowdown")
+
+    def test_without_a_session_tag_nothing_queues(self) -> None:
+        ctx = _links_context(None)
+        ctx.link_tag = None
+        ctx.enqueue_link("Slowdown")
+        self.assertEqual(ctx.link_entries, [])
+
+    def test_death_link_off_writes_the_flag_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _links_context(Path(tmp))
+            ctx.death_link_enabled = False
+            ctx.write_links_if_changed()
+            data = (Path(tmp) / "Saves" / "VCArchipelagoLinks.sav").read_bytes()
+        self.assertEqual(read_sav_properties(data)["DeathLinkOn"], "0")
+
+
+class TestOnBounced(unittest.TestCase):
+    """Inbound TrapLink bounces: another player's linked trap queues as the
+    closest local trap; our own echo and unknown traps queue nothing."""
+
+    @staticmethod
+    def _bounce(source: str, trap_name: str) -> dict:
+        return {"tags": ["TrapLink"],
+                "data": {"time": 0.0, "source": source,
+                         "trap_name": trap_name}}
+
+    def test_foreign_trap_queues_its_local_equivalent(self) -> None:
+        ctx = _links_context(None)
+        ctx._on_bounced(self._bounce("Alice", "Ice Trap"))
+        self.assertEqual(ctx.link_entries, ["1:Slowdown"])
+        # The toast names both the foreign trap and what it lands as.
+        self.assertEqual(len(ctx.message_entries), 1)
+        self.assertIn("Ice Trap", ctx.message_entries[0])
+        self.assertIn("Slowdown Trap", ctx.message_entries[0])
+
+    def test_native_trap_queues_one_to_one(self) -> None:
+        ctx = _links_context(None)
+        ctx._on_bounced(self._bounce("Alice", "Mess Dump Trap"))
+        self.assertEqual(ctx.link_entries, ["1:MessDump"])
+
+    def test_own_echo_is_filtered(self) -> None:
+        # The server bounces our own broadcast back at us.
+        ctx = _links_context(None)
+        ctx._on_bounced(self._bounce("Janitor", "Mess Dump Trap"))
+        self.assertEqual(ctx.link_entries, [])
+
+    def test_unknown_traps_and_missing_tag_queue_nothing(self) -> None:
+        ctx = _links_context(None)
+        ctx._on_bounced(self._bounce("Alice", "Ring Trap"))
+        self.assertEqual(ctx.link_entries, [])
+        ctx.tags = {"AP"}
+        ctx._on_bounced(self._bounce("Alice", "Ice Trap"))
+        self.assertEqual(ctx.link_entries, [])
+
+
+class TestOnDeathlink(unittest.TestCase):
+    def test_inbound_death_queues_and_toasts(self) -> None:
+        ctx = _links_context(None)
+        ctx.on_deathlink({"time": 1.0, "source": "Alice",
+                          "cause": "Alice tripped into a woodchipper."})
+        self.assertEqual(ctx.link_entries, ["1:Death"])
+        self.assertEqual(len(ctx.message_entries), 1)
+        self.assertIn("woodchipper", ctx.message_entries[0])
+
+    def test_without_a_cause_the_source_names_the_line(self) -> None:
+        ctx = _links_context(None)
+        ctx.on_deathlink({"time": 1.0, "source": "Alice"})
+        self.assertEqual(ctx.link_entries, ["1:Death"])
+        self.assertIn("Alice", ctx.message_entries[0])
+
+    def test_death_link_off_still_toasts_but_never_queues(self) -> None:
+        # Defensive only: the tag is off with the option, so no bounce should
+        # arrive; if one does, the janitor must not die.
+        ctx = _links_context(None)
+        ctx.death_link_enabled = False
+        ctx.on_deathlink({"time": 1.0, "source": "Alice"})
+        self.assertEqual(ctx.link_entries, [])
 
 
 def _traps_context() -> VCDContext:

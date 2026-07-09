@@ -170,6 +170,22 @@ The reviewer treats a violation of any of these as a correctness blocker.
   softlock, block a required check, or corrupt a save. Supply drops reuse the
   game's own dispenser spawns (a plain VCBucket or VCBin) so they score
   exactly like vended equipment; both anchor on a random living janitor.
+- DeathLink and TrapLink (both options off by default) ride a second queue,
+  `Saves\VCArchipelagoLinks.sav` (a per-connect SessionTag, the DeathLinkOn
+  flag, and "index:Type" entries; the client is the only writer), because
+  bounced events are not items and cannot use the item-indexed trap queue.
+  The mod applies entries only in a cleanable level and consumes everything
+  else without effect (a tag change or a poll outside a level baselines to
+  the newest index), so a stale death never fires on a level load. Any
+  death, organic or inbound, kills every janitor in the session when death
+  link is on; a sweep latch keeps those deaths from counting or cascading.
+  Outbound, the mod publishes the organic death count (`APDeathCount`) and
+  the last item-queue spawn applied (`APLastSpawn`, "index:Type"; never
+  written by the link queue, so a linked trap cannot re-broadcast); the
+  client adopts the first same-seed sighting of each as its baseline and
+  bounces only rises. Inbound TrapLink names map through the broad alias
+  table in `links.py`; unknown names are ignored, never guessed, and
+  `trap_percentage` 0 does not gate inbound linked traps.
 - Game logic lives in one boolean-predicate access-rule module. Read changes
   there as logic, not plumbing.
 - The apworld is hand-maintained. There is no generator and no `data/*.yaml`

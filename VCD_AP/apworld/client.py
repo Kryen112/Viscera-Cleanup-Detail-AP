@@ -6,8 +6,9 @@ open a socket). The mod writes its state to
 that file, maps the state it reports (cleanliness rungs, punch-out, speedrun) to
 location checks, and sends them. In the other direction this client writes the
 unlocked-level set to ``Saves\\VCArchipelagoGrants.sav``, which the mod reads to
-gate levels, plus the spawn queue (traps.py), the toast feed (messages.py), and
-the remaining milestone percents (milestones.py).
+gate levels, plus the spawn queue (traps.py), the toast feed (messages.py), the
+remaining milestone percents (milestones.py), and the link-event queue for
+DeathLink and TrapLink (links.py).
 
 State the client recovers from the framework, never from memory: checked locations
 (so reconnecting re-derives what to send) and received items (so the grants file is
@@ -20,6 +21,7 @@ import asyncio
 import logging
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -28,7 +30,8 @@ from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser
                           gui_enabled, server_loop)
 from NetUtils import ClientStatus
 
-from . import VCDWorld, grants, installer, messages, milestones, toolsanity, traps
+from . import (VCDWorld, grants, installer, links, messages, milestones,
+               toolsanity, traps)
 from .saves import SaveManager, seed_folder_name
 from .collectibles import BOB_NOTE_MAP_BY_TOKEN, COLLECTIBLE_BY_TOKEN
 from .items import (ITEM_NAME_TO_ID, access_item_name,
@@ -57,6 +60,12 @@ ACCESS_ID_TO_MAP: dict[int, str] = {
 QUEUE_ID_TO_TYPE: dict[int, str] = {
     ITEM_NAME_TO_ID[name]: queue_type
     for name, queue_type in traps.QUEUE_TYPE_BY_NAME.items()
+}
+
+# Trap type token back to the item name, for the TrapLink bounce a fired
+# trap sends out.
+TRAP_NAME_BY_TYPE: dict[str, str] = {
+    queue_type: name for name, queue_type in traps.TRAP_TYPE_BY_NAME.items()
 }
 
 # Received-item id to (internal map name, tool key), so a granted tool item
@@ -116,6 +125,51 @@ def traps_applied_to_push(state: dict[str, str], seed_name: "str | None",
     if int(applied) <= last_pushed:
         return None
     return int(applied)
+
+
+def death_count_to_bounce(state: dict[str, str], seed_name: "str | None",
+                          last_seen: "int | None") -> "tuple[int, bool] | None":
+    """The mod's organic death counter when it is comparable: (count, bounce),
+    where bounce is False on the first same-seed sighting (the baseline adopts
+    silently, so a reconnect never re-bounces an old death) and True on a
+    rise. None when the state is another seed's or the counter did not move.
+    A missing counter reads as 0, so the session's first death still rises."""
+    if not state_is_current(state, seed_name):
+        return None
+    raw = state.get("APDeathCount", "")
+    count = int(raw) if raw.isdigit() else 0
+    if last_seen is None:
+        return count, False
+    if count <= last_seen:
+        return None
+    return count, True
+
+
+def spawn_marker_to_bounce(state: dict[str, str], seed_name: "str | None",
+                           last_seen: "str | None",
+                           ) -> "tuple[str, str | None] | None":
+    """The mod's last-applied spawn marker ("index:Type") when it is
+    comparable: (marker, trap name to bounce), where the name is None on the
+    first same-seed sighting (the baseline adopts silently) and on a non-trap
+    spawn (a supply drop). None when the state is another seed's or the marker
+    did not move. Only the item queue writes the marker, never the link
+    queue, so an inbound linked trap can never bounce back out."""
+    if not state_is_current(state, seed_name):
+        return None
+    marker = state.get("APLastSpawn", "")
+    if last_seen is None:
+        return marker, None
+    if marker == last_seen or ":" not in marker:
+        return None
+    return marker, TRAP_NAME_BY_TYPE.get(marker.split(":", 1)[1])
+
+
+def death_cause(slot_name: str, state: dict[str, str]) -> str:
+    """The plain cause line the other players see for this janitor's death."""
+    display = DISPLAY_BY_MAP.get(state.get("APMap", ""))
+    if display:
+        return f"{slot_name} died while cleaning {display}."
+    return f"{slot_name} died on the job."
 
 
 def parse_rungs(milestones: str) -> list[int]:
@@ -393,6 +447,20 @@ class VCDContext(CommonContext):
         self.message_entries: list[str] = []
         self.last_messages_written: "str | None" = None
         self.last_milestones_written: "str | None" = None
+        # DeathLink and TrapLink: whether the slot plays with each (from slot
+        # data), the link-event queue the mod applies (inbound deaths and
+        # linked traps; its tag rotates per connect like the toast feed's),
+        # and the last mod-published death count and spawn marker seen. The
+        # last-seen pair stays None until the first same-seed sighting adopts
+        # it as the baseline, so a connect never re-bounces old state.
+        self.death_link_enabled: bool = False
+        self.trap_link_enabled: bool = False
+        self.link_tag: "str | None" = None
+        self.link_index: int = 0
+        self.link_entries: list[str] = []
+        self.last_links_written: "str | None" = None
+        self.last_death_count: "int | None" = None
+        self.last_spawn_marker: "str | None" = None
         self.goal_location_ids: list[int] = []
         self.goal_need: int = 0
         self.last_seq: "str | None" = None
@@ -451,6 +519,7 @@ class VCDContext(CommonContext):
         self.write_traps_if_changed()
         self.write_messages_if_changed()
         self.write_milestones_if_changed()
+        self.write_links_if_changed()
         if not self.game_launched and bool(VCDWorld.settings.auto_launch_game):
             self.launch_game()
 
@@ -631,6 +700,36 @@ class VCDContext(CommonContext):
             asyncio.create_task(self.maybe_send_goal())
         elif cmd == "ReceivedItems":
             self._on_received_items(args)
+        elif cmd == "Bounced":
+            self._on_bounced(args)
+
+    def _on_bounced(self, args: dict) -> None:
+        """Inbound TrapLink bounces queue the closest local trap for the mod.
+        DeathLink bounces ride the framework's on_deathlink hook instead."""
+        if "TrapLink" not in self.tags or "TrapLink" not in args.get("tags", []):
+            return
+        if not self.slot:
+            return
+        data = args.get("data", {})
+        # A malformed bounce from a buggy foreign client must not raise inside
+        # the packet handler and drop the connection.
+        if not isinstance(data, dict):
+            return
+        source = str(data.get("source", ""))
+        # The server bounces our own broadcast back; the source name filters it.
+        if not source or source == self.player_names[self.slot]:
+            return
+        trap_name = str(data.get("trap_name", ""))
+        local_type = links.local_trap_type(trap_name)
+        if local_type is None:
+            return
+        local_name = TRAP_NAME_BY_TYPE[local_type]
+        line = (f"TrapLink: received {trap_name} from {source}."
+                if local_name == trap_name else
+                f"TrapLink: received {trap_name} from {source} (as {local_name}).")
+        client_logger.info(line)
+        self.enqueue_message([(messages.named_color("salmon"), line)])
+        self.enqueue_link(local_type)
 
     def _on_received_items(self, args: dict) -> None:
         """Folds granted level accesses and tool unlocks into the grants
@@ -689,6 +788,16 @@ class VCDContext(CommonContext):
         self.last_messages_written = None
         self.last_milestones_written = None
         self.start_score_warned = set()
+        self.death_link_enabled = bool(slot_data.get("death_link", False))
+        self.trap_link_enabled = bool(slot_data.get("trap_link", False))
+        self.link_tag = messages.session_tag(self.seed_name)
+        self.link_index = 0
+        self.link_entries = []
+        self.last_links_written = None
+        self.last_death_count = None
+        self.last_spawn_marker = None
+        asyncio.create_task(self.update_death_link(self.death_link_enabled))
+        asyncio.create_task(self.update_trap_link(self.trap_link_enabled))
         self.enqueue_message([(messages.WHITE, "Archipelago connected.")])
         # Subscribe to the slot's shared baseline and applied counter and
         # fetch both; the Retrieved answer releases the traps-file write gate.
@@ -699,6 +808,52 @@ class VCDContext(CommonContext):
             {"cmd": "Get", "keys": keys},
         ]))
         asyncio.create_task(self.setup_and_launch())
+
+    async def update_trap_link(self, trap_link: bool) -> None:
+        """Set the TrapLink connection tag on or off, mirroring the
+        framework's own update_death_link."""
+        old_tags = self.tags.copy()
+        if trap_link:
+            self.tags.add("TrapLink")
+        else:
+            self.tags -= {"TrapLink"}
+        if old_tags != self.tags and self.server and not self.server.socket.closed:
+            await self.send_msgs([{"cmd": "ConnectUpdate", "tags": self.tags}])
+
+    def on_deathlink(self, data: dict) -> None:
+        """An inbound death: the framework logs it; this queues the kill for
+        the mod and toasts it in game."""
+        super().on_deathlink(data)
+        source = str(data.get("source", "someone"))
+        cause = str(data.get("cause", "") or "").strip()
+        line = cause if cause else f"DeathLink: received from {source}."
+        self.enqueue_message([(messages.named_color("red"), line)])
+        if self.death_link_enabled:
+            self.enqueue_link(links.DEATH_TYPE)
+
+    async def announce_death(self, state: dict[str, str]) -> None:
+        """Send the janitor's own death out over DeathLink."""
+        if not self.slot:
+            return
+        await self.send_death(death_cause(self.player_names[self.slot], state))
+        self.enqueue_message([(messages.named_color("red"),
+                               "DeathLink: sent to the other players.")])
+
+    async def send_trap_link(self, trap_name: str) -> None:
+        """Broadcast a fired trap to the other TrapLink players."""
+        if not self.slot:
+            return
+        await self.send_msgs([{
+            "cmd": "Bounce", "tags": ["TrapLink"],
+            "data": {
+                "time": time.time(),
+                "source": self.player_names[self.slot],
+                "trap_name": trap_name,
+            },
+        }])
+        line = f"TrapLink: sent {trap_name} to the other players."
+        client_logger.info(line)
+        self.enqueue_message([(messages.named_color("salmon"), line)])
 
     def on_print_json(self, args: dict) -> None:
         super().on_print_json(args)
@@ -743,6 +898,35 @@ class VCDContext(CommonContext):
             client_logger.error(f"Could not write the messages file: {error}")
             return
         self.last_messages_written = payload
+
+    def enqueue_link(self, link_type: str) -> None:
+        """Append one entry to the link-event queue (an inbound death or
+        linked trap) and flush it to the game."""
+        if not self.link_tag:
+            return
+        self.link_index += 1
+        self.link_entries.append(f"{self.link_index}:{link_type}")
+        del self.link_entries[:-links.MAX_ENTRIES]
+        self.write_links_if_changed()
+
+    def write_links_if_changed(self) -> None:
+        """Write the link-event queue (always fresh on connect, even empty, so
+        another session's leftovers are overwritten and the mod's death link
+        flag is this connect's)."""
+        if not self.install_dir or not self.saves_ready or not self.link_tag:
+            return
+        payload = (f"{self.link_tag}|{int(self.death_link_enabled)}"
+                   f"|{self.link_index}|{len(self.link_entries)}")
+        if payload == self.last_links_written:
+            return
+        try:
+            links.write(self.install_dir / "Saves" / "VCArchipelagoLinks.sav",
+                        self.link_tag, self.death_link_enabled,
+                        self.link_entries)
+        except OSError as error:
+            client_logger.error(f"Could not write the links file: {error}")
+            return
+        self.last_links_written = payload
 
     def traps_applied_storage_key(self) -> str:
         # Data storage is room-scoped, so the seed never goes in the key.
@@ -963,6 +1147,20 @@ async def vcd_bridge_loop(ctx: VCDContext) -> None:
                 "default": 0, "want_reply": False,
                 "operations": [{"operation": "max", "value": push}],
             }])
+        # The death counter and the spawn marker also save without an APSeq
+        # bump. Each first same-seed sighting adopts silently as the baseline;
+        # only a later move bounces, and only while the matching tag is on.
+        death = death_count_to_bounce(state, ctx.seed_name, ctx.last_death_count)
+        if death is not None:
+            ctx.last_death_count = death[0]
+            if death[1] and "DeathLink" in ctx.tags:
+                await ctx.announce_death(state)
+        spawn = spawn_marker_to_bounce(state, ctx.seed_name,
+                                       ctx.last_spawn_marker)
+        if spawn is not None:
+            ctx.last_spawn_marker = spawn[0]
+            if spawn[1] is not None and "TrapLink" in ctx.tags:
+                await ctx.send_trap_link(spawn[1])
         # A write that failed (a transient share violation) or is still held
         # (the storage read not answered) retries here: each writer no-ops
         # when its last write already carries the current payload.
@@ -970,6 +1168,7 @@ async def vcd_bridge_loop(ctx: VCDContext) -> None:
         ctx.write_traps_if_changed()
         ctx.write_messages_if_changed()
         ctx.write_milestones_if_changed()
+        ctx.write_links_if_changed()
         seq = state.get("APSeq")
         if not seq or seq == ctx.last_seq:
             continue

@@ -237,6 +237,24 @@ class TestTrapPercentage(VCDTestBase):
             self.assertEqual(item.classification, ItemClassification.trap)
 
 
+class TestLinkOptions(VCDTestBase):
+    options = {"death_link": True, "trap_link": True}
+
+    def test_slot_data_reports_both_links_on(self):
+        slot_data = self.world.fill_slot_data()
+        self.assertIs(slot_data["death_link"], True)
+        self.assertIs(slot_data["trap_link"], True)
+
+
+class TestLinkOptionsDefaultOff(VCDTestBase):
+    options = {}
+
+    def test_slot_data_reports_both_links_off(self):
+        slot_data = self.world.fill_slot_data()
+        self.assertIs(slot_data["death_link"], False)
+        self.assertIs(slot_data["trap_link"], False)
+
+
 class TestUsefulPercentage(VCDTestBase):
     options = {"trap_percentage": 0, "useful_percentage": 50}
 

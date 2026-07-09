@@ -55,6 +55,23 @@ var config int APFoundBob;
 var config string APTrapSeed;
 var config int APTrapsApplied;
 
+// Organic janitor deaths, persistent and only ever rising. Deaths a link
+// causes (an inbound DeathLink kill or the death link crew sweep) never
+// count, so the client can bounce each rise out without echoing one back.
+var config int APDeathCount;
+
+// The last item-queue entry applied, as "index:Type". Only the item queue
+// writes it, never the link queue, so the client's TrapLink bounce can never
+// re-broadcast a trap that itself arrived over TrapLink.
+var config string APLastSpawn;
+
+// Link-event bookkeeping, persistent like the trap counter: the session tag
+// the applied counter belongs to, and the highest link entry index consumed.
+// A tag change baselines the counter to the newest entry in the file, so
+// entries only ever apply when they arrive while a level is live.
+var config string APLinkSession;
+var config int APLinksApplied;
+
 // "MapName:states", the gravity volumes a zero gravity trap flipped with the
 // captured pre-trap enabled flags ("0,1" in capture order). Persistent, so a
 // save that baked the flip mid-trap (an autosave, then a quit or crash) gets
