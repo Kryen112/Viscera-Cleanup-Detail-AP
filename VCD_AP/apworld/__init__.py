@@ -59,9 +59,9 @@ USEFUL_ITEM_NAMES: frozenset[str] = (
     | frozenset(SQUEAKY_BOOTS_ITEMS))
 
 
-def _launch_client() -> None:
+def _launch_client(*args: str) -> None:
     from .client import launch
-    launch_subprocess(launch, name="VCDClient")
+    launch_subprocess(launch, name="VCDClient", args=args)
 
 
 components.append(Component("Viscera Cleanup Detail Client", func=_launch_client,

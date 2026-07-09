@@ -1,22 +1,26 @@
 """Tests for the client's mod-state parsing and its toast feed: the state file
 snapshot maps to location names (with the punch-out and speedrun policy, and
 only a seed-stamped snapshot counting), PrintJSON traffic filters and encodes
-into the messages file, and the missing-locations set encodes into the
-milestones file that drives the in-game next-milestone indicator."""
+into the messages file, the missing-locations set encodes into the milestones
+file that drives the in-game next-milestone indicator, and the launch entry
+parses only the args the component forwards."""
 import asyncio
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from NetUtils import ClientStatus
 
 from .bases import read_sav_properties
-from .. import messages, milestones
-from ..client import (VCDContext, goal_locations_from_slot_data,
-                      location_names_from_state, message_segments, parse_rungs,
-                      print_json_relevant, start_score_mismatch,
-                      state_is_current, traps_applied_to_push)
+from .. import _launch_client, messages, milestones
+from ..client import (VCDContext, goal_locations_from_slot_data, launch,
+                      location_names_from_state, message_segments,
+                      parse_launch_args, parse_rungs, print_json_relevant,
+                      start_score_mismatch, state_is_current,
+                      traps_applied_to_push)
 from ..levels import LEVELS
 from ..locations import LOCATION_NAME_TO_ID, speedrun_name
 
@@ -695,6 +699,29 @@ class TestWriteMilestonesIfChanged(unittest.TestCase):
             ctx.write_milestones_if_changed()
             self.assertFalse(
                 (Path(tmp) / "Saves" / "VCArchipelagoMilestones.sav").exists())
+
+
+class TestLaunchArgumentParsing(unittest.TestCase):
+    """A spawned client inherits the launcher's argv, which carries the
+    component name, so the launch entry parses only forwarded args."""
+
+    def test_ignores_the_process_argv(self) -> None:
+        # A leak back to sys.argv would SystemExit on the component name here.
+        poisoned = [sys.argv[0], "Viscera Cleanup Detail Client"]
+        with mock.patch.object(sys, "argv", poisoned):
+            args = parse_launch_args(())
+        self.assertIsNone(args.install)
+
+    def test_parses_forwarded_install(self) -> None:
+        args = parse_launch_args(("--install", "C:\\Games\\Viscera"))
+        self.assertEqual(args.install, "C:\\Games\\Viscera")
+
+    def test_component_forwards_args_to_the_subprocess(self) -> None:
+        target = f"{_launch_client.__module__}.launch_subprocess"
+        with mock.patch(target) as spawn:
+            _launch_client("--install", "C:\\Games\\Viscera")
+        spawn.assert_called_once_with(
+            launch, name="VCDClient", args=("--install", "C:\\Games\\Viscera"))
 
 
 if __name__ == "__main__":

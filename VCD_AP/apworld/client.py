@@ -15,10 +15,12 @@ rebuilt from the item list plus the seed's starting levels).
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import Utils
@@ -975,14 +977,20 @@ async def vcd_bridge_loop(ctx: VCDContext) -> None:
         await ctx.apply_mod_state(state)
 
 
-def launch() -> None:
+def parse_launch_args(launch_args: Sequence[str]) -> argparse.Namespace:
+    # Parses only the args the component forwards, never sys.argv: a spawned
+    # client inherits the launcher's argv, which holds the component name.
+    parser = get_base_parser()
+    parser.add_argument("--install", default=None,
+                        help="Path to the Viscera install directory.")
+    return parser.parse_args(launch_args)
+
+
+def launch(*launch_args: str) -> None:
     Utils.init_logging("VCDClient", exception_logger="Client")
 
     async def main() -> None:
-        parser = get_base_parser()
-        parser.add_argument("--install", default=None,
-                            help="Path to the Viscera install directory.")
-        args = parser.parse_args()
+        args = parse_launch_args(launch_args)
 
         ctx = VCDContext(args.connect, args.password)
         if args.install:
@@ -1004,4 +1012,4 @@ def launch() -> None:
 
 
 if __name__ == "__main__":
-    launch()
+    launch(*sys.argv[1:])
