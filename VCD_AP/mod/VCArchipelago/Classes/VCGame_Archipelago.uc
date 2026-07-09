@@ -103,10 +103,10 @@ var float LastZeroGravityEndSeconds;
 // the dead zone are already at the janitor's feet and stay put.
 const MagnetizeRadius         = 1024.0;
 const MagnetizeDeadZone       = 64.0;
-const MagnetizePullSpeedScale = 2.0;
-const MagnetizeMinPullSpeed   = 600.0;
-const MagnetizeMaxPullSpeed   = 1800.0;
-const MagnetizeLiftSpeed      = 300.0;
+const MagnetizePullSpeedScale = 1.25;
+const MagnetizeMinPullSpeed   = 340.0;
+const MagnetizeMaxPullSpeed   = 1000.0;
+const MagnetizeLiftSpeed      = 190.0;
 
 // Reused load target for the trap queue file, so the 5 second poll does not
 // pile up garbage objects between collections.
