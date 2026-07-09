@@ -43,8 +43,9 @@ const TimedEffectBarWidth     = 200.0;
 const TimedEffectBarHeight    = 8.0;
 const TimedEffectBlinkSeconds = 5.0;
 
-// Toolsanity unlock panel geometry (pre-ratio units). The 11 tool bits are
-// powers of two in TOOL_KEY_ORDER, so bit (1 << index) walks them in order.
+// Toolsanity unlock panel geometry (pre-ratio units). The width is a floor;
+// the backing widens and grows to the measured text extents. The 11 tool bits
+// are powers of two in TOOL_KEY_ORDER, so bit (1 << index) walks them in order.
 const ToolPanelTextSize = 18.0;
 const ToolPanelWidth    = 220.0;
 const ToolPanelTop      = 120.0;
@@ -105,13 +106,24 @@ event PostRender()
 // Lists the current level's toolsanity tools while the scoreboard key is held,
 // each in its player-facing name, the Archipelago location green when unlocked
 // and dim grey when still locked. A level with no toolsanity data (an old
-// client or a toolsanity-off seed) shows a single all-available line. Reads the
-// replicated GRI, so the host and co-op guests see the same panel.
+// client or a toolsanity-off seed) shows an all-available heading instead of
+// the tool rows. The Self-Cleaning Mop and Squeaky Clean Boots rows follow on
+// every cleanable level in either case (those unlocks exist independent of
+// toolsanity); the Office never publishes their flags, so it shows neither.
+// Reads the replicated GRI, so the host and co-op guests see the same panel.
+// The font group can render text larger than the requested size, so the
+// backing sizes from measured extents, never from the requested constants.
 function DrawToolsanityPanel()
 {
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
-    local int BitIndex, Bit, PresentCount, DrawnLines;
-    local float LineHeight, PanelLeft, PanelTop, LabelLeft, HeadingTop;
+    local VCMapInfo MapInfo;
+    local array<string> RowLabels;
+    local array<byte>   RowUnlockedFlags;
+    local int BitIndex, Bit, RowIndex;
+    local float TextWidth, TextHeight, WidestText, RowHeight;
+    local float PanelLeft, PanelTop, PanelWidth, PanelHeight;
+    local float LabelLeft, HeadingTop;
+    local string HeadingText;
 
     // A floor so the history panel below still anchors sanely on a transient
     // no-GRI frame where this returns early.
@@ -121,52 +133,78 @@ function DrawToolsanityPanel()
     if (ReplicatedInfo == None)
         return;
 
-    LineHeight = (ToolPanelTextSize + 6.0) * RatioY;
+    if (ReplicatedInfo.PresentToolsMask == 0)
+    {
+        HeadingText = "All tools available";
+    }
+    else
+    {
+        HeadingText = "This level's tools";
+        for (BitIndex = 0; BitIndex < ToolBitCount; BitIndex++)
+        {
+            Bit = 1 << BitIndex;
+            if ((ReplicatedInfo.PresentToolsMask & Bit) == 0)
+                continue;
+            RowLabels.AddItem(
+                class'VCGameReplicationInfo_Archipelago'.static.ToolDisplayLabel(Bit));
+            if ((ReplicatedInfo.UnlockedToolsMask & Bit) != 0)
+                RowUnlockedFlags.AddItem(1);
+            else
+                RowUnlockedFlags.AddItem(0);
+        }
+    }
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo == None || !MapInfo.bIsOfficeLevel)
+    {
+        RowLabels.AddItem("Self-Cleaning Mop");
+        if (ReplicatedInfo.bSelfCleaningMop)
+            RowUnlockedFlags.AddItem(1);
+        else
+            RowUnlockedFlags.AddItem(0);
+        RowLabels.AddItem("Squeaky Clean Boots");
+        if (ReplicatedInfo.bSqueakyBoots)
+            RowUnlockedFlags.AddItem(1);
+        else
+            RowUnlockedFlags.AddItem(0);
+    }
+
+    // Every line shares the font size, so the heading's measured height sets
+    // the row pitch and each label only competes on width.
+    GetTextExtent(HeadingText, ToolPanelTextSize * RatioY, VCDFont,
+        WidestText, TextHeight);
+    RowHeight = TextHeight + 6.0 * RatioY;
+    for (RowIndex = 0; RowIndex < RowLabels.Length; RowIndex++)
+    {
+        GetTextExtent(RowLabels[RowIndex], ToolPanelTextSize * RatioY, VCDFont,
+            TextWidth, TextHeight);
+        if (TextWidth > WidestText)
+            WidestText = TextWidth;
+    }
+
     PanelLeft = ToolPanelLeft * RatioY;
     PanelTop = ToolPanelTop * RatioY;
     LabelLeft = PanelLeft + 6.0 * RatioY;
     HeadingTop = PanelTop + 4.0 * RatioY;
+    PanelWidth = FMax(ToolPanelWidth * RatioY, WidestText + 12.0 * RatioY);
+    PanelHeight = RowHeight * float(RowLabels.Length + 1) + 8.0 * RatioY;
 
-    if (ReplicatedInfo.PresentToolsMask == 0)
-    {
-        DrawToolPanelBacking(PanelLeft, PanelTop,
-            ToolPanelWidth * RatioY, LineHeight + 8.0 * RatioY);
-        Canvas.SetDrawColor(255, 255, 255, 255);
-        DrawTextEx("All tools available", LabelLeft, HeadingTop,
-            ToolPanelTextSize * RatioY, VCDFont, HA_Left, VA_Top, true);
-        ToolPanelBottomY = PanelTop + LineHeight + 8.0 * RatioY;
-        return;
-    }
-
-    for (BitIndex = 0; BitIndex < ToolBitCount; BitIndex++)
-    {
-        if ((ReplicatedInfo.PresentToolsMask & (1 << BitIndex)) != 0)
-            PresentCount++;
-    }
-    DrawToolPanelBacking(PanelLeft, PanelTop, ToolPanelWidth * RatioY,
-        LineHeight * float(PresentCount + 1) + 8.0 * RatioY);
-    ToolPanelBottomY = PanelTop + LineHeight * float(PresentCount + 1)
-        + 8.0 * RatioY;
+    DrawToolPanelBacking(PanelLeft, PanelTop, PanelWidth, PanelHeight);
+    ToolPanelBottomY = PanelTop + PanelHeight;
 
     Canvas.SetDrawColor(255, 255, 255, 255);
-    DrawTextEx("This level's tools", LabelLeft, HeadingTop,
+    DrawTextEx(HeadingText, LabelLeft, HeadingTop,
         ToolPanelTextSize * RatioY, VCDFont, HA_Left, VA_Top, true);
 
-    DrawnLines = 1;
-    for (BitIndex = 0; BitIndex < ToolBitCount; BitIndex++)
+    for (RowIndex = 0; RowIndex < RowLabels.Length; RowIndex++)
     {
-        Bit = 1 << BitIndex;
-        if ((ReplicatedInfo.PresentToolsMask & Bit) == 0)
-            continue;
-        if ((ReplicatedInfo.UnlockedToolsMask & Bit) != 0)
+        if (RowUnlockedFlags[RowIndex] != 0)
             Canvas.SetDrawColor(0, 255, 127, 255);
         else
             Canvas.SetDrawColor(128, 128, 128, 255);
-        DrawTextEx(
-            class'VCGameReplicationInfo_Archipelago'.static.ToolDisplayLabel(Bit),
-            LabelLeft, HeadingTop + LineHeight * float(DrawnLines),
+        DrawTextEx(RowLabels[RowIndex], LabelLeft,
+            HeadingTop + RowHeight * float(RowIndex + 1),
             ToolPanelTextSize * RatioY, VCDFont, HA_Left, VA_Top, true);
-        DrawnLines++;
     }
 }
 
