@@ -38,9 +38,9 @@ from .locations import (BOB_GATED_LOCATIONS, FIND_BOB_LOCATION,
                         milestone_name, punch_out_name, speedrun_name)
 from .options import VCDOptions
 from .toolsanity import (CORE_CLEANING_KEYS, PROGRESSION_TOOL_KEYS,
-                         PUNCHOUT_CLEAN_PERCENT, free_keys, free_kit_rungs,
-                         full_clean_keys, item_keys, rung_in_logic,
-                         tool_item_name)
+                         PUNCHOUT_CLEAN_PERCENT, TOOL_REACH_PREREQUISITES,
+                         free_keys, free_kit_rungs, full_clean_keys,
+                         item_keys, rung_in_logic, tool_item_name)
 from .traps import TRAP_NAMES, USEFUL_NAMES
 
 GAME_NAME = "Viscera Cleanup Detail"
@@ -433,10 +433,14 @@ class VCDWorld(World):
         Overgrowth pickaxe is dug out with the shovel) is added on top. The
         free pair drops out. An itemized Slosh-O-Matic slot is an any-of group
         with the level's Self-Cleaning Mop: a mop that never dirties needs no
-        rinse bucket."""
+        rinse bucket. A required tool stored where only another tool reaches
+        pulls that prerequisite in with it."""
         display = DISPLAY_BY_MAP[map_name]
         free = free_keys(map_name, self.hard_start_maps)
         keys = set(full_clean_keys(map_name)) | set(extra_keys)
+        for key in list(keys):
+            keys |= TOOL_REACH_PREREQUISITES.get(map_name, {}).get(
+                key, frozenset())
         needed: "list[str]" = []
         groups: "list[tuple[str, ...]]" = []
         for k in sorted(keys):

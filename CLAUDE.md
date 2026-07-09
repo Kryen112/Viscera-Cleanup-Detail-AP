@@ -110,7 +110,12 @@ The reviewer treats a violation of any of these as a correctness blocker.
   at play time (`APStartScore` in the state ini) and warns on drift. Physical pickups (collectibles,
   Bob notes) need the level's full clean kit (`full_clean_keys`, the core kit
   plus any suspect extra tool), because a trophy only banks on a not-fired
-  punch-out; the Overgrowth pickaxe also needs the Shovel. The scan table there
+  punch-out; the Overgrowth pickaxe also needs the Shovel, and Athena's Wrath's
+  blue easter egg the J-HARM (`COLLECTIBLE_EXTRA_TOOLS`). A tool stored where
+  only another tool reaches counts as usable only alongside that prerequisite
+  (`TOOL_REACH_PREREQUISITES`): Athena's Wrath keeps its Laser Welder where
+  only the J-HARM reaches, so its welder rungs need both unlocks and a pickup
+  rule pulls a required tool's prerequisite in with it. The scan table there
   is transcribed from the mod's APScanReport run on every level, and the suspect
   ceilings from APCleanCoreKit; never hand-guess either. The full clean kit
   always caps at the level's known-maximum usable total. An itemized

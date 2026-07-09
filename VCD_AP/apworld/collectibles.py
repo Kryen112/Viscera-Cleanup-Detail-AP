@@ -102,8 +102,10 @@ GATED_COLLECTIBLE_TOKENS: frozenset[str] = frozenset({"VCSpecialDrop_Item11"})
 # Collectibles that need a tool beyond the level's clean kit to reach or
 # extract, by token. The clean kit is always implied (a trophy only banks on a
 # not-fired punch-out, and its hands grab the item); these stack on top. The
-# Overgrowth pickaxe is dug out with the shovel. A token absent here needs only
-# the clean kit.
+# Overgrowth pickaxe is dug out with the shovel; Athena's Wrath's blue easter
+# egg sits where only the J-HARM reaches. A token absent here needs only the
+# clean kit.
 COLLECTIBLE_EXTRA_TOOLS: dict[str, "frozenset[str]"] = {
     "VCSpecialDrop_Item1": frozenset({"Shovel"}),
+    "VCSpecialDrop_Item15": frozenset({"Lift"}),
 }

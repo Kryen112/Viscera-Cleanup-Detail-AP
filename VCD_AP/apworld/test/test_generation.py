@@ -48,7 +48,8 @@ class TestDefault(VCDTestBase):
         # Banking a collectible needs a not-fired shift, so it needs the level's
         # clean kit (which includes the hands that grab it); the gate-locked
         # ones the Bob-gated test covers. The Overgrowth pickaxe also needs the
-        # shovel to dig it out.
+        # shovel to dig it out, and Athena's Wrath's blue easter egg the J-HARM
+        # to reach.
         for map_name, token, collectible in COLLECTIBLES:
             if token in GATED_COLLECTIBLE_TOKENS:
                 continue
@@ -60,6 +61,24 @@ class TestDefault(VCDTestBase):
             self.assert_needs_every_item(
                 location.can_reach,
                 [access_item_name(display)] + pickup, display)
+
+    def test_blue_easter_egg_waits_for_the_lift(self):
+        # Athena's Wrath's blue easter egg sits where only the J-HARM reaches:
+        # the clean kit alone leaves it out of logic, the Lift closes it.
+        display = "Athena's Wrath"
+        location = self.multiworld.get_location(
+            collectible_name(display, "Easter Egg Blue"), self.player)
+        kit = [access_item_name(display)] + self.pickup_kit("VC_Hall")
+        self.assertFalse(location.can_reach(self.state_with(kit)))
+        self.assertTrue(location.can_reach(self.state_with(
+            kit + [tool_item_name(display, "Lift")])))
+
+    def test_pickup_rule_pulls_a_required_tool_prerequisite_in(self):
+        # A pickup that required Athena's Wrath's welder would need the J-HARM
+        # that reaches it too.
+        needed, _groups = self.world._pickup_requirements(
+            "VC_Hall", ("Welder",))
+        self.assertIn(tool_item_name("Athena's Wrath", "Lift"), needed)
 
     def test_tool_items_follow_presence_and_skip_the_free_pair(self):
         pool = self.created_item_names()
@@ -732,11 +751,12 @@ class TestToolsanityBands(unittest.TestCase):
     def test_each_situational_tool_adds_over_100(self):
         from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
         # Athena's Wrath has room over 100: one situational tool credits a share
-        # over 100, and holding all of them reaches the maximum.
-        present = sorted(self._situational_present("VC_Hall"))
+        # over 100, and holding all of them reaches the maximum. The Lift is the
+        # one usable on its own there (the welder waits for it).
+        present = self._situational_present("VC_Hall")
         self.assertGreaterEqual(len(present), 2)
         core = toolset_cap("VC_Hall", 5, CORE_KIT_KEYS)
-        one = toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | {present[0]})
+        one = toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | {"Lift"})
         self.assertGreater(one, core)
         self.assertEqual(
             toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | set(present)),
@@ -758,6 +778,21 @@ class TestToolsanityBands(unittest.TestCase):
             present = self._situational_present(m)
             self.assertEqual(toolset_cap(m, 5, CORE_KIT_KEYS | present),
                              float(usable_total(m, 5)))
+
+    def test_a_tool_stored_behind_another_waits_for_its_prerequisite(self):
+        from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
+        # Athena's Wrath keeps its laser welder where only the J-HARM reaches:
+        # the welder unlock alone credits nothing over the core kit, and the
+        # pair together reaches the level's maximum.
+        core = toolset_cap("VC_Hall", 5, CORE_KIT_KEYS)
+        self.assertEqual(
+            toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | {"Welder"}), core)
+        self.assertGreater(
+            toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | {"Welder", "Lift"}),
+            toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | {"Lift"}))
+        self.assertEqual(
+            toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | {"Welder", "Lift"}),
+            float(usable_total("VC_Hall", 5)))
 
     def test_situational_tool_does_not_help_where_unneeded(self):
         from ..toolsanity import toolset_cap

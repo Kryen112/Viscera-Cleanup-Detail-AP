@@ -21,9 +21,12 @@ unreachable without that tool, so no toolset is ever credited a rung the mess it
 cannot clear puts out of reach. A few levels leave a large share of mess only
 one situational tool can clear (recorded in CORE_KIT_CEILING_PERCENT): the core
 kit tops out around that ceiling there, and every check above it waits for the
-one EXTRA_CLEAN_TOOL that closes the gap to 100. Physical pickups (collectibles
-and Bob notes) need the level's clean kit, because a trophy only banks on a
-not-fired punch-out; the Overgrowth pickaxe also needs the shovel to dig it out.
+one EXTRA_CLEAN_TOOL that closes the gap to 100. A tool stored where only
+another tool reaches (TOOL_REACH_PREREQUISITES) counts as usable only once
+that prerequisite is also held. Physical pickups (collectibles and Bob notes)
+need the level's clean kit, because a trophy only banks on a not-fired
+punch-out; the Overgrowth pickaxe also needs the shovel to dig it out, and
+Athena's Wrath's blue easter egg needs the J-HARM to reach.
 
 The Slosh-O-Matic slot in this model is satisfiable two ways: the machine
 unlock itself, or the level's Self-Cleaning Mop (a mop that never dirties needs
@@ -156,6 +159,14 @@ VENDOR_MAPS: frozenset[str] = frozenset({
     "VC_Vulcan_01",
 })
 
+# Played knowledge: a tool stored where only another tool reaches. Holding
+# the unlock is not enough there; the tool counts as usable only once its
+# prerequisite is also held. Athena's Wrath keeps its laser welder somewhere
+# only the J-HARM reaches.
+TOOL_REACH_PREREQUISITES: dict[str, dict[str, frozenset[str]]] = {
+    "VC_Hall": {"Welder": frozenset({"Lift"})},
+}
+
 # Levels the core kit alone cannot clean to 100 percent, with the percent it
 # tops out at and the one situational tool that clears the rest. Incubation
 # Emergency, Core Sample, and The Vulcan Affair leave welder mess (bullet
@@ -245,6 +256,18 @@ def core_kit_ceiling(map_name: str) -> float:
     return CORE_KIT_CEILING_PERCENT.get(map_name, 100.0)
 
 
+def usable_keys(map_name: str, unlocked: "frozenset[str]") -> frozenset[str]:
+    """The unlocked tools the janitor can actually wield on the level: a tool
+    stored where only another tool reaches drops out until that prerequisite
+    is also unlocked. Prerequisites resolve one level deep: a prerequisite
+    with a prerequisite of its own would need a fixpoint here."""
+    prerequisites = TOOL_REACH_PREREQUISITES.get(map_name)
+    if prerequisites is None:
+        return unlocked
+    return frozenset(key for key in unlocked
+                     if prerequisites.get(key, frozenset()) <= unlocked)
+
+
 def full_clean_keys(map_name: str) -> frozenset[str]:
     """The tools that clean the level to 100 percent: the core kit, plus the
     one extra tool a suspect level needs on top. The free pair counts as held,
@@ -312,7 +335,10 @@ def toolset_cap(map_name: str, step: int, unlocked: "frozenset[str]") -> float:
     percent (and Employee of the Month and every sub-100 rung with it); each
     situational tool the level has then adds a fixed share over 100, and the
     full kit reaches the level's over-100 maximum. A partial core kit reaches
-    only its share of the mess, up to the level's core-kit ceiling."""
+    only its share of the mess, up to the level's core-kit ceiling. A tool
+    stored where only another tool reaches counts only once that prerequisite
+    is also unlocked."""
+    unlocked = usable_keys(map_name, unlocked)
     if full_clean_keys(map_name) <= unlocked:
         # The slack-step lift keeps every sub-100 rung and the 100 rung in logic
         # at 100 with the clean kit alone; each situational tool the level has
