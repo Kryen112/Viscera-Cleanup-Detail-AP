@@ -224,6 +224,13 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   count toward cleanliness, but each report field is clamped to its UI maximum
   server-side (600 characters, or 18 for the numeric Union ID), so a pasted
   overflow cannot inflate the score past what the fields legitimately hold.
+  Two documented Digsite adjustments ride on top of the game value: the mod
+  widens the map's crate stacking zones to the crate archetypes the level
+  spawns (the shipped map data lists only Type1 crates, which the level
+  barely has; this raises the game's own score, live and at punch-out), and
+  the published live value credits partial sand pit fill gradually where the
+  game charges one flat all-or-nothing infraction (bit 262144, 150 points;
+  live and paper agree once every pit is full).
 - Prefer calling the game's own functions over reimplementing them. Read the
   decompiled source first to know which are free of side effects.
 - Detection cross-checks from save files (read-only): `GlobalStatsData.sav` is

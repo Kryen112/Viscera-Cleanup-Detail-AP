@@ -11,6 +11,9 @@
 // Cleanliness is the game's own value: 1 - FinalPenalty / StartingCleanupScore,
 // where the punchout handler's ProcessMapState recomputes FinalPenalty. Every
 // per-map handler extends VCPunchoutHandler_General, which owns those fields.
+// Two Digsite adjustments ride on top: the crate stacking zones widen to the
+// crate archetypes the level spawns, and the published value credits partial
+// sand pit fill gradually (see PublishCleanliness).
 //
 // Level access is gated two ways: the curated menu (VCGameViewportClient_Archipelago
 // hides locked levels from the list) is the front door, and EnforceLevelGate here
@@ -2555,11 +2558,66 @@ function GlobalStatChanged(string KeyName, string NewValue)
     }
 }
 
+// The Digsite crate stacking zones list only the Type1 crate archetypes while
+// the level spawns Type2, Type4, and Type5 crates, so vanilla awards stacked
+// crates nothing there. Every other level's crate zones list the full crate
+// family. Widen each crate zone to the crate archetypes present in the level;
+// barrel zones and special sorting zones keep their own lists.
+function WidenDigsiteCrateStackingZones()
+{
+    local VCDebris Debris;
+    local VCStackingVolume Zone;
+    local array<Actor> PresentCrateArchetypes;
+    local Actor DebrisArchetype;
+    local int I;
+    local bool bCrateZone;
+
+    if (!(WorldInfo.GetMapName(true) ~= "VC_Digsite"))
+        return;
+
+    foreach AllActors(class'VCDebris', Debris)
+    {
+        DebrisArchetype = Actor(Debris.ObjectArchetype);
+        if (DebrisArchetype == None
+            || InStr(string(DebrisArchetype.Name), "ARCH_VC_Crate_Type") != 0
+            || PresentCrateArchetypes.Find(DebrisArchetype) != -1)
+        {
+            continue;
+        }
+        PresentCrateArchetypes.AddItem(DebrisArchetype);
+    }
+    if (PresentCrateArchetypes.Length == 0)
+        return;
+
+    foreach AllActors(class'VCStackingVolume', Zone)
+    {
+        bCrateZone = false;
+        for (I = 0; I < Zone.ValidArchetypes.Length; I++)
+        {
+            if (Zone.ValidArchetypes[I] != None
+                && InStr(string(Zone.ValidArchetypes[I].Name), "ARCH_VC_Crate_Type") == 0)
+            {
+                bCrateZone = true;
+                break;
+            }
+        }
+        if (!bCrateZone)
+            continue;
+        for (I = 0; I < PresentCrateArchetypes.Length; I++)
+        {
+            if (Zone.ValidArchetypes.Find(PresentCrateArchetypes[I]) == -1)
+                Zone.ValidArchetypes.AddItem(PresentCrateArchetypes[I]);
+        }
+    }
+}
+
 function PublishCleanliness()
 {
     local VCPunchoutHandler_General Handler;
     local VCMapInfo MapInfo;
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local VCSandTrap SandTrap;
+    local float LivePenalty, SandFilledSum, SandFillMaxSum;
     local float clean;
     local int percent;
     local bool changed;
@@ -2573,8 +2631,35 @@ function PublishCleanliness()
     if (Handler == None || Handler.StartingCleanupScore <= 0.0 || APState == None)
         return;
 
+    // Every poll: idempotent, and it catches crates a factory spawns after
+    // the first pass.
+    WidenDigsiteCrateStackingZones();
+
     Handler.ProcessMapState(self, None);
-    clean = 1.0 - (Handler.FinalPenalty / Handler.StartingCleanupScore);
+    LivePenalty = Handler.FinalPenalty;
+
+    // The Digsite handler scores the sand pits as one flat infraction while
+    // any pit is uncovered, so vanilla credits nothing until every pit is
+    // full. Credit the filled share gradually so each shovel of sand moves
+    // the readout; the value meets the game's own score the moment the last
+    // pit tops off. Only the Digsite places sand traps; on any other map the
+    // sums stay zero and nothing changes.
+    if ((Handler.BitCode & class'VCPunchoutHandler_Digsite'.const.RESULT_SandTrap) != 0)
+    {
+        foreach AllActors(class'VCSandTrap', SandTrap)
+        {
+            SandFilledSum += SandTrap.SandFilledAmount;
+            SandFillMaxSum += SandTrap.SandFillMax;
+        }
+        if (SandFillMaxSum > 0.0)
+        {
+            LivePenalty -= Handler.GetPenaltyFor(None,
+                class'VCPunchoutHandler_Digsite'.const.RESULT_SandTrap)
+                * FClamp(SandFilledSum / SandFillMaxSum, 0.0, 1.0);
+        }
+    }
+
+    clean = 1.0 - (LivePenalty / Handler.StartingCleanupScore);
     percent = int(clean * 100.0);
 
     // Hundredths for the on-screen readout, floored so the display never
