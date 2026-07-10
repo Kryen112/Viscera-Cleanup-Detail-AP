@@ -290,7 +290,7 @@ def message_segments(parts: "list[dict]", ctx: "VCDContext",
 
 def goal_locations_from_slot_data(slot_data: dict) -> "tuple[list[int], int]":
     """The location ids whose checks count toward the goal, and how many are
-    needed. Level goals count only the pooled levels. The collectible goal
+    needed. The level goal counts only the pooled levels. The collectible goal
     keeps the full list: collectible checks outside the pool never exist
     server-side, so they never arrive as checked."""
     goal = slot_data.get("goal", "complete_levels")
@@ -298,9 +298,6 @@ def goal_locations_from_slot_data(slot_data: dict) -> "tuple[list[int], int]":
     pooled_maps = slot_data.get("pooled_maps")
     pooled = set(m for m, _, _ in LEVELS) if pooled_maps is None else set(pooled_maps)
     pooled_displays = [d for m, d, _ in LEVELS if m in pooled]
-    if goal == "employee_of_the_month":
-        return [LOCATION_NAME_TO_ID[employee_of_the_month_name(d)]
-                for d in pooled_displays], amount
     if goal == "find_bob":
         return [LOCATION_NAME_TO_ID[FIND_BOB_LOCATION]], 1
     if goal == "collect_collectibles":

@@ -132,7 +132,7 @@ class LevelPool(OptionSet):
 class RandomizeLevelPool(Toggle):
     """Play a random subset of level_pool instead of the whole set. Each seed
     draws the subset size at random, from the smallest set the goal allows
-    (goal_amount levels for the level goals, enough collectible-holding levels
+    (goal_amount levels for complete_levels, enough collectible-holding levels
     for collect_collectibles, the Bob chain for find_bob) up to the whole
     pool. Off by default."""
     display_name = "Randomize level pool"
@@ -142,16 +142,14 @@ class Goal(Choice):
     """The win condition.
 
     complete_levels: punch out of `goal_amount` levels.
-    employee_of_the_month: reach 100 percent on `goal_amount` levels.
     find_bob: follow the notes and find Bob in the Digsite (needs the six
     note levels plus the Digsite).
     collect_collectibles: bank `goal_amount` collectibles in the trunk.
     """
     display_name = "Goal"
     option_complete_levels = 0
-    option_employee_of_the_month = 1
-    option_find_bob = 2
-    option_collect_collectibles = 3
+    option_find_bob = 1
+    option_collect_collectibles = 2
     default = 0
 
 

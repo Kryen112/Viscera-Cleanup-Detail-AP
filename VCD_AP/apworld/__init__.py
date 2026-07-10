@@ -34,8 +34,8 @@ from .levels import DISPLAY_BY_MAP, LEVELS
 from .locations import (BOB_GATED_LOCATIONS, FIND_BOB_LOCATION,
                         LOCATION_GROUPS, LOCATION_MAP, LOCATION_NAME_TO_ID,
                         MILESTONE_PERCENT, bob_note_name, collectible_name,
-                        employee_of_the_month_name, location_enabled,
-                        milestone_name, punch_out_name, speedrun_name)
+                        location_enabled, milestone_name, punch_out_name,
+                        speedrun_name)
 from .options import VCDOptions
 from .toolsanity import (CORE_CLEANING_KEYS, PROGRESSION_TOOL_KEYS,
                          PUNCHOUT_CLEAN_PERCENT, TOOL_REACH_PREREQUISITES,
@@ -162,7 +162,7 @@ class VCDWorld(World):
                 # them needs the whole Bob chain.
                 forced |= chain
         minimum = max(len(forced), 1)
-        if goal in ("complete_levels", "employee_of_the_month"):
+        if goal == "complete_levels":
             minimum = max(minimum, amount)
         size = self.random.randint(minimum, len(candidates))
         loose = [m for m in candidates if m not in forced]
@@ -233,7 +233,7 @@ class VCDWorld(World):
         if not candidates:
             raise OptionError(f"{self.player_name}: level_pool holds no levels.")
         # The goal cannot need more than the pool can hold: levels for the level
-        # goals, collectibles the pooled levels carry for the collectible goal.
+        # goal, collectibles the pooled levels carry for the collectible goal.
         cap = (self._countable_collectibles(set(candidates))
                if goal == "collect_collectibles" else len(candidates))
         if goal != "find_bob" and amount > cap:
@@ -447,9 +447,6 @@ class VCDWorld(World):
         goal = self.options.goal.current_key
         amount = int(self.options.goal_amount.value)
         pooled = set(self.pooled_maps)
-        if goal == "employee_of_the_month":
-            return [employee_of_the_month_name(d)
-                    for m, d, _ in LEVELS if m in pooled], amount
         if goal == "find_bob":
             # Find Bob's own access rule carries the note levels plus the Digsite.
             return [FIND_BOB_LOCATION], 1

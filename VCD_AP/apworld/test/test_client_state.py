@@ -504,7 +504,7 @@ class TestGoalLocationsFromSlotData(unittest.TestCase):
 
     def test_missing_pool_means_every_level(self) -> None:
         ids, need = goal_locations_from_slot_data({
-            "goal": "employee_of_the_month", "goal_amount": 26})
+            "goal": "complete_levels", "goal_amount": 26})
         self.assertEqual(len(ids), len(LEVELS))
         self.assertEqual(need, 26)
 

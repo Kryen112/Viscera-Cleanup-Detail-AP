@@ -587,10 +587,6 @@ class TestFewStartingLevels(VCDTestBase):
     options = {"starting_levels": 3}
 
 
-class TestEmployeeGoal(VCDTestBase):
-    options = {"goal": "employee_of_the_month", "goal_amount": 5}
-
-
 class TestFindBobGoal(VCDTestBase):
     options = {"goal": "find_bob"}
 
@@ -750,14 +746,6 @@ class TestRandomizedPoolLevelGoal(VCDTestBase):
     def test_option_value_reflects_the_drawn_pool(self):
         self.assertEqual({DISPLAY_BY_MAP[m] for m in self.world.pooled_maps},
                          self.world.options.level_pool.value)
-
-
-class TestRandomizedPoolEmployeeGoal(VCDTestBase):
-    options = {"randomize_level_pool": True, "goal": "employee_of_the_month",
-               "goal_amount": 6}
-
-    def test_pool_is_large_enough_for_the_goal(self):
-        self.assertGreaterEqual(len(self.world.pooled_maps), 6)
 
 
 class TestRandomizedPoolCollectiblesGoal(VCDTestBase):
