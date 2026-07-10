@@ -11,9 +11,10 @@
 // Cleanliness is the game's own value: 1 - FinalPenalty / StartingCleanupScore,
 // where the punchout handler's ProcessMapState recomputes FinalPenalty. Every
 // per-map handler extends VCPunchoutHandler_General, which owns those fields.
-// Two Digsite adjustments ride on top: the crate stacking zones widen to the
-// crate archetypes the level spawns, and the published value credits partial
-// sand pit fill gradually (see PublishCleanliness).
+// Three adjustments ride on top: the Digsite crate stacking zones widen to
+// the crate archetypes the level spawns, and the published value credits
+// partial sand pit fill (Digsite and Penumbra) and partial seed bed
+// restoration (Greenhouse) gradually (see PublishCleanliness).
 //
 // Level access is gated two ways: the curated menu (VCGameViewportClient_Archipelago
 // hides locked levels from the list) is the front door, and EnforceLevelGate here
@@ -2619,6 +2620,8 @@ function PublishCleanliness()
     local VCMapInfo MapInfo;
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
     local VCSandTrap SandTrap;
+    local VCSeedBed SeedBed;
+    local int SeedBedTotal, SeedBedRestored;
     local float LivePenalty, SandFilledSum, SandFillMaxSum;
     local float clean;
     local int percent;
@@ -2640,12 +2643,13 @@ function PublishCleanliness()
     Handler.ProcessMapState(self, None);
     LivePenalty = Handler.FinalPenalty;
 
-    // The Digsite handler scores the sand pits as one flat infraction while
-    // any pit is uncovered, so vanilla credits nothing until every pit is
-    // full. Credit the filled share gradually so each shovel of sand moves
-    // the readout; the value meets the game's own score the moment the last
-    // pit tops off. Only the Digsite places sand traps; on any other map the
-    // sums stay zero and nothing changes.
+    // The Digsite and Darkening handlers score the sand pits as one flat
+    // infraction (the same bit on both) while any pit is uncovered, so
+    // vanilla credits nothing until every pit is full. Credit the filled
+    // share gradually so each shovel of sand moves the readout; the value
+    // meets the game's own score the moment the last pit tops off. Only
+    // those two maps place sand traps; on any other map the sums stay zero
+    // and nothing changes, whatever that map's handler means by the bit.
     if ((Handler.BitCode & class'VCPunchoutHandler_Digsite'.const.RESULT_SandTrap) != 0)
     {
         foreach AllActors(class'VCSandTrap', SandTrap)
@@ -2658,6 +2662,27 @@ function PublishCleanliness()
             LivePenalty -= Handler.GetPenaltyFor(None,
                 class'VCPunchoutHandler_Digsite'.const.RESULT_SandTrap)
                 * FClamp(SandFilledSum / SandFillMaxSum, 0.0, 1.0);
+        }
+    }
+
+    // The Greenhouse handler scores the seed beds the same way: one flat
+    // infraction while any bed is unplanted. Credit the restored share
+    // gradually, so each planted seed moves the readout. Only the Greenhouse
+    // places seed beds; elsewhere the count stays zero and nothing changes,
+    // whatever that map's handler means by the bit.
+    if ((Handler.BitCode & class'VCPunchoutHandler_Greenhouse'.const.RESULT_Beds) != 0)
+    {
+        foreach AllActors(class'VCSeedBed', SeedBed)
+        {
+            SeedBedTotal += 1;
+            if (SeedBed.IsRestored())
+                SeedBedRestored += 1;
+        }
+        if (SeedBedTotal > 0)
+        {
+            LivePenalty -= Handler.GetPenaltyFor(None,
+                class'VCPunchoutHandler_Greenhouse'.const.RESULT_Beds)
+                * (float(SeedBedRestored) / float(SeedBedTotal));
         }
     }
 
