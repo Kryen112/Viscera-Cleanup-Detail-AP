@@ -332,12 +332,18 @@ class VCDWorld(World):
                     placed += 1
             # The Self-Cleaning Mop and the Squeaky Clean Boots are always
             # created, one of each per pooled level, independent of toolsanity.
+            # A hard-start level's boots start granted under
+            # hard_start_squeaky_boots, so the hands opening tracks no prints.
             self.multiworld.itempool.append(
                 self.create_item(self_cleaning_mop_name(display)))
             placed += 1
-            self.multiworld.itempool.append(
-                self.create_item(squeaky_boots_name(display)))
-            placed += 1
+            boots = self.create_item(squeaky_boots_name(display))
+            if (map_name in self.hard_start_maps
+                    and self.options.hard_start_squeaky_boots):
+                self.multiworld.push_precollected(boots)
+            else:
+                self.multiworld.itempool.append(boots)
+                placed += 1
         active_locations = sum(
             len(self._enabled_locations_for(m)) for m in self.pooled_maps)
         filler_slots = active_locations - placed

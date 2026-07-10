@@ -64,6 +64,15 @@ class RandomStartingKit(Toggle):
     display_name = "Random starting kit"
 
 
+class HardStartSqueakyBoots(DefaultOnToggle):
+    """With random_starting_kit on, a level that rolls the hands and
+    incinerator start also starts with its Squeaky Clean Boots, so the
+    janitor tracks no bloody footprints while the mop is still locked. That
+    level's boots item is granted up front instead of entering the pool.
+    On by default. Does nothing without random_starting_kit."""
+    display_name = "Hard start Squeaky Clean Boots"
+
+
 class TrapPercentage(Range):
     """The share of filler items that become traps: a mess dump near the
     janitor, a spilled bucket, thirty seconds of walking at half or double
@@ -178,6 +187,7 @@ class VCDOptions(PerGameCommonOptions):
     speedrunsanity: Speedrunsanity
     toolsanity: Toolsanity
     random_starting_kit: RandomStartingKit
+    hard_start_squeaky_boots: HardStartSqueakyBoots
     trap_percentage: TrapPercentage
     useful_percentage: UsefulPercentage
     death_link: VCDDeathLink

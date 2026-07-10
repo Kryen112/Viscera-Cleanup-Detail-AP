@@ -393,6 +393,22 @@ class TestRandomStartingKit(VCDTestBase):
         self.assertEqual(self.world.fill_slot_data()["hard_start_maps"],
                          sorted(self.world.hard_start_maps))
 
+    def test_hard_start_levels_start_with_their_boots(self):
+        # hard_start_squeaky_boots is on by default: a hard-start level's
+        # Squeaky Clean Boots start granted instead of entering the pool.
+        from ..items import squeaky_boots_name
+        pooled = [item.name for item in self.multiworld.itempool]
+        precollected = [item.name for item in
+                        self.multiworld.precollected_items[self.player]]
+        for map_name in self.world.pooled_maps:
+            name = squeaky_boots_name(DISPLAY_BY_MAP[map_name])
+            if map_name in self.world.hard_start_maps:
+                self.assertIn(name, precollected, map_name)
+                self.assertNotIn(name, pooled, map_name)
+            else:
+                self.assertNotIn(name, precollected, map_name)
+                self.assertEqual(pooled.count(name), 1, map_name)
+
     def test_clean_mop_classifies_progression_only_on_hard_start_levels(self):
         from BaseClasses import ItemClassification
         from ..items import self_cleaning_mop_name
@@ -425,6 +441,21 @@ class TestRandomStartingKit(VCDTestBase):
             base + [tool_item_name(display, "SloshOMatic")])))
         self.assertTrue(punch.can_reach(self.state_with(
             base + [self_cleaning_mop_name(display)])))
+
+
+class TestHardStartBootsOff(VCDTestBase):
+    options = {"random_starting_kit": True,
+               "hard_start_squeaky_boots": False}
+
+    def test_every_boots_item_stays_in_the_pool(self):
+        from ..items import squeaky_boots_name
+        pooled = [item.name for item in self.multiworld.itempool]
+        precollected = [item.name for item in
+                        self.multiworld.precollected_items[self.player]]
+        for map_name in self.world.pooled_maps:
+            name = squeaky_boots_name(DISPLAY_BY_MAP[map_name])
+            self.assertNotIn(name, precollected, map_name)
+            self.assertEqual(pooled.count(name), 1, map_name)
 
 
 class TestStep1(VCDTestBase):
