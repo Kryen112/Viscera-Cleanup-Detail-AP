@@ -122,6 +122,10 @@ class VCDWorld(World):
     item_name_groups = ITEM_GROUPS
     location_name_groups = LOCATION_GROUPS
 
+    # The Universal Tracker regenerates this world from slot_data alone (see
+    # interpret_slot_data), so it needs no yaml on hand.
+    ut_can_gen_without_yaml = True
+
     # Per-seed state assigned in generate_early; never class-level, or two
     # players' worlds in one multiworld would cross-talk.
     started_maps: set[str]
@@ -175,7 +179,49 @@ class VCDWorld(World):
                 pool.add(carriers.pop())
         return [m for m in candidates if m in pool]
 
+    @staticmethod
+    def interpret_slot_data(slot_data: dict) -> dict:
+        """Universal Tracker hook. Returning the slot_data asks the tracker
+        to regenerate this world with it passed through, so generate_early
+        replays the played seed's rolls instead of rerolling them."""
+        return slot_data
+
+    def _restore_rolled_state(self, slot_data: dict) -> None:
+        """Rebuild the state generate_early rolls from a played seed's
+        slot_data, so a tracker regeneration matches that seed exactly. The
+        world-shaping options come along too, so the regeneration holds even
+        without the seed's yaml."""
+        self.options.goal.value = type(self.options.goal).options[
+            slot_data["goal"]]
+        self.options.goal_amount.value = int(slot_data["goal_amount"])
+        self.options.milestone_step.value = int(slot_data["milestone_step"])
+        self.options.above_and_beyond.value = int(
+            bool(slot_data["above_and_beyond"]))
+        self.options.speedrunsanity.value = int(
+            bool(slot_data["speedrunsanity"]))
+        self.options.toolsanity.value = int(bool(slot_data["toolsanity"]))
+        # Slot data from builds without the key leaves the option as parsed.
+        boots = slot_data.get("hard_start_squeaky_boots")
+        if boots is not None:
+            self.options.hard_start_squeaky_boots.value = int(bool(boots))
+        self.pooled_maps = list(slot_data["pooled_maps"])
+        pooled = set(self.pooled_maps)
+        self.bob_chain_pooled = pooled.issuperset(
+            BOB_NOTE_MAPS + [BOB_ALTAR_MAP])
+        self.hard_start_maps = set(slot_data["hard_start_maps"])
+        self.progression_clean_mop_items = frozenset(
+            self_cleaning_mop_name(DISPLAY_BY_MAP[m])
+            for m in self.hard_start_maps)
+        self.started_maps = set(slot_data["started_maps"])
+
     def generate_early(self) -> None:
+        # A Universal Tracker regeneration runs on its own random seed, so it
+        # replays the recorded rolls from slot_data instead of rerolling.
+        passthrough = getattr(
+            self.multiworld, "re_gen_passthrough", {}).get(self.game)
+        if passthrough is not None:
+            self._restore_rolled_state(passthrough)
+            return
         goal = self.options.goal.current_key
         amount = int(self.options.goal_amount.value)
         if goal == "find_bob":
@@ -570,6 +616,8 @@ class VCDWorld(World):
             "above_and_beyond": bool(self.options.above_and_beyond),
             "speedrunsanity": bool(self.options.speedrunsanity),
             "toolsanity": bool(self.options.toolsanity),
+            "hard_start_squeaky_boots": bool(
+                self.options.hard_start_squeaky_boots),
             "hard_start_maps": sorted(self.hard_start_maps),
             "started_maps": sorted(self.started_maps),
             "pooled_maps": list(self.pooled_maps),

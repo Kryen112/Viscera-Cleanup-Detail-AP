@@ -6,9 +6,13 @@ tests, so each exercises a full generation. TestData needs no world.
 
 import unittest
 
+from test.general import gen_steps, setup_multiworld
+
 from Options import OptionError
+from worlds.AutoWorld import call_all
 
 from .bases import VCDTestBase
+from .. import VCDWorld
 from ..collectibles import (BOB_NOTE_MAPS, BOB_NOTES, COLLECTIBLE_EXTRA_TOOLS,
                             COLLECTIBLES, GATED_COLLECTIBLE_TOKENS)
 from ..items import ITEM_NAME_TO_ID, TOOL_ITEMS, access_item_name
@@ -441,6 +445,68 @@ class TestRandomStartingKit(VCDTestBase):
             base + [tool_item_name(display, "SloshOMatic")])))
         self.assertTrue(punch.can_reach(self.state_with(
             base + [self_cleaning_mop_name(display)])))
+
+
+class TestTrackerRegeneration(VCDTestBase):
+    # A played seed with rolled state a regeneration cannot reroll by luck
+    # alone: random kits, a non-default step, the over-100 ladder, and the
+    # find_bob pool.
+    options = {"random_starting_kit": True, "milestone_step": 2,
+               "above_and_beyond": True, "goal": "find_bob",
+               "level_pool": {"Unearthly Excavation"}}
+
+    def _tracker_regeneration(self, slot_data: dict) -> VCDWorld:
+        """A second generation the way the Universal Tracker runs one:
+        default options (no yaml on hand), a different random seed, and the
+        played seed's slot_data passed through."""
+        multiworld = setup_multiworld(VCDWorld, steps=(),
+                                      seed=self.multiworld.seed + 1)
+        multiworld.re_gen_passthrough = {
+            VCDWorld.game: VCDWorld.interpret_slot_data(slot_data)}
+        for step in gen_steps:
+            call_all(multiworld, step)
+        return multiworld.worlds[1]
+
+    def test_regeneration_replays_the_played_seed(self):
+        regenerated = self._tracker_regeneration(self.world.fill_slot_data())
+        self.assertEqual(regenerated.pooled_maps, self.world.pooled_maps)
+        self.assertEqual(regenerated.started_maps, self.world.started_maps)
+        self.assertEqual(regenerated.hard_start_maps,
+                         self.world.hard_start_maps)
+        self.assertEqual(regenerated.progression_clean_mop_items,
+                         self.world.progression_clean_mop_items)
+        self.assertEqual(regenerated._step(), self.world._step())
+        self.assertEqual(regenerated.options.goal.current_key, "find_bob")
+        self.assertTrue(regenerated.options.above_and_beyond)
+        self.assertTrue(regenerated.options.toolsanity)
+        self.assertEqual(
+            {loc.name for loc in
+             regenerated.multiworld.get_locations(regenerated.player)},
+            {loc.name for loc in
+             self.multiworld.get_locations(self.player)})
+        self.assertEqual(
+            sorted(item.name for item in
+                   regenerated.multiworld.precollected_items[
+                       regenerated.player]),
+            sorted(item.name for item in
+                   self.multiworld.precollected_items[self.player]))
+
+    def test_slot_data_without_the_boots_key_still_restores(self):
+        # Slot data written before the hard_start_squeaky_boots key existed
+        # leaves the option as parsed (the default here) and restores the
+        # rolled state the same way.
+        slot_data = dict(self.world.fill_slot_data())
+        del slot_data["hard_start_squeaky_boots"]
+        regenerated = self._tracker_regeneration(slot_data)
+        self.assertEqual(regenerated.hard_start_maps,
+                         self.world.hard_start_maps)
+        self.assertTrue(regenerated.options.hard_start_squeaky_boots)
+        self.assertEqual(
+            sorted(item.name for item in
+                   regenerated.multiworld.precollected_items[
+                       regenerated.player]),
+            sorted(item.name for item in
+                   self.multiworld.precollected_items[self.player]))
 
 
 class TestHardStartBootsOff(VCDTestBase):
