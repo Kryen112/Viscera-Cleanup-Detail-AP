@@ -1402,6 +1402,89 @@ function DevClearToolMask(PlayerController Requester)
         $class'VCGameReplicationInfo_Archipelago'.static.DescribeToolMask(CurrentToolsMask()));
 }
 
+// Dev shortcut for the Bob goal: saves the two Digsite storyline stats
+// through the game's own path (VCStatsData.SaveData), so the
+// GlobalStatChanged hook publishes them exactly as the map Kismet does.
+// The gates save first: the stats file rejects a Bob find while the gates
+// flag is unset. Cleanable levels only, so the state stamps a map the
+// client recognizes. The stats persist in GlobalStatsData.sav; without the
+// client's save isolation running, the real career file keeps them.
+function DevForceBobStats(PlayerController Requester)
+{
+    local VCMapInfo MapInfo;
+    local VCStatsData StatsData;
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo == None || MapInfo.bIsOfficeLevel)
+    {
+        Requester.ClientMessage("APBobStats: no cleanable level is loaded.");
+        return;
+    }
+    StatsData = VCStatsData(class'VisceraGame.VCStatsData'.static.LoadAllData());
+    if (StatsData == None)
+    {
+        Requester.ClientMessage("APBobStats: global stats data failed to load.");
+        return;
+    }
+    StatsData.SaveData("bOpenedDigsiteGates", "True");
+    StatsData.SaveData("bFoundBob", "True");
+    // Read back through the stats file, so the message reports what actually
+    // stuck rather than what was asked.
+    Requester.ClientMessage("APBobStats: bOpenedDigsiteGates="
+        $StatsData.GetData("bOpenedDigsiteGates")
+        $" bFoundBob="$StatsData.GetData("bFoundBob"));
+}
+
+// Dev shortcut for the pedestal: spawns the nine Bob note pages in a ring
+// around the requesting janitor, from the game's own archetypes, so the
+// Digsite gates Kismet can run without touring the note levels. The pages
+// count as mess while they sit out, same as placed ones.
+function DevSpawnBobNotes(PlayerController Requester)
+{
+    local VCMapInfo MapInfo;
+    local array<string> PagePaths;
+    local VCDebris_Note PageArchetype;
+    local Rotator RingDirection;
+    local Vector Spot;
+    local int I, SpawnedCount;
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo == None || MapInfo.bIsOfficeLevel)
+    {
+        Requester.ClientMessage("APSpawnBobNotes: no cleanable level is loaded.");
+        return;
+    }
+    if (Requester.Pawn == None)
+    {
+        Requester.ClientMessage("APSpawnBobNotes: no janitor to spawn at.");
+        return;
+    }
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Caduceus01");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Cryo01");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Greenhouse01");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Medbay01");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Robot01");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Sewer01");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Office01");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Office02");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Office03");
+    for (I = 0; I < PagePaths.Length; I++)
+    {
+        PageArchetype = VCDebris_Note(DynamicLoadObject(
+            PagePaths[I], class'VCDebris_Note'));
+        if (PageArchetype == None)
+            continue;
+        RingDirection.Yaw = (I * 65536) / PagePaths.Length;
+        // Waist height, so each page flutters down clear of the floor mesh.
+        Spot = Requester.Pawn.Location
+            + Vector(RingDirection) * 100.0 + vect(0, 0, 32);
+        if (Spawn(PageArchetype.Class,,, Spot,, PageArchetype, true) != None)
+            SpawnedCount++;
+    }
+    Requester.ClientMessage("APSpawnBobNotes: spawned "$SpawnedCount
+        $" of "$PagePaths.Length$" Bob note pages.");
+}
+
 // The measurement scan: walks every mess item the way the punchout handler's
 // starting pass does, sums the penalty per toolsanity category, and reports
 // the machine presence counts. The result drives the apworld's per-level
@@ -2301,7 +2384,7 @@ event GameEnding()
 function SpawnSupplyNearJanitor(class<VCDebris> SupplyClass)
 {
     local VCPawn Janitor;
-    local Vector Start, HitLocation, HitNormal, Offset;
+    local Vector Start, HitLocation, HitNormal, Offset, Spot, SupplyExtent;
     local Actor Floor;
     local int I;
 
@@ -2309,19 +2392,35 @@ function SpawnSupplyNearJanitor(class<VCDebris> SupplyClass)
     if (Janitor == None)
         return;
 
-    for (I = 0; I < 10; I++)
+    // Half-size box around the bin, the larger of the two supplies; a spot
+    // with this much clearance takes either one without clipping anything.
+    SupplyExtent = vect(22, 22, 26);
+
+    for (I = 0; I < 16; I++)
     {
         Offset = VRand() * RandRange(64.0, 160.0);
         Offset.Z = 0.0;
         Start = Janitor.Location + Offset + vect(0, 0, 32);
-        // World-geometry-only trace, straight down.
-        Floor = Trace(HitLocation, HitNormal, Start - vect(0, 0, 512), Start, false);
+        // A candidate the janitor has no clear line to sits behind a wall.
+        if (!FastTrace(Start, Janitor.Location + vect(0, 0, 32)))
+            continue;
+        // Swept-box trace straight down, against actors too, so the spot
+        // rests on top of furniture instead of inside it. HitLocation is the
+        // box center at contact, so the box bottom touches the surface.
+        Floor = Trace(HitLocation, HitNormal, Start - vect(0, 0, 512), Start,
+            true, SupplyExtent);
         if (Floor == None)
             continue;
-        if (Spawn(SupplyClass,,, HitLocation + vect(0, 0, 24)) != None)
+        Spot = HitLocation + vect(0, 0, 2);
+        // Engine encroachment test: a shallow overlap gets nudged clear and a
+        // wedged spot is rejected, so nothing spawns inside a wall.
+        if (!FindSpot(SupplyExtent, Spot))
+            continue;
+        if (Spawn(SupplyClass,,, Spot) != None)
             return;
     }
-    // No clear floor spot took the spawn; drop it from above the janitor.
+    // No clear spot took the spawn; drop it from above the janitor, whose own
+    // footprint is proven open.
     Spawn(SupplyClass,,, Janitor.Location + vect(0, 0, 96));
 }
 

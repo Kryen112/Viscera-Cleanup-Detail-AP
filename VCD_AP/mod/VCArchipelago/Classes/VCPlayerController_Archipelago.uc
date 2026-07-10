@@ -3,8 +3,10 @@
 // PlayerControllerClass; every stock VCPlayerController cast still succeeds.
 //
 // The commands are standalone-only (a co-op guest or host cannot use them)
-// and dev-only: they override the lock state in memory, never the grants
-// file, so a level reload returns to the client-driven state.
+// and dev-only: most override state in memory, never the grants file, so a
+// level reload returns to the client-driven state. APBobStats is the
+// exception; it persists the two storyline stats through the game's own
+// save.
 class VCPlayerController_Archipelago extends VCPlayerController;
 
 // The game mode, when the commands may run: standalone, in Archipelago mode.
@@ -99,6 +101,27 @@ exec function APCleanCoreKit()
     Game = DevCommandGame();
     if (Game != None)
         Game.CleanAllCoreKitMess(self);
+}
+
+// Saves the two Digsite storyline stats through the game's own path, so the
+// Bob goal fires without the pedestal run. The gates land first, then Bob.
+exec function APBobStats()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.DevForceBobStats(self);
+}
+
+// Spawns the nine Bob note pages at the janitor, for a real pedestal run.
+exec function APSpawnBobNotes()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.DevSpawnBobNotes(self);
 }
 
 // Shows every level in the menu and passes the bounce gate for the rest of
