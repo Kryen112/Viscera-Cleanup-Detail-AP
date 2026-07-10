@@ -15,22 +15,25 @@ trophies, per the game's own PostPunchout). The mod publishes each banked
 item's token; tokens are unique across the whole game, so an item carried to
 another level later still maps to its home location.
 
-The Bob chain: six levels hold a Bob note (three more notes are Office
-freebies). All nine notes on the Digsite pedestal open the gates
-(bOpenedDigsiteGates), behind which sit Bob (bFoundBob), the Red Keycard, and
-the Bolter. The gate check, the Find Bob check, and those two collectibles
-therefore require access to the six note levels plus the Digsite; they are the
-only checks that need more than their own level's access item. The Digsite's
-remaining drop (the sand-trap Saber) sits in the open dig area, before the
-gates.
+The Bob chain: six levels hold a Bob note, two more are Office freebies, and
+the ninth lies in the Digsite's open dig area. All nine on the Digsite
+pedestal open the gates (bOpenedDigsiteGates): the pedestal Kismet's
+``VCSeqCon_CompareArchetype`` list holds exactly those nine archetypes, read
+from the map package. Behind the gates sit Bob (bFoundBob), the Red Keycard,
+and the Bolter. The gate check, the Find Bob check, and those two
+collectibles therefore require access to the six note levels plus the
+Digsite; they are the only checks that need more than their own level's
+access item. The Digsite's remaining drop (the sand-trap Saber) also sits in
+the open dig area, before the gates.
 
 The note tokens are the shared archetype names in ``GP_Notes_Arch.Bob``, read
 from the game's own save remap (``VCSaveObject.ReplaceObjectNameString``) and
 confirmed against a live trunk save. The package's other pages are not
 checks, so they stay out of the table and the client ignores their tokens:
-the three Office freebies (``Arc_Page_Bob_Office01..03``), the Digsite's
-behind-the-gates pages (``Arc_Page_Bob_Digsite01..04``), and a plain
-``Arc_Page_Bob01``.
+the Office freebies (``Arc_Page_Bob_Office01..02``, plus an ``Office03``
+story extra the pedestal does not accept), the Digsite's own pages
+(``Arc_Page_Bob_Digsite01`` in the open area, ``02..04`` behind the gates),
+and a plain ``Arc_Page_Bob01``.
 """
 
 from __future__ import annotations

@@ -577,11 +577,12 @@ class VCDWorld(World):
                     self.get_location(name).access_rule = rule
 
         # The Digsite gate needs all nine Bob notes on the pedestal: six live
-        # in the note levels (three are Office freebies), and Bob, the Red
-        # Keycard, and the Bolter sit behind the gate. So those checks need
-        # every note level on top of the Digsite access their region already
-        # requires; under toolsanity they also need each note level's clean
-        # kit, because a note banks on a not-fired punch-out on its own level.
+        # in the note levels, two are Office freebies, and one lies in the
+        # Digsite itself. Bob, the Red Keycard, and the Bolter sit behind the
+        # gate. So those checks need every note level on top of the Digsite
+        # access their region already requires; under toolsanity they also
+        # need each note level's clean kit, because a note banks on a
+        # not-fired punch-out on its own level.
         # They only exist when the pool holds the whole chain, whose access
         # items are all progression, so they are guaranteed reachable.
         if self.bob_chain_pooled:

@@ -1438,10 +1438,12 @@ function DevForceBobStats(PlayerController Requester)
         $" bFoundBob="$StatsData.GetData("bFoundBob"));
 }
 
-// Dev shortcut for the pedestal: spawns the nine Bob note pages in a ring
-// around the requesting janitor, from the game's own archetypes, so the
-// Digsite gates Kismet can run without touring the note levels. The pages
-// count as mess while they sit out, same as placed ones.
+// Dev shortcut for the pedestal: spawns the nine pages its archetype list
+// accepts (the six level notes, the two Office freebies, and the Digsite's
+// own open-area page) in a ring around the requesting janitor, from the
+// game's own archetypes, so the Digsite gates Kismet can run without
+// touring the note levels. The pages count as mess while they sit out,
+// same as placed ones.
 function DevSpawnBobNotes(PlayerController Requester)
 {
     local VCMapInfo MapInfo;
@@ -1470,7 +1472,7 @@ function DevSpawnBobNotes(PlayerController Requester)
     PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Sewer01");
     PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Office01");
     PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Office02");
-    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Office03");
+    PagePaths.AddItem("GP_Notes_Arch.Bob.Arc_Page_Bob_Digsite01");
     for (I = 0; I < PagePaths.Length; I++)
     {
         PageArchetype = VCDebris_Note(DynamicLoadObject(
