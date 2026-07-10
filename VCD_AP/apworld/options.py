@@ -132,19 +132,20 @@ class LevelPool(OptionSet):
 class RandomizeLevelPool(Toggle):
     """Play a random subset of level_pool instead of the whole set. Each seed
     draws the subset size at random, from the smallest set the goal allows
-    (goal_amount levels for complete_levels, enough collectible-holding levels
-    for collect_collectibles, the Bob chain for find_bob) up to the whole
-    pool. Off by default."""
+    (goal_amount_levels levels for complete_levels, enough
+    collectible-holding levels for collect_collectibles, the Bob chain for
+    find_bob) up to the whole pool. Off by default."""
     display_name = "Randomize level pool"
 
 
 class Goal(Choice):
     """The win condition.
 
-    complete_levels: punch out of `goal_amount` levels.
+    complete_levels: punch out of `goal_amount_levels` levels.
     find_bob: follow the notes and find Bob in the Digsite (needs the six
     note levels plus the Digsite).
-    collect_collectibles: bank `goal_amount` collectibles in the trunk.
+    collect_collectibles: bank `goal_amount_collectibles` collectibles in
+    the trunk.
     """
     display_name = "Goal"
     option_complete_levels = 0
@@ -153,17 +154,27 @@ class Goal(Choice):
     default = 0
 
 
-class GoalAmount(NamedRange):
-    """How many levels (or collectibles) the goal needs. It must fit the level
-    pool: asking for more levels than the pool holds, or more collectibles than
-    the pooled levels hold, fails generation. `all` is every level. Ignored by
-    find_bob."""
-    display_name = "Goal amount"
+class GoalAmountLevels(NamedRange):
+    """How many levels the complete_levels goal needs. It must fit the level
+    pool: asking for more levels than the pool holds fails generation. `all`
+    is every level. The other goals ignore it."""
+    display_name = "Goal amount levels"
+    range_start = 1
+    range_end = 26
+    default = 26
+    special_range_names = {"few": 5, "half": 13, "most": 20, "all": 26}
+
+
+class GoalAmountCollectibles(NamedRange):
+    """How many collectibles the collect_collectibles goal needs. It must fit
+    the level pool: asking for more collectibles than the pooled levels hold
+    fails generation. `all` is every collectible. The other goals ignore
+    it."""
+    display_name = "Goal amount collectibles"
     range_start = 1
     range_end = 39
-    default = 26
-    special_range_names = {"few": 5, "half": 13, "most": 20, "all": 26,
-                           "all_collectibles": 39}
+    default = 39
+    special_range_names = {"few": 5, "half": 20, "most": 30, "all": 39}
 
 
 class StartingLevels(NamedRange):
@@ -191,5 +202,6 @@ class VCDOptions(PerGameCommonOptions):
     death_link: VCDDeathLink
     trap_link: TrapLink
     goal: Goal
-    goal_amount: GoalAmount
+    goal_amount_levels: GoalAmountLevels
+    goal_amount_collectibles: GoalAmountCollectibles
     starting_levels: StartingLevels

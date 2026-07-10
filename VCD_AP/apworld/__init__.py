@@ -193,7 +193,12 @@ class VCDWorld(World):
         without the seed's yaml."""
         self.options.goal.value = type(self.options.goal).options[
             slot_data["goal"]]
-        self.options.goal_amount.value = int(slot_data["goal_amount"])
+        # Slot data carries the one amount the goal reads.
+        amount = int(slot_data["goal_amount"])
+        if self.options.goal.current_key == "collect_collectibles":
+            self.options.goal_amount_collectibles.value = amount
+        else:
+            self.options.goal_amount_levels.value = amount
         self.options.milestone_step.value = int(slot_data["milestone_step"])
         self.options.above_and_beyond.value = int(
             bool(slot_data["above_and_beyond"]))
@@ -223,7 +228,7 @@ class VCDWorld(World):
             self._restore_rolled_state(passthrough)
             return
         goal = self.options.goal.current_key
-        amount = int(self.options.goal_amount.value)
+        amount = self._goal_amount()
         if goal == "find_bob":
             # The goal needs the note levels and the Digsite; force them in.
             self.options.level_pool.value |= {
@@ -237,8 +242,10 @@ class VCDWorld(World):
         cap = (self._countable_collectibles(set(candidates))
                if goal == "collect_collectibles" else len(candidates))
         if goal != "find_bob" and amount > cap:
+            knob = ("goal_amount_collectibles"
+                    if goal == "collect_collectibles" else "goal_amount_levels")
             raise OptionError(
-                f"{self.player_name}: goal_amount {amount} needs more than "
+                f"{self.player_name}: {knob} {amount} needs more than "
                 f"the level pool holds ({cap}).")
         if self.options.randomize_level_pool:
             candidates = self._random_pool(candidates, goal, amount)
@@ -441,11 +448,18 @@ class VCDWorld(World):
             self.multiworld.itempool.remove(item)
             location.place_locked_item(item)
 
+    def _goal_amount(self) -> int:
+        """The amount knob the chosen goal reads. find_bob reads neither and
+        falls through to the level knob, which it then ignores."""
+        if self.options.goal.current_key == "collect_collectibles":
+            return int(self.options.goal_amount_collectibles.value)
+        return int(self.options.goal_amount_levels.value)
+
     def _goal_locations(self) -> tuple[list[str], int]:
         """The locations whose reachability defines victory, and how many are
         needed."""
         goal = self.options.goal.current_key
-        amount = int(self.options.goal_amount.value)
+        amount = self._goal_amount()
         pooled = set(self.pooled_maps)
         if goal == "find_bob":
             # Find Bob's own access rule carries the note levels plus the Digsite.
@@ -609,7 +623,7 @@ class VCDWorld(World):
         # The mod and client learn the seed's shape only through slot_data.
         return {
             "goal": self.options.goal.current_key,
-            "goal_amount": int(self.options.goal_amount.value),
+            "goal_amount": self._goal_amount(),
             "milestone_step": self._step(),
             "above_and_beyond": bool(self.options.above_and_beyond),
             "speedrunsanity": bool(self.options.speedrunsanity),

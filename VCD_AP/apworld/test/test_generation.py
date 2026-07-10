@@ -23,6 +23,7 @@ from ..locations import (BOB_GATED_LOCATIONS, DIGSITE_GATES_LOCATION,
                          collectible_name, employee_of_the_month_name,
                          milestone_enabled, milestone_name, over_100_rungs,
                          punch_out_name, speedrun_name, top_rung)
+from ..options import GoalAmountLevels
 from ..toolsanity import tool_item_name
 
 
@@ -355,7 +356,7 @@ class TestStartingKeystoneEarly(VCDTestBase):
     # A single high-mop starting level (Waste Disposal, 73 percent moppable)
     # deterministically has many tool-free rungs, so the placement always runs.
     options = {"starting_levels": 1, "goal": "complete_levels",
-               "goal_amount": 1, "level_pool": {"Waste Disposal"}}
+               "goal_amount_levels": 1, "level_pool": {"Waste Disposal"}}
 
     def test_started_level_keystone_is_placed_in_its_own_early_rung(self):
         from ..toolsanity import free_kit_rungs, tool_item_name
@@ -447,6 +448,19 @@ class TestRandomStartingKit(VCDTestBase):
             base + [self_cleaning_mop_name(display)])))
 
 
+def tracker_regeneration(test: VCDTestBase, slot_data: dict) -> VCDWorld:
+    """A second generation the way the Universal Tracker runs one: default
+    options (no yaml on hand), a different random seed, and the played
+    seed's slot_data passed through."""
+    multiworld = setup_multiworld(VCDWorld, steps=(),
+                                  seed=test.multiworld.seed + 1)
+    multiworld.re_gen_passthrough = {
+        VCDWorld.game: VCDWorld.interpret_slot_data(slot_data)}
+    for step in gen_steps:
+        call_all(multiworld, step)
+    return multiworld.worlds[1]
+
+
 class TestTrackerRegeneration(VCDTestBase):
     # A played seed with rolled state a regeneration cannot reroll by luck
     # alone: random kits, a non-default step, the over-100 ladder, and the
@@ -455,20 +469,8 @@ class TestTrackerRegeneration(VCDTestBase):
                "above_and_beyond": True, "goal": "find_bob",
                "level_pool": {"Unearthly Excavation"}}
 
-    def _tracker_regeneration(self, slot_data: dict) -> VCDWorld:
-        """A second generation the way the Universal Tracker runs one:
-        default options (no yaml on hand), a different random seed, and the
-        played seed's slot_data passed through."""
-        multiworld = setup_multiworld(VCDWorld, steps=(),
-                                      seed=self.multiworld.seed + 1)
-        multiworld.re_gen_passthrough = {
-            VCDWorld.game: VCDWorld.interpret_slot_data(slot_data)}
-        for step in gen_steps:
-            call_all(multiworld, step)
-        return multiworld.worlds[1]
-
     def test_regeneration_replays_the_played_seed(self):
-        regenerated = self._tracker_regeneration(self.world.fill_slot_data())
+        regenerated = tracker_regeneration(self, self.world.fill_slot_data())
         self.assertEqual(regenerated.pooled_maps, self.world.pooled_maps)
         self.assertEqual(regenerated.started_maps, self.world.started_maps)
         self.assertEqual(regenerated.hard_start_maps,
@@ -497,7 +499,7 @@ class TestTrackerRegeneration(VCDTestBase):
         # rolled state the same way.
         slot_data = dict(self.world.fill_slot_data())
         del slot_data["hard_start_squeaky_boots"]
-        regenerated = self._tracker_regeneration(slot_data)
+        regenerated = tracker_regeneration(self, slot_data)
         self.assertEqual(regenerated.hard_start_maps,
                          self.world.hard_start_maps)
         self.assertTrue(regenerated.options.hard_start_squeaky_boots)
@@ -507,6 +509,18 @@ class TestTrackerRegeneration(VCDTestBase):
                        regenerated.player]),
             sorted(item.name for item in
                    self.multiworld.precollected_items[self.player]))
+
+
+class TestTrackerRegenerationCollectibleAmount(VCDTestBase):
+    options = {"goal": "collect_collectibles", "goal_amount_collectibles": 7}
+
+    def test_restore_routes_the_amount_to_the_collectible_knob(self):
+        # Slot data carries one goal_amount; the restore path must hand it
+        # to the knob the goal reads, not the level knob.
+        regenerated = tracker_regeneration(self, self.world.fill_slot_data())
+        self.assertEqual(
+            int(regenerated.options.goal_amount_collectibles.value), 7)
+        self.assertEqual(regenerated._goal_amount(), 7)
 
 
 class TestHardStartBootsOff(VCDTestBase):
@@ -530,7 +544,7 @@ class TestStep1(VCDTestBase):
     options = {"milestone_step": 1, "above_and_beyond": True,
                "level_pool": {"Athena's Wrath", "Cryogenesis",
                               "Waste Disposal"},
-               "goal_amount": 3}
+               "goal_amount_levels": 3}
 
     def test_fine_rungs_exist_and_the_ceiling_stays_on_the_5_grid(self):
         names = {loc.name for loc in self.multiworld.get_locations(self.player)}
@@ -546,7 +560,7 @@ class TestStep2(VCDTestBase):
     options = {"milestone_step": 2,
                "level_pool": {"Athena's Wrath", "Cryogenesis",
                               "Waste Disposal"},
-               "goal_amount": 3}
+               "goal_amount_levels": 3}
 
     def test_even_rungs_only(self):
         names = {loc.name for loc in self.multiworld.get_locations(self.player)}
@@ -560,7 +574,7 @@ class TestStep10HardStartOpener(VCDTestBase):
     # would otherwise abort the seed.
     options = {"milestone_step": 10, "random_starting_kit": True,
                "level_pool": {"Athena's Wrath", "Cryogenesis"},
-               "goal_amount": 2}
+               "goal_amount_levels": 2}
 
     def test_all_hard_roll_softens_one_level(self):
         from ..toolsanity import free_kit_rungs
@@ -601,7 +615,7 @@ class TestFindBobGoal(VCDTestBase):
 
 
 class TestCollectiblesGoal(VCDTestBase):
-    options = {"goal": "collect_collectibles", "goal_amount": 3}
+    options = {"goal": "collect_collectibles", "goal_amount_collectibles": 3}
 
     def test_completion_counts_reachable_collectibles(self):
         # Cryogenesis and Gravity Drive hold two collectibles each; the two
@@ -619,15 +633,21 @@ class TestCollectiblesGoal(VCDTestBase):
 
 class TestCollectiblesGoalFullAmount(VCDTestBase):
     # 39 is the collectible cap, so it survives the clamp and must still fill.
-    options = {"goal": "collect_collectibles", "goal_amount": 39}
+    options = {"goal": "collect_collectibles", "goal_amount_collectibles": 39}
 
     def test_amount_kept(self):
-        self.assertEqual(int(self.world.options.goal_amount.value), 39)
+        self.assertEqual(
+            int(self.world.options.goal_amount_collectibles.value), 39)
+
+    def test_slot_data_carries_the_collectible_amount(self):
+        # Slot data resolves the per-goal knobs into the one amount the
+        # goal reads, so the client keeps a single goal_amount key.
+        self.assertEqual(self.world.fill_slot_data()["goal_amount"], 39)
 
 
 class TestLevelPool(VCDTestBase):
     options = {"level_pool": {"Splatter Station", "Cryogenesis", "Gravity Drive"},
-               "goal_amount": 3}
+               "goal_amount_levels": 3}
 
     def test_only_pooled_levels_have_locations(self):
         maps = {LOCATION_MAP[loc.name]
@@ -651,7 +671,7 @@ class TestLevelPoolDigsiteWithoutNotes(VCDTestBase):
     # The Digsite without every note level: the gate can never open, so the
     # gate-locked checks stay out while the open-area drops stay in.
     options = {"level_pool": {"Unearthly Excavation", "Splatter Station"},
-               "goal_amount": 2}
+               "goal_amount_levels": 2}
 
     def test_gated_checks_absent_open_area_drops_present(self):
         names = {loc.name for loc in self.multiworld.get_locations(self.player)}
@@ -676,7 +696,7 @@ class TestFindBobGoalForcesPool(VCDTestBase):
 
 class TestCollectiblesGoalPooled(VCDTestBase):
     # Cryogenesis and Gravity Drive hold two collectibles each, so four fit.
-    options = {"goal": "collect_collectibles", "goal_amount": 4,
+    options = {"goal": "collect_collectibles", "goal_amount_collectibles": 4,
                "level_pool": {"Cryogenesis", "Gravity Drive"}}
 
     def test_completion_needs_both_pooled_levels(self):
@@ -699,11 +719,14 @@ class TestPoolOptionErrors(unittest.TestCase):
     def test_level_goal_over_pool_raises(self):
         with self.assertRaises(OptionError):
             self._generate({"level_pool": {"Splatter Station", "Cryogenesis"},
-                            "goal": "complete_levels", "goal_amount": 3})
+                            "goal": "complete_levels",
+                            "goal_amount_levels": 3})
 
-    def test_level_goal_over_level_count_raises(self):
-        with self.assertRaises(OptionError):
-            self._generate({"goal": "complete_levels", "goal_amount": 39})
+    def test_level_goal_amount_caps_at_the_level_count(self):
+        # 39 collectibles exist but only 26 levels; the level knob's own
+        # range rejects an amount past the level count.
+        with self.assertRaises(Exception):
+            GoalAmountLevels.from_any(39)
 
     def test_default_goal_amount_over_small_pool_raises(self):
         # The default amount is every level; a two-level pool cannot carry it.
@@ -714,13 +737,15 @@ class TestPoolOptionErrors(unittest.TestCase):
         # The two pooled levels hold four collectibles between them.
         with self.assertRaises(OptionError):
             self._generate({"level_pool": {"Cryogenesis", "Gravity Drive"},
-                            "goal": "collect_collectibles", "goal_amount": 5})
+                            "goal": "collect_collectibles",
+                            "goal_amount_collectibles": 5})
 
     def test_collectible_goal_without_collectible_levels_raises(self):
         # Splatter Station holds no collectibles at all.
         with self.assertRaises(OptionError):
             self._generate({"level_pool": {"Splatter Station"},
-                            "goal": "collect_collectibles", "goal_amount": 1})
+                            "goal": "collect_collectibles",
+                            "goal_amount_collectibles": 1})
 
     def test_randomized_pool_cannot_rescue_an_impossible_goal(self):
         # The draw only picks from the candidates, so a candidate set without
@@ -728,16 +753,17 @@ class TestPoolOptionErrors(unittest.TestCase):
         with self.assertRaises(OptionError):
             self._generate({"level_pool": {"Splatter Station"},
                             "randomize_level_pool": True,
-                            "goal": "collect_collectibles", "goal_amount": 1})
+                            "goal": "collect_collectibles",
+                            "goal_amount_collectibles": 1})
 
     def test_empty_pool_raises(self):
         with self.assertRaises(OptionError):
-            self._generate({"level_pool": set(), "goal_amount": 1})
+            self._generate({"level_pool": set(), "goal_amount_levels": 1})
 
 
 class TestRandomizedPoolLevelGoal(VCDTestBase):
     options = {"randomize_level_pool": True, "goal": "complete_levels",
-               "goal_amount": 4}
+               "goal_amount_levels": 4}
 
     def test_pool_is_large_enough_for_the_goal(self):
         self.assertGreaterEqual(len(self.world.pooled_maps), 4)
@@ -750,7 +776,7 @@ class TestRandomizedPoolLevelGoal(VCDTestBase):
 
 class TestRandomizedPoolCollectiblesGoal(VCDTestBase):
     options = {"randomize_level_pool": True, "goal": "collect_collectibles",
-               "goal_amount": 5}
+               "goal_amount_collectibles": 5}
 
     def test_pool_carries_enough_collectibles(self):
         pooled = set(self.world.pooled_maps)
@@ -762,7 +788,7 @@ class TestRandomizedPoolCollectiblesGoal(VCDTestBase):
 
 class TestRandomizedPoolAllCollectibles(VCDTestBase):
     options = {"randomize_level_pool": True, "goal": "collect_collectibles",
-               "goal_amount": 39}
+               "goal_amount_collectibles": 39}
 
     def test_the_gate_chain_is_forced_in(self):
         # 39 needs the gate-locked drops, so the whole chain joins.
@@ -783,7 +809,7 @@ class TestRandomizedPoolFromCandidates(VCDTestBase):
     options = {"randomize_level_pool": True,
                "level_pool": {"Splatter Station", "Cryogenesis", "Gravity Drive",
                               "Frostbite", "Penumbra"},
-               "goal": "complete_levels", "goal_amount": 2}
+               "goal": "complete_levels", "goal_amount_levels": 2}
 
     def test_pool_stays_inside_the_candidates_and_fits_the_goal(self):
         candidates = {"VC_SplatterStation", "VC_Cryo", "VC_ZeroG_New",
@@ -793,7 +819,7 @@ class TestRandomizedPoolFromCandidates(VCDTestBase):
 
 
 class TestCompleteFew(VCDTestBase):
-    options = {"goal": "complete_levels", "goal_amount": 5,
+    options = {"goal": "complete_levels", "goal_amount_levels": 5,
                "milestone_step": 10}
 
 
