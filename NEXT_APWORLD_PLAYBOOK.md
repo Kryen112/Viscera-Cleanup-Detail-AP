@@ -159,7 +159,9 @@ If the world talks to a game mod over a socket:
   racy, and it is easier to do from the start than to retrofit.
 - The person who can run the game and paste real logs is a required part of the
   loop. Design your verification so a single in-game run produces the evidence
-  you need, because each run has a cost.
+  you need, because each run has a cost. For pure measurements (constants,
+  scoring behavior, physics), a headless probe (B.9) can take the human out of
+  the loop entirely; spend the human runs on player-facing verification.
 
 ---
 
@@ -365,6 +367,17 @@ This is the single biggest time saver, and it applies to UE1 through UE3.
   it, then decompile from the command line so an agent can read the output:
   `UEExplorer.exe <path\to\Package.u> -console -silent -export=classes`. It writes
   a folder of decompiled `.uc` files (one per class) that you read directly.
+- The console export lands under UE Explorer's own profile folder
+  (`%APPDATA%\EliotVU\UE Explorer\<version>\Exported`, one subfolder per
+  package), NOT next to the source package. Look there, or you will conclude
+  the export silently failed.
+- Decompiling gets you code. For **data** (defaultproperties values, archetype
+  lists, per-actor properties inside big map packages), a small parser over the
+  package's name/import/export tables reads tagged properties straight out of
+  the compiled file: locate the property's name-table index inside an export's
+  serial range. This is a productive middle path between grep and the editor;
+  it is how a full scoring audit of every shipped map runs without opening the
+  game once.
 - Decompile the game's own packages, not just the engine ones. For us the
   scoring logic lived in a content package (`VisceraGameContent`), while the base
   classes in the game package were empty stubs. Follow the class up its parents
@@ -398,6 +411,17 @@ You do not need the game's UnrealScript source. Put your classes under
 the members you want, and run `make`. The compiler reads the parent's layout from
 the compiled `.u`. This is how you subclass the GameInfo or a scoring object the
 game never shipped source for.
+
+### B.4b Ship one precompiled package: the GUID is co-op identity
+The package GUID is stamped at compile time, and network co-op only joins
+between identical packages. Two players who each compile the mod locally get
+different GUIDs and cannot play together, which kills any compile-on-install
+design outright. Ship exactly one canonical compiled `.u` per release (commit
+it alongside a source-hash manifest so the packager can refuse a stale build)
+and deploy it byte for byte. Player installs load it through
+`NonNativePackages` only: the installer deliberately strips `EditPackages` and
+any deployed source tree, so the game can never rebuild the package locally
+and fork its GUID out of co-op. Only the dev install keeps compile wiring.
 
 ### B.5 Entry point: subclass the GameInfo, but find where the class is actually chosen
 Subclassing the GameInfo and overriding `InitGame` is the anchor, as in UE1
@@ -499,6 +523,20 @@ front door, the refusal covers console commands and any client/menu race.
   actors were a different class. Decompile the scan loop to learn which class the
   game actually counts.
 
+### B.7b GameInfo is host-only in co-op
+In a networked UE3 game the `GameInfo` exists only on the hosting machine, so
+everything a mod detects through it (score changes, milestones, item events)
+is host-side detection. Two consequences:
+- A per-player feature (for us the toast feed) cannot hang off the GameInfo,
+  or guests never see it. Host it on a class instanced on every machine (the
+  HUD, the viewport client) and feed it from files on that machine, so each
+  player gets their own.
+- If hosting can rotate between sessions or levels, host-side counters
+  (applied-queue indices, high-water marks) silently reset on the new host and
+  replay or skip work. Persist them somewhere every host reads at connect (for
+  Archipelago, server data storage with an atomic max) and fold that into the
+  local baseline.
+
 ### B.8 Reuse the game's own computation over a timer, but mind side effects
 We needed a live cleanliness percentage. Rather than reimplement the scoring, we
 call the game's own scan function on a timer and read the result field it sets.
@@ -510,6 +548,12 @@ call the game's own scan function on a timer and read the result field it sets.
 - A value updated only by a timer (a time-decaying score potential, a par-time
   factor) will look like progress but ignore the player's actions. Run the
   control from Part 4 before you trust it.
+- The game's own number can still embed data quirks: a group of tasks scored as
+  one flat all-or-nothing infraction (a `break` on the first unfinished item,
+  so nothing credits until everything does), or map data that never validates
+  (stacking zones listing item archetypes the level barely spawns). Before
+  building progressive checks on the value, audit the data feeding it across
+  every map, statically (B.1) so the sweep is exhaustive and cheap.
 
 ### B.9 Probe methodology for finding a live signal
 The fastest way to identify the right live value: a mod that runs a repeating
@@ -518,8 +562,25 @@ compile / check-log loop so each iteration is cheap. Pair it with the
 idle-versus-act control run. This is how we distinguished the real cleanliness
 signal from a time decay that moved similarly.
 
-### B.10 The UE1 hazards likely still apply, re-verified
-The GC-on-teardown hazard (A.5), event-driven over polling (A.7), and
-persistence across travel (A.8) are UnrealScript-family patterns that probably
-carry to UE3. Treat them as hypotheses to confirm on the new engine, not
+The probe scales to fully unattended runs, which changes the Part 3 economics:
+a pure measurement no longer costs a human in-game run. Put the probe GameInfo
+in a throwaway package and append its `EditPackages`/`NonNativePackages` lines
+AFTER the real mod's, so `make` skips the canonical package and its GUID
+survives (B.4b). Launch straight into a map from the command line
+(`UDK.exe <Map>?Game=<Pkg>.<ProbeClass> -log -forcelogflush -nostartupmovies
+-windowed`); the URL bypasses the menu, the pawn spawns, and timers run with
+nobody at the keyboard. End the probe with `ConsoleCommand("EXIT")` so the run
+self-terminates, and copy the log between runs (each run overwrites it). Back
+up the save directory first (a probe GameInfo derived from the real game
+writes real career state), and revert the ini lines, the source, and the `.u`
+afterwards.
+
+### B.10 The UE1 hazards carry to UE3 (one confirmed, verify the rest)
+The SaveConfig/CDO staleness in A.4 is CONFIRMED on UE3: an instance
+`SaveConfig()` never updates the class default object, and a `new`'d config
+object copies the CDO, so per-level state silently reverts to launch-time
+values after a level load. Mirror persistent fields into `class'X'.default.*`
+before saving, ideally in one save wrapper so it cannot be forgotten. The
+GC-on-teardown hazard (A.5), event-driven over polling (A.7), and persistence
+across travel (A.8) remain hypotheses to confirm on the new engine, not
 guarantees.
