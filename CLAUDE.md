@@ -56,19 +56,16 @@ Before ending any turn that changed the apworld, the mod, or the client, check
 whether the docs still match and update them in the same turn, unprompted. The
 reviewer treats a missed update as a blocker.
 
-- Player docs live in `VCD_AP/docs`: `PLAYER_SETUP.md` (install and first
-  run), `RELEASE_NOTES.md` (the Discord-sized summary of the LATEST build
-  only, hard cap 2000 characters INCLUDING the GitHub release link it must
-  end with), and `RELEASE_NOTES_FULL.md` (the unlimited dated build log,
-  newest entry first, used as the GitHub release body).
+- The one maintained player doc is `VCD_AP/docs/PLAYER_SETUP.md` (install and
+  first run). `RELEASE_NOTES.md`, `RELEASE_NOTES_FULL.md`, and
+  `AI_DISCLOSURE.md` in the same directory are frozen since the first public
+  release; never edit them.
 - A docs pass is required for every player-visible change: options and their
   defaults, checks and goals, client commands and messages, the install and
   connect flow, save isolation, traps and supply drops. Internal refactors
   need none.
-- A player-visible change adds a dated entry to `RELEASE_NOTES_FULL.md` (or
-  extends today's), and rewrites `RELEASE_NOTES.md` to summarize the latest
-  build within its 2000-character cap. Verify the character count after
-  editing it.
+- A player-visible change ships with a small release note: a short
+  Discord-ready paragraph in the turn's final summary, not a maintained file.
 - After any options change, rebuild the apworld and regenerate the options
   template into `Viscera Cleanup Detail.template.yaml` at the repo root. Never
   write to `Viscera Cleanup Detail.yaml`; it holds the player's own settings.
