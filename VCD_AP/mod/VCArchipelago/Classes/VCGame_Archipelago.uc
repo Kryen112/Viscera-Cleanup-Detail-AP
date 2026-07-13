@@ -196,10 +196,12 @@ struct DisposalVolumeLockInfo
 };
 var array<DisposalVolumeLockInfo> DisposalVolumeLocks;
 
-// Shark pools whose sharks are despawned while the incinerator group is
-// locked, so they can be respawned on unlock. The sharks eat within a
-// fraction of a second, too fast to intercept by clearing targets on a poll.
-var array<VCSharkDisposalVolume> SharkVolumesDespawned;
+// The optional-package machine locks (VisceraHorror's woodchipper,
+// VisceraVulcan's shark pool). Every compile-time reference to those
+// packages' classes lives on the helper, because an install without the
+// free content packs has no file for them and a touched none-import
+// crashes the script VM.
+var VCArchipelagoOptionalMachineLocks OptionalMachineLocks;
 
 event InitGame(string Options, out string ErrorMessage)
 {
@@ -228,6 +230,7 @@ event InitGame(string Options, out string ErrorMessage)
     bSelfCleaningMap = false;
     bSqueakyBootsMap = false;
     AppliedToolsMask = class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
+    OptionalMachineLocks = Spawn(class'VCArchipelagoOptionalMachineLocks');
     SetTimer(1.0, true, 'PublishCleanliness');
     SetTimer(5.0, true, 'PollTraps');
     SetTimer(5.0, true, 'PollLinks');
@@ -990,7 +993,8 @@ function EnforceToolLocks()
         && BucketDispensorLocks.Length == 0
         && IncineratorLocks.Length == 0
         && DisposalVolumeLocks.Length == 0
-        && SharkVolumesDespawned.Length == 0)
+        && (OptionalMachineLocks == None
+            || !OptionalMachineLocks.HoldsRestoreState()))
     {
         return;
     }
@@ -1037,9 +1041,6 @@ function ApplyMachineLocks(int Mask)
     local VCBinDispensor BinDispensor;
     local VCIncinerator Incinerator;
     local VCDisposalVolume Volume;
-    local VCWoodChipper Chipper;
-    local VCSharkDisposalVolume SharkVolume;
-    local array<VCShark> DoomedSharks;
     local array<VCDebris> Contents;
     local int CacheIndex, I;
     local bool bLocked;
@@ -1153,50 +1154,11 @@ function ApplyMachineLocks(int Mask)
             DisposalVolumeLocks.Remove(CacheIndex, 1);
         }
     }
-    // The woodchipper's consume ignores its own in-flag: it destroys an object
-    // once that object's consume timer reaches four seconds near the intake.
-    // Removing the entry does not stop it, so pin every entry's timer to zero
-    // each pass; a one-second pass keeps it well under the four-second mark.
-    if (bLocked)
-    {
-        foreach AllActors(class'VCWoodChipper', Chipper)
-        {
-            for (I = 0; I < Chipper.DebrisObjects.Length; I++)
-                Chipper.DebrisObjects[I].ConsumeTime = 0.0;
-        }
-    }
-
-    // The shark pool eats what swims in within a fraction of a second, too
-    // fast to intercept by clearing targets on a poll, so despawn the sharks
-    // while locked and respawn them on unlock. The pool spawns its sharks once
-    // and never maintains a count, so a cleared list stays cleared.
-    foreach AllActors(class'VCSharkDisposalVolume', SharkVolume)
-    {
-        CacheIndex = SharkVolumesDespawned.Find(SharkVolume);
-        if (bLocked)
-        {
-            if (CacheIndex == -1)
-            {
-                // Clear the pool's lists before destroying, so a shark's
-                // UnTouch firing synchronously during Destroy never reads a
-                // half-cleared Sharks array.
-                DoomedSharks = SharkVolume.Sharks;
-                SharkVolume.Sharks.Length = 0;
-                SharkVolume.PendingTargets.Length = 0;
-                for (I = 0; I < DoomedSharks.Length; I++)
-                {
-                    if (DoomedSharks[I] != None)
-                        DoomedSharks[I].Destroy();
-                }
-                SharkVolumesDespawned.AddItem(SharkVolume);
-            }
-        }
-        else if (CacheIndex != -1)
-        {
-            SharkVolume.SpawnSharks();
-            SharkVolumesDespawned.Remove(CacheIndex, 1);
-        }
-    }
+    // The woodchipper and the shark pool belong to the optional content
+    // packages; the helper holds every reference to their classes and
+    // no-ops where a package is absent.
+    if (OptionalMachineLocks != None)
+        OptionalMachineLocks.ApplyLocks(bLocked);
 }
 
 function ApplyInventoryLocks(int Mask)
@@ -1507,8 +1469,6 @@ function RunScanReport(PlayerController Requester)
     local VCBucketDispensor BucketDispensor;
     local VCBinDispensor BinDispensor;
     local VCDisposalVolume DisposalVolume;
-    local VCWoodChipper Chipper;
-    local VCSharkDisposalVolume SharkVolume;
     local VCSupplyMachine SupplyMachine;
     local VCScissorLift Lift;
     local VCPunchMachine PunchMachine;
@@ -1677,10 +1637,11 @@ function RunScanReport(PlayerController Requester)
         BinMachineCount++;
     foreach AllActors(class'VCDisposalVolume', DisposalVolume)
         DisposalCount++;
-    foreach AllActors(class'VCWoodChipper', Chipper)
-        ChipperCount++;
-    foreach AllActors(class'VCSharkDisposalVolume', SharkVolume)
-        SharkPoolCount++;
+    if (OptionalMachineLocks != None)
+    {
+        ChipperCount = OptionalMachineLocks.CountWoodChippers();
+        SharkPoolCount = OptionalMachineLocks.CountSharkPools();
+    }
     foreach AllActors(class'VCSupplyMachine', SupplyMachine)
         SupplyCount++;
     foreach AllActors(class'VCScissorLift', Lift)

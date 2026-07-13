@@ -207,6 +207,13 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   precompiled package through `NonNativePackages` only: the installer
   deliberately strips `EditPackages` and any deployed source tree, so the game
   can never rebuild the package locally and fork its GUID out of co-op.
+- The `VisceraHorror` and `VisceraVulcan` packages are OPTIONAL content: an
+  install without the free content packs has no file for them, every import
+  of their classes then resolves to none, and a statement touching such an
+  import crashes the script VM. Every compile-time reference to their classes
+  (the woodchipper, the shark pool) lives in
+  `VCArchipelagoOptionalMachineLocks` behind package-loaded checks; never name
+  them in another mod class.
 - The mod enters through a GameInfo subclass of `VisceraGame.VCGame`. The class
   the game uses comes from the map-launch URL `?Game=`, which is set from the
   `GameClass` field of a `VCUIDataProvider_GameInfo` entry in `VCProviders.ini`,
