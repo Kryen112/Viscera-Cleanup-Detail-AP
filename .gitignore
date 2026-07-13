@@ -20,6 +20,9 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Crash dumps dropped into the repo root for triage
+*.dmp
+
 # Local-only working files, not part of the shipped world. Anchored to the repo
 # root so VCD_AP/scripts (the apworld test runner) is still tracked.
 /plans/

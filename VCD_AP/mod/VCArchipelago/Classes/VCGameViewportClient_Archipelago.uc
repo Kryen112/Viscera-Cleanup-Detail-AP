@@ -1,18 +1,26 @@
 // The viewport client for Archipelago play.
 //
-// Adds one behavior over the stock client: on a slow timer it hides every level
-// not in the client-written unlocked set by flipping bHideFromMenu on the map data
-// providers. The level-select menu rebuilds from those providers and shows a map
-// only when bHideFromMenu is false, so the list holds exactly the unlocked levels,
-// updated live.
+// Adds two behaviors over the stock client, both on a slow timer. First, it
+// hides every level not in the client-written unlocked set by flipping
+// bHideFromMenu on the map data providers. The level-select menu rebuilds from
+// those providers and shows a map only when bHideFromMenu is false, so the
+// list holds exactly the unlocked levels, updated live. Second, it heals the
+// Start Work menu's saved launch map: the menu launches its config-saved
+// LastSelectedMap, not the highlighted list entry, so a value carried over
+// from stock play (or from a list built before the first curation pass) sends
+// every launch to a level the gate refuses. The heal keeps that saved map
+// inside the unlocked set.
 //
 // It lives here because this is the one object that both persists and ticks in the
 // FrontEnd where the menu reads the providers. Flipping the flag earlier (from the
 // GameInfo, or during datastore registration) does not survive: the providers are
 // re-created or reload their config before the menu reads them.
 //
-// Swapped in through GameViewportClientClassName. With no grants file the list is
-// left untouched, so normal play outside a session is unaffected.
+// Swapped in through GameViewportClientClassName. With no grants file the list
+// and the saved launch map are left untouched, so normal play outside a
+// session is unaffected. The heal is this class's one durable write into the
+// stock preferences: a grants file lingering past an unclean exit keeps
+// steering the saved map until the client's disconnect restore removes it.
 class VCGameViewportClient_Archipelago extends VCGameViewportClient;
 
 // Dev override for the measurement tour: shows every level and passes the
@@ -96,6 +104,9 @@ function CurateMapProviders()
         }
     }
 
+    if (!bUnlockAll)
+        HealMenuLaunchSelection(unlocked);
+
     if (CurationLogBudget > 0)
     {
         CurationLogBudget--;
@@ -104,6 +115,34 @@ function CurateMapProviders()
         else
             `log("VCAP VP CURATE shown="$shown$" hidden="$hidden$" unlocked="$unlocked);
     }
+}
+
+// The Start Work menu launches the map named by VCUI_GameMenu's config-saved
+// LastSelectedMap, not the highlighted list entry, and only rewrites it when
+// the dropdown selection changes. A saved map outside the unlocked set sends
+// every launch into the level gate's bounce, so whenever the saved map is not
+// unlocked (or is empty), point it at the first unlocked level. A freshly
+// opened menu copies the class default and reconciles its selection to it, so
+// the caption, the preview, and the launch all land on that level. A live menu
+// instance keeps its own copy, so a selection made from a stale list still
+// launches through the gate; the next menu open starts healed.
+// StaticSaveConfig flushes the whole section from class defaults, so an ini
+// value a live instance saved mid-session can revert to a boot-time value;
+// the instance is unaffected and re-saves on its next selection change.
+function HealMenuLaunchSelection(string UnlockedMaps)
+{
+    local array<string> UnlockedList;
+    local string SavedMap;
+
+    SavedMap = class'VisceraUI.VCUI_GameMenu'.default.LastSelectedMap;
+    if (SavedMap != "" && InStr(","$UnlockedMaps$",", ","$SavedMap$",") != -1)
+        return;
+    ParseStringIntoArray(UnlockedMaps, UnlockedList, ",", true);
+    if (UnlockedList.Length == 0)
+        return;
+    class'VisceraUI.VCUI_GameMenu'.default.LastSelectedMap = UnlockedList[0];
+    class'VisceraUI.VCUI_GameMenu'.static.StaticSaveConfig();
+    `log("VCAP VP HEAL LastSelectedMap="$UnlockedList[0]);
 }
 
 defaultproperties
