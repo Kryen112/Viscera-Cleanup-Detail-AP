@@ -15,7 +15,8 @@ from unittest import mock
 from NetUtils import ClientStatus
 
 from .bases import read_sav_properties
-from .. import _launch_client, messages, milestones
+from .. import _launch_client, installer, messages, milestones
+from ..saves import SaveManager
 from ..client import (VCDContext, death_cause, death_count_to_bounce,
                       goal_locations_from_slot_data, launch,
                       location_names_from_state, message_segments,
@@ -897,6 +898,67 @@ class TestWriteMilestonesIfChanged(unittest.TestCase):
             ctx.write_milestones_if_changed()
             self.assertFalse(
                 (Path(tmp) / "Saves" / "VCArchipelagoMilestones.sav").exists())
+
+
+def _uninstall_context(install_dir: Path) -> VCDContext:
+    """A context carrying only what uninstall_mod touches, skipping __init__
+    so no framework plumbing is needed."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.install_dir = install_dir
+    ctx.save_manager = SaveManager(install_dir)
+    ctx.saves_ready = True
+    ctx.game_running = lambda: False
+    return ctx
+
+
+class TestUninstallMod(unittest.TestCase):
+    """The /uninstall flow: the data channel writers stop first, the career
+    saves come home, then the installer's removal and the bookkeeping tidy."""
+
+    def test_uninstall_restores_career_and_removes_the_mod(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install = Path(tmp)
+            config = install / "UDKGame" / "Config"
+            config.mkdir(parents=True)
+            (config / "VCArchipelagoProviders.ini").write_text(
+                "entry\n", encoding="ascii")
+            (install / "Saves").mkdir()
+            (install / "Saves" / "career.txt").write_text(
+                "career", encoding="ascii")
+            ctx = _uninstall_context(install)
+            ctx.save_manager.isolate("SeedA")
+            ctx.uninstall_mod()
+            self.assertFalse(ctx.saves_ready)
+            self.assertFalse((config / "VCArchipelagoProviders.ini").exists())
+            self.assertFalse(ctx.save_manager.is_isolated())
+            self.assertEqual(
+                (install / "Saves" / "career.txt").read_text(encoding="ascii"),
+                "career")
+            self.assertFalse((install / "Saves_AP_state.json").exists())
+
+    def test_writers_stop_even_when_removal_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install = Path(tmp)
+            (install / "Saves").mkdir()
+            ctx = _uninstall_context(install)
+            ctx.save_manager.isolate("SeedA")
+            with mock.patch.object(installer, "remove",
+                                   side_effect=OSError("locked")):
+                ctx.uninstall_mod()
+            self.assertFalse(ctx.saves_ready)
+            # The career still came home before the failure.
+            self.assertFalse(ctx.save_manager.is_isolated())
+
+    def test_running_game_blocks_uninstall(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install = Path(tmp)
+            (install / "Saves").mkdir()
+            ctx = _uninstall_context(install)
+            ctx.save_manager.isolate("SeedA")
+            ctx.game_running = lambda: True
+            ctx.uninstall_mod()
+            self.assertTrue(ctx.saves_ready)
+            self.assertTrue(ctx.save_manager.is_isolated())
 
 
 class TestLaunchArgumentParsing(unittest.TestCase):

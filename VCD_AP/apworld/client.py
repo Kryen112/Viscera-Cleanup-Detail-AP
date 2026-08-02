@@ -398,6 +398,12 @@ class VCDCommandProcessor(ClientCommandProcessor):
         install folder. Close the game first."""
         asyncio.create_task(self.ctx.install_mod())
 
+    def _cmd_uninstall(self) -> None:
+        """Remove the mod and all its wiring from the install folder and restore
+        your career saves. Close the game first. Connecting to a room installs
+        the mod again."""
+        self.ctx.uninstall_mod()
+
 
 class VCDContext(CommonContext):
     game = "Viscera Cleanup Detail"
@@ -623,6 +629,50 @@ class VCDContext(CommonContext):
         client_logger.info(
             "This apworld carries a different mod than the install; updating it.")
         await self.install_mod()
+
+    def uninstall_mod(self) -> None:
+        """Take the mod and every config edit back out of the install and bring
+        the career saves home (manual, via /uninstall). Steam's verify and
+        uninstall leave the mod's files behind, so this is the removal path."""
+        if not self.install_dir:
+            client_logger.warning("No install folder set. Use /install first.")
+            return
+        if self.game_running():
+            client_logger.warning(
+                "The game is running. Close it first, then run /uninstall.")
+            return
+        # Stops the data channel writers first, so a still-open connection can
+        # never write into the restored career saves or recreate a removed
+        # file, whether or not a later step fails.
+        self.saves_ready = False
+        if self.save_manager and self.save_manager.is_isolated():
+            try:
+                client_logger.info(self.save_manager.restore())
+            except Exception as error:
+                client_logger.error(
+                    f"Could not restore your career saves ({error}); uninstall "
+                    "stopped before touching the mod. Run /uninstall again once "
+                    "that is resolved.")
+                return
+        try:
+            removal_log = installer.remove(self.install_dir)
+        except (OSError, ValueError) as error:
+            client_logger.error(f"Mod removal failed: {error}")
+            return
+        for line in removal_log:
+            client_logger.info(line)
+        if not removal_log:
+            client_logger.info("No mod files found; the install was already clean.")
+        if self.save_manager:
+            try:
+                note = self.save_manager.discard_isolation_state()
+            except OSError as error:
+                note = f"Could not tidy the save isolation bookkeeping: {error}"
+            if note:
+                client_logger.info(note)
+        client_logger.info(
+            "Mod uninstalled; the install is back to stock. Connecting to an "
+            "Archipelago room installs it again.")
 
     def restore_saves(self) -> None:
         """Move the career saves back and stop isolating (manual, via /restore)."""

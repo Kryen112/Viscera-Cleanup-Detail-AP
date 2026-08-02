@@ -123,3 +123,20 @@ class SaveManager:
             grants_file.unlink()
         self._write_state(False, None)
         return "Restored your career saves."
+
+    def discard_isolation_state(self) -> "str | None":
+        """Drop the isolation bookkeeping once the career saves are back in
+        place: the state file, and the seeds root when it holds no seed
+        save-set. A stashed career keeps everything, so no save data can be
+        orphaned. Returns a note when seed save-sets are kept."""
+        if self._read_state().get("career_stashed"):
+            return "Career saves are still stashed, so nothing was discarded."
+        seeds_remain = self.seeds_root.is_dir() and any(self.seeds_root.iterdir())
+        if self.seeds_root.is_dir() and not seeds_remain:
+            self.seeds_root.rmdir()
+        if self.state_path.is_file():
+            self.state_path.unlink()
+        if seeds_remain:
+            return (f"Archipelago seed saves are kept in {self.seeds_root}; "
+                    "delete that folder yourself if you do not want them.")
+        return None

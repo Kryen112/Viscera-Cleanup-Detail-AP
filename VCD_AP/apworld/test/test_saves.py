@@ -1,5 +1,6 @@
 """Tests for per-seed save isolation. These exercise the file swaps against a temp
 install, so the real career-saves guarantees are checked without touching a game."""
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -72,6 +73,35 @@ class TestSaveManager(unittest.TestCase):
             self.manager.isolate("SeedA")
         # The stray backup is untouched.
         self.assertEqual(_read(self.install / "Saves_AP_Career" / "old.txt"), "do not lose")
+
+    def test_discard_keeps_seed_saves_and_drops_the_state_file(self) -> None:
+        self.manager.isolate("SeedA")
+        _write(self.install / "Saves", "job.txt", "seed-a-progress")
+        self.manager.restore()
+        note = self.manager.discard_isolation_state()
+        self.assertIn("Saves_AP_Seeds", note)
+        self.assertFalse((self.install / "Saves_AP_state.json").exists())
+        # The seed save-set and the restored career both survive.
+        self.assertEqual(
+            _read(self.install / "Saves_AP_Seeds" / "SeedA" / "job.txt"),
+            "seed-a-progress")
+        self.assertEqual(_read(self.install / "Saves" / "career.txt"), "career")
+
+    def test_discard_removes_empty_bookkeeping_outright(self) -> None:
+        self.manager.isolate("SeedA")
+        self.manager.restore()
+        shutil.rmtree(self.install / "Saves_AP_Seeds" / "SeedA")
+        self.assertIsNone(self.manager.discard_isolation_state())
+        self.assertFalse((self.install / "Saves_AP_Seeds").exists())
+        self.assertFalse((self.install / "Saves_AP_state.json").exists())
+
+    def test_discard_refuses_while_the_career_is_stashed(self) -> None:
+        self.manager.isolate("SeedA")
+        note = self.manager.discard_isolation_state()
+        self.assertIn("stashed", note)
+        self.assertTrue((self.install / "Saves_AP_state.json").exists())
+        self.assertEqual(_read(self.install / "Saves_AP_Career" / "career.txt"),
+                         "career")
 
 
 if __name__ == "__main__":

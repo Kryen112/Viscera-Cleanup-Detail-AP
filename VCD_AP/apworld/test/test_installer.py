@@ -189,6 +189,92 @@ class TestDeploy(InstallerCase):
                 installer.deploy(self.install)
 
 
+class TestRemove(InstallerCase):
+    def test_remove_reverses_deploy(self) -> None:
+        installer.deploy(self.install)
+        installer.remove(self.install)
+        self.assertFalse(self.installed_package.exists())
+        self.assertFalse((self.config / "VCArchipelagoProviders.ini").exists())
+        self.assertFalse((self.config / "DefaultVCArchipelago.ini").exists())
+        self.assertFalse((self.install / installer.BACKUP_DIR_NAME).exists())
+        self.assertEqual(
+            (self.config / "DefaultEngine.ini").read_text(
+                encoding="ascii").splitlines(),
+            DEFAULT_ENGINE.splitlines())
+        self.assertEqual(
+            (self.config / "UDKEngine.ini").read_text(
+                encoding="ascii").splitlines(),
+            GENERATED_ENGINE.splitlines())
+
+    def test_remove_deletes_state_and_data_channel_files(self) -> None:
+        installer.deploy(self.install)
+        (self.config / "UDKVCArchipelago.ini").write_text("state\n",
+                                                          encoding="ascii")
+        saves = self.install / "Saves"
+        saves.mkdir()
+        (saves / "VCArchipelagoGrants.sav").write_text("grants", encoding="ascii")
+        (saves / "VCArchipelagoTraps.sav").write_text("traps", encoding="ascii")
+        (saves / "GlobalStatsData.sav").write_text("stats", encoding="ascii")
+        installer.remove(self.install)
+        self.assertFalse((self.config / "UDKVCArchipelago.ini").exists())
+        self.assertFalse((saves / "VCArchipelagoGrants.sav").exists())
+        self.assertFalse((saves / "VCArchipelagoTraps.sav").exists())
+        # The game's own save data stays.
+        self.assertTrue((saves / "GlobalStatsData.sav").exists())
+
+    def test_remove_on_stock_install_changes_nothing(self) -> None:
+        self.assertEqual(installer.remove(self.install), [])
+        self.assertEqual(
+            (self.config / "DefaultEngine.ini").read_text(encoding="ascii"),
+            DEFAULT_ENGINE)
+        self.assertEqual(
+            (self.config / "UDKEngine.ini").read_text(encoding="ascii"),
+            GENERATED_ENGINE)
+
+    def test_remove_is_idempotent(self) -> None:
+        installer.deploy(self.install)
+        installer.remove(self.install)
+        self.assertEqual(installer.remove(self.install), [])
+
+    def test_remove_strips_stale_compile_wiring(self) -> None:
+        stale_source = (self.install / "Development" / "Src" / "VCArchipelago"
+                        / "Classes")
+        stale_source.mkdir(parents=True)
+        (stale_source / "VCGame_Archipelago.uc").write_text("class;\n",
+                                                            encoding="ascii")
+        default_engine = self.config / "DefaultEngine.ini"
+        default_engine.write_text(
+            DEFAULT_ENGINE.replace("+EditPackages=VisceraGame",
+                                   "+EditPackages=VisceraGame\n"
+                                   "+EditPackages=VCArchipelago"),
+            encoding="ascii")
+        installer.remove(self.install)
+        self.assertNotIn("VCArchipelago",
+                         default_engine.read_text(encoding="ascii"))
+        self.assertFalse(
+            (self.install / "Development" / "Src" / "VCArchipelago").exists())
+
+    def test_remove_keeps_player_settings(self) -> None:
+        installer.deploy(self.install)
+        installer.remove(self.install)
+        generated = (self.config / "UDKEngine.ini").read_text(encoding="ascii")
+        self.assertIn("Console=VisceraGame.VCConsole", generated)
+        self.assertEqual(
+            (self.config / "UDKGame.ini").read_text(encoding="ascii"),
+            GENERATED_GAME)
+
+    def test_remove_unwires_utf16_generated_ini_in_its_encoding(self) -> None:
+        generated = self.config / "UDKEngine.ini"
+        generated.write_text(GENERATED_ENGINE, encoding="utf-16")
+        installer.deploy(self.install)
+        installer.remove(self.install)
+        raw = generated.read_bytes()
+        self.assertEqual(raw[:2], b"\xff\xfe")
+        text = raw.decode("utf-16")
+        self.assertNotIn("VCArchipelago", text)
+        self.assertIn(installer.VIEWPORT_STOCK, text)
+
+
 class TestModIsCurrent(InstallerCase):
     def test_matching_install_is_current(self) -> None:
         installer.deploy(self.install)

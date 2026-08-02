@@ -16,6 +16,11 @@ compiled package would carry its own GUID and split the players. Deploy
 therefore also removes any compile wiring present in the install (a deployed
 source tree and the EditPackages lines), so the game can never offer to
 rebuild scripts locally and fork the GUID. Idempotent.
+
+``remove`` reverses all of it: the package, the mod's own ini files, the
+engine-ini wiring, the client's data channel files under ``Saves``, and the
+install-time backups. Steam's verify and uninstall only handle files Steam
+shipped, so this is the one path that returns an install to stock.
 """
 from __future__ import annotations
 
@@ -33,6 +38,15 @@ SECTION_HEADER = re.compile(r"^\s*\[.+\]\s*$")
 VIEWPORT_STOCK = "GameViewportClientClassName=VisceraGame.VCGameViewportClient"
 VIEWPORT_ARCHIPELAGO = (
     "GameViewportClientClassName=VCArchipelago.VCGameViewportClient_Archipelago")
+
+# Every form the load-list and compile-list wiring takes in an engine ini
+# (DefaultEngine.ini carries the + syntax, the generated mirror does not).
+ENGINE_WIRING_LINES = {
+    f"+NonNativePackages={MOD_PACKAGE}",
+    f"NonNativePackages={MOD_PACKAGE}",
+    f"+EditPackages={MOD_PACKAGE}",
+    f"EditPackages={MOD_PACKAGE}",
+}
 
 # No ValidTitles line: an empty list passes the menu's title filter, so the
 # Archipelago mode exists under every title (base game and all the DLC).
@@ -88,7 +102,8 @@ def _read_ini_lines(path: Path) -> list[str]:
 
 def _write_ini_lines(path: Path, lines: "list[str]") -> None:
     encoding = _ini_encoding(path) if path.is_file() else "latin-1"
-    path.write_text("\r\n".join(lines) + "\r\n", encoding=encoding)
+    # newline="" stops text mode from inflating the explicit \r\n into \r\r\n.
+    path.write_text("\r\n".join(lines) + "\r\n", encoding=encoding, newline="")
 
 
 def _backup_once(config_dir: Path, path: Path) -> None:
@@ -225,6 +240,62 @@ def _wire_generated_engine_ini(config: Path, log: "list[str]") -> None:
         changed = True
     if changed:
         log.append("Wired the mod into the generated UDKEngine.ini in place.")
+
+
+def remove(install_dir: Path) -> list[str]:
+    """Take the deployed package and every config edit back out of the
+    install, reversing deploy. Missing pieces are skipped, so a partially
+    removed or Steam-reset install cleans up the same way. Save folders are
+    the save manager's business and stay untouched. Idempotent. Returns log
+    lines."""
+    install_dir = Path(install_dir)
+    config = install_dir / "UDKGame" / "Config"
+    log: list[str] = []
+
+    package = install_dir / "UDKGame" / "Script" / f"{MOD_PACKAGE}.u"
+    if package.is_file():
+        package.unlink()
+        log.append("Removed the compiled mod package.")
+
+    source_dir = install_dir / "Development" / "Src" / MOD_PACKAGE
+    if source_dir.is_dir():
+        shutil.rmtree(source_dir)
+        log.append("Removed the deployed mod source.")
+
+    mod_inis = (
+        ("VCArchipelagoProviders.ini", "Removed the Archipelago mode entry."),
+        ("DefaultVCArchipelago.ini", "Removed the mod state base."),
+        ("UDKVCArchipelago.ini", "Removed the generated mod state."),
+    )
+    for name, message in mod_inis:
+        ini = config / name
+        if ini.is_file():
+            ini.unlink()
+            log.append(message)
+
+    for name in ("DefaultEngine.ini", "UDKEngine.ini"):
+        ini = config / name
+        if not ini.is_file():
+            continue
+        lines = _read_ini_lines(ini)
+        kept = [VIEWPORT_STOCK if line == VIEWPORT_ARCHIPELAGO else line
+                for line in lines if line not in ENGINE_WIRING_LINES]
+        if kept != lines:
+            _write_ini_lines(ini, kept)
+            log.append(f"Unwired the mod from {name}.")
+
+    saves = install_dir / "Saves"
+    channel_files = sorted(saves.glob(f"{MOD_PACKAGE}*.sav")) if saves.is_dir() else []
+    for channel_file in channel_files:
+        channel_file.unlink()
+    if channel_files:
+        log.append("Removed the client's data channel files from Saves.")
+
+    backup_dir = install_dir / BACKUP_DIR_NAME
+    if backup_dir.is_dir():
+        shutil.rmtree(backup_dir)
+        log.append("Removed the install-time config backups.")
+    return log
 
 
 def mod_is_current(install_dir: Path) -> bool:
