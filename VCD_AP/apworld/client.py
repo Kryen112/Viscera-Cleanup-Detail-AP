@@ -401,7 +401,7 @@ class VCDCommandProcessor(ClientCommandProcessor):
     def _cmd_uninstall(self) -> None:
         """Remove the mod and all its wiring from the install folder and restore
         your career saves. Close the game first. Connecting to a room installs
-        the mod again."""
+        the mod again while auto-install is on (the default)."""
         self.ctx.uninstall_mod()
 
 
@@ -672,7 +672,8 @@ class VCDContext(CommonContext):
                 client_logger.info(note)
         client_logger.info(
             "Mod uninstalled; the install is back to stock. Connecting to an "
-            "Archipelago room installs it again.")
+            "Archipelago room installs it again while auto_install_mod is on "
+            "in host.yaml (the default).")
 
     def restore_saves(self) -> None:
         """Move the career saves back and stop isolating (manual, via /restore)."""
