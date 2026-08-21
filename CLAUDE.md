@@ -94,18 +94,24 @@ The reviewer treats a violation of any of these as a correctness blocker.
   rungs are often obtainable out of logic), the climb is also capped by the
   physical ceiling the missing tools leave (a tool's own scanned mess share is
   unreachable without it, so no toolset is credited a rung it cannot clean to),
-  and the full kit reaches the level's over-100 maximum with margin. Four
+  and the full kit reaches the level's over-100 maximum with margin. Five
   suspect levels leave mess only one tool can clear
-  (`CORE_KIT_CEILING_PERCENT`: VC_Incubator, VC_Energy_01, and VC_Vulcan_01
-  need the Welder, VC_Uprinsing the Vendor); there the core kit tops out at
-  the recorded ceiling and the checks above it wait for that one
+  (`CORE_KIT_CEILING_PERCENT`: VC_Incubator, VC_Energy_01, VC_Vulcan_01, and
+  VC_Robot need the Welder, VC_Uprinsing the Vendor); there the core kit tops
+  out at the recorded ceiling and the checks above it wait for that one
   `EXTRA_CLEAN_TOOL`. Three ceilings are measured with APCleanCoreKit; the
   Vulcan ceiling is a conservative floor under the arithmetic bound its scan
-  row proves, pending a measurement. A module-import assert rejects any
-  core-kit-cleans-to-100 claim the scan shares contradict, and the client
-  cross-checks each level's live StartingCleanupScore against the scan table
-  at play time (`APStartScore` in the state ini) and warns on drift. Physical pickups (collectibles,
-  Bob notes) need the level's full clean kit (`full_clean_keys`, the core kit
+  row proves and the Robot ceiling one under player reports of the core kit
+  stranding short of 100 there, both pending a measurement. The Robot ceiling
+  sits at the same 80 as the measured three. The ceiling table
+  is the only guard on a level whose over-100 headroom hides a tool's share:
+  the import assert compares against a theoretical maximum a real shift
+  rarely banks, so it clears a level the headroom masks. A module-import
+  assert rejects any core-kit-cleans-to-100 claim the scan shares contradict,
+  and the client cross-checks each level's live StartingCleanupScore against
+  the scan table at play time (`APStartScore` in the state ini) and warns on
+  drift. Physical pickups (collectibles, Bob notes) need the level's full clean
+  kit (`full_clean_keys`, the core kit
   plus any suspect extra tool), because a trophy only banks on a not-fired
   punch-out; the Overgrowth pickaxe also needs the Shovel, and Athena's Wrath's
   blue easter egg the J-HARM (`COLLECTIBLE_EXTRA_TOOLS`). A tool stored where
@@ -114,7 +120,15 @@ The reviewer treats a violation of any of these as a correctness blocker.
   only the J-HARM reaches, so its welder rungs need both unlocks and a pickup
   rule pulls a required tool's prerequisite in with it. The scan table there
   is transcribed from the mod's APScanReport run on every level, and the suspect
-  ceilings from APCleanCoreKit; never hand-guess either. The full clean kit
+  ceilings from APCleanCoreKit; never hand-guess either. APScanReport sorts
+  splats by SplatType, so a map-specific type it has no handler bit for lands
+  unattributed in its remainder column, invisible to the band model. Every
+  such splat the scan counts carries an `UNSCANNED_SPLAT_PENALTY` row naming
+  the tool that owns it, and an import assert holds the row and the scan's own
+  count in step. `VCSplat_MechFoot` (robot footprints) and `VCSplat_Creep`
+  extend `VCSplat_BulletHole`, the class the welding laser sweeps, so the
+  Welder owns them; `VCSplat_Paint` is graffiti the Vendor's acid vials clear.
+  Re-scanning a level with the fixed classifier drops its row. The full clean kit
   always caps at the level's known-maximum usable total. An itemized
   Slosh-O-Matic (a hard-start level under `random_starting_kit`) is satisfiable
   two ways in every rule: the machine unlock or the level's Self-Cleaning Mop,

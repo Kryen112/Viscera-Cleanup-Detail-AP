@@ -1480,7 +1480,9 @@ function RunScanReport(PlayerController Requester)
     local int SloshCount, BinMachineCount, IncineratorCount, FireplaceCount;
     local int DisposalCount, ChipperCount, SharkPoolCount, SupplyCount;
     local int LiftCount, PunchClockCount;
-    local string MapName, ReportLine;
+    local int SpecialSplatBit, I;
+    local array<int> UnknownSplatTypes;
+    local string MapName, ReportLine, UnknownTypeList;
     local string DebrisId;
 
     Handler = VCPunchoutHandler_General(PunchoutHandler);
@@ -1491,9 +1493,12 @@ function RunScanReport(PlayerController Requester)
         Requester.ClientMessage("APScanReport: no cleanable level is loaded.");
         return;
     }
+    MapName = WorldInfo.GetMapName(true);
 
-    // Mirrors ProcessStartingMapState's classification chain exactly, so the
-    // sums line up with StartingCleanupScore.
+    // Mirrors ProcessStartingMapState's classification chain, so the sums line
+    // up with StartingCleanupScore. The splat pass goes one step further and
+    // sorts the map-specific types the general chain leaves out, through the
+    // bit their own handler scores them with (see MapSplatBit).
     foreach AllActors(class'VCDebris', Debris)
     {
         if (Debris.bShutdown)
@@ -1588,9 +1593,29 @@ function RunScanReport(PlayerController Requester)
         }
         else
         {
-            // Map-specific splat types score through per-map handler bits and
-            // land in the remainder; the count flags them for manual review.
-            UnknownSplatCount++;
+            SpecialSplatBit = MapSplatBit(MapName, Splat.SplatType);
+            if (SpecialSplatBit != 0 && Splat.IsA('VCSplat_BulletHole'))
+            {
+                // Robot footprints and alien creep extend the class the
+                // welding laser sweeps, so only the welder clears them.
+                WelderPenalty += Handler.GetPenaltyFor(Splat, SpecialSplatBit);
+                WelderCount++;
+            }
+            else if (SpecialSplatBit != 0 && Splat.SplatType == 64)
+            {
+                // Graffiti, cleared with the acid vials the vendor stocks.
+                VendorPenalty += Handler.GetPenaltyFor(Splat, SpecialSplatBit);
+                VendorCount++;
+            }
+            else
+            {
+                // A splat type with no owner here. Its points stay
+                // unattributed in the remainder, so the type list flags it
+                // rather than the column being guessed.
+                UnknownSplatCount++;
+                if (UnknownSplatTypes.Find(Splat.SplatType) == -1)
+                    UnknownSplatTypes.AddItem(Splat.SplatType);
+            }
         }
     }
     foreach AllActors(class'VCMedpackBox', MedpackBox)
@@ -1653,7 +1678,8 @@ function RunScanReport(PlayerController Requester)
     Remainder = Total - MopPenalty - WelderPenalty - HandsDisposalPenalty
         - BarrelPenalty - EquipmentPenalty - VendorPenalty - GravityPenalty
         - DoorPenalty;
-    MapName = WorldInfo.GetMapName(true);
+    for (I = 0; I < UnknownSplatTypes.Length; I++)
+        UnknownTypeList $= " "$UnknownSplatTypes[I];
     ReportLine = "Map="$MapName
         $"|Start="$Total
         $"|Mop="$MopPenalty$"/"$MopCount
@@ -1665,7 +1691,7 @@ function RunScanReport(PlayerController Requester)
         $"|Gravity="$GravityPenalty
         $"|IncineratorDoors="$DoorPenalty
         $"|Remainder="$Remainder
-        $"|UnknownSplats="$UnknownSplatCount
+        $"|UnknownSplats="$UnknownSplatCount$"/types:"$UnknownTypeList
         $"|WelderPickups="$WelderPickupCount
         $"|Machines=Slosh:"$SloshCount$" Bins:"$BinMachineCount
         $" Incinerator:"$IncineratorCount$" Fireplace:"$FireplaceCount
@@ -1678,6 +1704,24 @@ function RunScanReport(PlayerController Requester)
         $int((MopPenalty / Total) * 100.0)$" percent of "$int(Total)
         $" points; remainder "$int(Remainder)$" points"
         $", unknown splats "$UnknownSplatCount$".");
+}
+
+// The per-map punchout handler bit that scores a splat type the general
+// chain does not know, mirroring that handler's own RESULT_ constant. Robot
+// footprints and alien creep extend VCSplat_BulletHole, so the welder owns
+// them; graffiti takes vendor acid vials. A type this misses stays unknown,
+// so the scan reports it rather than burying its points in the remainder.
+function int MapSplatBit(string MapName, int SplatType)
+{
+    if (SplatType == 16 && MapName ~= "VC_Robot")
+        return 8388608;
+    if (SplatType == 32 && MapName ~= "VC_Mantis_01")
+        return 1048576;
+    if (SplatType == 32 && MapName ~= "VC_Incubator")
+        return 2097152;
+    if (SplatType == 64 && MapName ~= "VC_Uprinsing")
+        return 2097152;
+    return 0;
 }
 
 // Updates or appends the map's line in the scan results config object. The

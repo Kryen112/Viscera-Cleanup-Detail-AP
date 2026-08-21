@@ -8,6 +8,11 @@ machine counts plus a map-package search for the floor pickups. The core-kit
 ceiling for the suspect levels is measured in game with APCleanCoreKit, since a
 scan cannot tell how far the core kit reaches on its own.
 
+A scan run before the classifier learned the map-specific splat types leaves
+their points in its remainder column, where the band model cannot see whose
+mess they are. UNSCANNED_SPLAT_PENALTY names the owner for every such splat
+the scan counted, and an import assert holds the two in step.
+
 The logic model is a core-kit ceiling. The core kit (hands, incinerator, mop,
 and buckets) cleans a level to 100 percent on its own, so every cleanliness
 check up to and including 100 percent (regular rungs and Employee of the Month)
@@ -21,7 +26,10 @@ unreachable without that tool, so no toolset is ever credited a rung the mess it
 cannot clear puts out of reach. A few levels leave a large share of mess only
 one situational tool can clear (recorded in CORE_KIT_CEILING_PERCENT): the core
 kit tops out around that ceiling there, and every check above it waits for the
-one EXTRA_CLEAN_TOOL that closes the gap to 100. A tool stored where only
+one EXTRA_CLEAN_TOOL that closes the gap to 100. That ceiling is the only
+guard against a level whose over-100 headroom hides a tool's share, since the
+import assert compares against a theoretical maximum a real shift rarely
+banks. A tool stored where only
 another tool reaches (TOOL_REACH_PREREQUISITES) counts as usable only once
 that prerequisite is also held. Physical pickups (collectibles and Bob notes)
 need the level's clean kit, because a trophy only banks on a not-fired
@@ -98,38 +106,60 @@ OVER_100_PER_TOOL_PERCENT = 10.0
 DEFAULT_FREE_KEYS: frozenset[str] = frozenset({"Mop", "SloshOMatic"})
 HARD_START_FREE_KEYS: frozenset[str] = frozenset({"Hands", "Incinerator"})
 
-# Scan sums per map, raw penalty points:
+# Scan sums per map, raw penalty points, then one count:
 # (start, mop, welder, hands_disposal, barrels, equipment, vendor, free,
-#  remainder). The free column is machine-use work that no lock gates
-# (gravity consoles, incinerator doors standing open).
+#  remainder, unknown_splats). The free column is machine-use work that no lock
+# gates (gravity consoles, incinerator doors standing open). The unknown column
+# counts splats the scan's chain does not recognize; their points sit
+# unattributed inside the remainder, so UNSCANNED_SPLAT_PENALTY below names the
+# tool that owns each one.
 _SCAN: dict[str, tuple[float, float, float, float, float, float, float,
-                       float, float]] = {
-    "VC_SplatterStation": (7851.0, 3605.0, 475.0, 3630.0, 75.0, 66.0, 0.0, 0.0, 0.0),
-    "VC_RustStation": (7808.0, 4672.5, 0.0, 3050.0, 52.5, 33.0, 0.0, 0.0, 0.0),
-    "VC_Section8": (5518.0, 3395.0, 0.0, 2060.0, 30.0, 33.0, 0.0, 0.0, 0.0),
-    "VC_ZeroG": (5727.5, 1627.5, 0.0, 3975.0, 75.0, 0.0, 0.0, 50.0, 0.0),
-    "VC_MedBay": (23818.5, 15610.0, 1200.0, 6405.0, 7.5, 36.0, 560.0, 0.0, 0.0),
-    "VC_Sewer": (21758.5, 15940.0, 925.0, 4630.0, 52.5, 51.0, 160.0, 0.0, 0.0),
-    "VC_Caduceus": (22611.0, 12765.0, 3225.0, 6140.0, 15.0, 66.0, 400.0, 0.0, 0.0),
-    "VC_Cryo": (24752.5, 15622.5, 1530.0, 7610.0, 15.0, 0.0, 160.0, 0.0, -185.0),
-    "VC_Digsite": (20956.5, 10430.0, 2125.0, 7535.0, 7.5, 69.0, 240.0, 0.0, 550.0),
-    "VC_Hall": (9828.0, 5665.0, 1100.0, 3000.0, 30.0, 33.0, 0.0, 0.0, 0.0),
-    "VC_Greenhouse": (13293.5, 5565.0, 0.0, 7287.5, 15.0, 66.0, 320.0, 0.0, 40.0),
-    "VC_Paintenance": (15958.0, 8855.0, 1300.0, 5550.0, 15.0, 33.0, 240.0, 0.0, -35.0),
-    "VC_Dark": (13595.5, 8360.0, 1400.0, 3540.0, 22.5, 33.0, 240.0, 0.0, 0.0),
-    "VC_ZeroG_New": (25810.5, 11095.0, 2295.0, 12315.0, 22.5, 33.0, 0.0, 50.0, 0.0),
-    "VC_Robot": (32915.5, 11562.5, 5610.0, 8395.0, 0.0, 48.0, 560.0, 0.0, 6740.0),
-    "VC_Jungle": (11821.5, 5042.5, 1985.0, 4220.0, 75.0, 99.0, 400.0, 0.0, 0.0),
-    "VC_IceStation": (7033.5, 3867.5, 0.0, 2765.0, 15.0, 66.0, 320.0, 0.0, 0.0),
-    "VC_Incubator": (41951.0, 6697.5, 1690.0, 4325.0, 7.5, 66.0, 320.0, 0.0, 28845.0),
-    "VC_Uprinsing": (22385.5, 5277.5, 5370.0, 6595.0, 60.0, 33.0, 320.0, 0.0, 4730.0),
-    "VC_Energy_01": (25311.0, 6667.5, 2295.0, 9400.0, 0.0, 51.0, 560.0, 0.0, 6337.5),
-    "VC_Darkening": (13590.5, 7420.0, 0.0, 5885.0, 120.0, 33.0, 0.0, 0.0, 132.5),
-    "VC_Mantis_01": (17788.5, 10272.5, 0.0, 5940.0, 45.0, 51.0, 0.0, 0.0, 1480.0),
-    "VC_Horror_01": (18915.5, 12600.0, 0.0, 7030.0, 0.0, 200.0, 0.0, 0.0, -914.5),
-    "VC_Vulcan_01": (23311.5, 6907.5, 3942.0, 14135.0, 30.0, 980.0, 0.0, 0.0, -2683.0),
-    "V_Santa01": (13470.0, 8330.0, 0.0, 3884.0, 0.0, 0.0, 0.0, 0.0, 1256.0),
-    "sw_temple": (9425.5, 2715.0, 0.0, 4624.0, 0.0, 240.0, 0.0, 0.0, 1846.5),
+                       float, float, int]] = {
+    "VC_SplatterStation": (7851.0, 3605.0, 475.0, 3630.0, 75.0, 66.0, 0.0, 0.0, 0.0, 0),
+    "VC_RustStation": (7808.0, 4672.5, 0.0, 3050.0, 52.5, 33.0, 0.0, 0.0, 0.0, 0),
+    "VC_Section8": (5518.0, 3395.0, 0.0, 2060.0, 30.0, 33.0, 0.0, 0.0, 0.0, 0),
+    "VC_ZeroG": (5727.5, 1627.5, 0.0, 3975.0, 75.0, 0.0, 0.0, 50.0, 0.0, 0),
+    "VC_MedBay": (23818.5, 15610.0, 1200.0, 6405.0, 7.5, 36.0, 560.0, 0.0, 0.0, 0),
+    "VC_Sewer": (21758.5, 15940.0, 925.0, 4630.0, 52.5, 51.0, 160.0, 0.0, 0.0, 0),
+    "VC_Caduceus": (22611.0, 12765.0, 3225.0, 6140.0, 15.0, 66.0, 400.0, 0.0, 0.0, 0),
+    "VC_Cryo": (24752.5, 15622.5, 1530.0, 7610.0, 15.0, 0.0, 160.0, 0.0, -185.0, 0),
+    "VC_Digsite": (20956.5, 10430.0, 2125.0, 7535.0, 7.5, 69.0, 240.0, 0.0, 550.0, 0),
+    "VC_Hall": (9828.0, 5665.0, 1100.0, 3000.0, 30.0, 33.0, 0.0, 0.0, 0.0, 0),
+    "VC_Greenhouse": (13293.5, 5565.0, 0.0, 7287.5, 15.0, 66.0, 320.0, 0.0, 40.0, 0),
+    "VC_Paintenance": (15958.0, 8855.0, 1300.0, 5550.0, 15.0, 33.0, 240.0, 0.0, -35.0, 0),
+    "VC_Dark": (13595.5, 8360.0, 1400.0, 3540.0, 22.5, 33.0, 240.0, 0.0, 0.0, 0),
+    "VC_ZeroG_New": (25810.5, 11095.0, 2295.0, 12315.0, 22.5, 33.0, 0.0, 50.0, 0.0, 0),
+    "VC_Robot": (32915.5, 11562.5, 5610.0, 8395.0, 0.0, 48.0, 560.0, 0.0, 6740.0, 65),
+    "VC_Jungle": (11821.5, 5042.5, 1985.0, 4220.0, 75.0, 99.0, 400.0, 0.0, 0.0, 0),
+    "VC_IceStation": (7033.5, 3867.5, 0.0, 2765.0, 15.0, 66.0, 320.0, 0.0, 0.0, 0),
+    "VC_Incubator": (41951.0, 6697.5, 1690.0, 4325.0, 7.5, 66.0, 320.0, 0.0, 28845.0, 364),
+    "VC_Uprinsing": (22385.5, 5277.5, 5370.0, 6595.0, 60.0, 33.0, 320.0, 0.0, 4730.0, 52),
+    "VC_Energy_01": (25311.0, 6667.5, 2295.0, 9400.0, 0.0, 51.0, 560.0, 0.0, 6337.5, 0),
+    "VC_Darkening": (13590.5, 7420.0, 0.0, 5885.0, 120.0, 33.0, 0.0, 0.0, 132.5, 0),
+    "VC_Mantis_01": (17788.5, 10272.5, 0.0, 5940.0, 45.0, 51.0, 0.0, 0.0, 1480.0, 21),
+    "VC_Horror_01": (18915.5, 12600.0, 0.0, 7030.0, 0.0, 200.0, 0.0, 0.0, -914.5, 0),
+    "VC_Vulcan_01": (23311.5, 6907.5, 3942.0, 14135.0, 30.0, 980.0, 0.0, 0.0, -2683.0, 0),
+    "V_Santa01": (13470.0, 8330.0, 0.0, 3884.0, 0.0, 0.0, 0.0, 0.0, 1256.0, 0),
+    "sw_temple": (9425.5, 2715.0, 0.0, 4624.0, 0.0, 240.0, 0.0, 0.0, 1846.5, 0),
+}
+
+# The splat types the scan's classification chain does not recognize. It sorts
+# splats by SplatType and knows blood, scorch, bullet holes, lightning scars,
+# and goo jars; every other type falls through into the remainder, where the
+# band model cannot see whose mess it is. Each entry names the tool that owns
+# the type, the count the scan reported, and the per-splat penalty read from
+# the map handler's own InfractionResults defaults. Robot footprints
+# (VCSplat_MechFoot) and alien creep (VCSplat_Creep) both extend
+# VCSplat_BulletHole, the class the welding laser sweeps, so only the welder
+# clears them. Graffiti (VCSplat_Paint) takes the vendor's acid vials and a wet
+# mop. A map the scan counts unknown splats on and this table does not name
+# fails the import assert below.
+UNSCANNED_SPLAT_PENALTY: dict[str, tuple[str, int, float]] = {
+    # map: (owning tool key, splat count, penalty each)
+    "VC_Robot": ("Welder", 65, 30.0),        # MechFoot, handler bit 8388608
+    "VC_Mantis_01": ("Welder", 21, 30.0),    # Creep, handler bit 1048576
+    "VC_Incubator": ("Welder", 364, 30.0),   # Creep, handler bit 2097152
+    "VC_Uprinsing": ("Vendor", 52, 50.0),    # Paint, handler bit 2097152
 }
 
 # Levels holding each optional tool. Hands, Incinerator, Mop, Slosh-O-Matic,
@@ -169,26 +199,38 @@ TOOL_REACH_PREREQUISITES: dict[str, dict[str, frozenset[str]]] = {
 
 # Levels the core kit alone cannot clean to 100 percent, with the percent it
 # tops out at and the one situational tool that clears the rest. Incubation
-# Emergency, Core Sample, and The Vulcan Affair leave welder mess (bullet
-# holes and creep); Uprinsing leaves vendor mess (graffiti that needs acid
-# vials). The first three ceilings are measured with the APCleanCoreKit dev
-# command. The Vulcan ceiling is a conservative floor under the arithmetic
-# bound of 98.86 (the known maximum 115.90 minus the scanned welder 16.91 and
-# barrel 0.13 shares), pending an APCleanCoreKit measurement; the bound proves
-# the core kit cannot reach 100 there. A level absent here is fully cleaned by
-# the core kit (ceiling 100, no extra tool). Refine a ceiling if a rung
-# strands.
+# Emergency, Core Sample, The Vulcan Affair, and Revolutionary Robotics leave
+# welder mess (bullet holes, creep, and robot footprints); Uprinsing leaves
+# vendor mess (graffiti that needs acid vials). The first three ceilings are
+# measured with the APCleanCoreKit dev command. The Vulcan ceiling is a
+# conservative floor under the arithmetic bound of 98.86 (the known maximum
+# 115.90 minus the scanned welder 16.91 and barrel 0.13 shares), pending an
+# APCleanCoreKit measurement; the bound proves the core kit cannot reach 100
+# there. Played knowledge: Revolutionary Robotics strands the core kit short
+# of 100, so it sits with the measured three at a conservative 80, pending its
+# own measurement.
+#
+# The test that sorts a suspect from a safe level is what share of a level's
+# over-100 headroom the core kit has to bank to make up the mess it cannot
+# reach. Revolutionary Robotics needs 77.7 percent of its headroom (24.67
+# points of welder and vendor mess against 31.74 of headroom), which puts it
+# with the other suspects; every level below about half its headroom reaches
+# 100 with room to spare, Pestilent Penitentiary's 21 creep splats among them
+# at 7.9 percent. A level absent here is fully cleaned by the core kit
+# (ceiling 100, no extra tool). Refine a ceiling if a rung strands.
 CORE_KIT_CEILING_PERCENT: dict[str, float] = {
     "VC_Incubator": 80.0,
     "VC_Uprinsing": 80.0,
     "VC_Energy_01": 80.0,
     "VC_Vulcan_01": 90.0,
+    "VC_Robot": 80.0,
 }
 EXTRA_CLEAN_TOOL: dict[str, str] = {
     "VC_Incubator": "Welder",
     "VC_Uprinsing": "Vendor",
     "VC_Energy_01": "Welder",
     "VC_Vulcan_01": "Welder",
+    "VC_Robot": "Welder",
 }
 
 # Played knowledge: levels whose deeper areas sit behind carried keys, so any
@@ -285,11 +327,13 @@ class _Bands:
     clear the rest of the mess up to the level's core-kit ceiling.
     `situational` holds each situational tool's own measured share (welder
     marks, vendor graffiti, J-HARM barrels; the shovel has no scanned share),
-    unreachable without that tool."""
+    unreachable without that tool. A level's unscanned splats are added to
+    their owner's share, because the scan columns leave them in the
+    remainder."""
 
     def __init__(self, map_name: str) -> None:
         (start, _mop, _welder, _hands_disposal, _barrels, _equipment,
-         _vendor, free, _remainder) = _SCAN[map_name]
+         _vendor, free, _remainder, _unknown) = _SCAN[map_name]
         self.free = free / start * 100.0
         self.mop = _mop / start * 100.0
         self.situational = {
@@ -298,7 +342,28 @@ class _Bands:
             "Lift": _barrels / start * 100.0,
             "Shovel": 0.0,
         }
+        unscanned = UNSCANNED_SPLAT_PENALTY.get(map_name)
+        if unscanned is not None:
+            owner, count, penalty = unscanned
+            self.situational[owner] += count * penalty / start * 100.0
 
+
+# Every splat the scan could not classify has to be attributed to a tool, or
+# its points hide inside the remainder and the band model credits a toolset
+# with mess it cannot reach; the import fails loudly instead.
+for _map, _, _ in LEVELS:
+    *_, _counted = _SCAN[_map]
+    _attributed = UNSCANNED_SPLAT_PENALTY.get(_map)
+    assert _counted == 0 or _attributed is not None, (
+        f"{_map}: the scan counts {_counted} unknown splats and no"
+        f" UNSCANNED_SPLAT_PENALTY row owns them")
+    assert _counted > 0 or _attributed is None, (
+        f"{_map}: UNSCANNED_SPLAT_PENALTY owns splats the scan never counted")
+    assert _attributed is None or _attributed[1] == _counted, (
+        f"{_map}: UNSCANNED_SPLAT_PENALTY counts {_attributed[1]} splats,"
+        f" the scan counted {_counted}")
+    assert _attributed is None or _attributed[0] in SITUATIONAL_TOOL_KEYS, (
+        f"{_map}: UNSCANNED_SPLAT_PENALTY owner is not a situational tool")
 
 _BANDS: dict[str, _Bands] = {m: _Bands(m) for m, _, _ in LEVELS}
 

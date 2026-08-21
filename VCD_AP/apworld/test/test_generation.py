@@ -78,6 +78,26 @@ class TestDefault(VCDTestBase):
         self.assertTrue(location.can_reach(self.state_with(
             kit + [tool_item_name(display, "Lift")])))
 
+    def test_revolutionary_robotics_top_checks_need_its_welder(self):
+        # The level's robot footprints are welder mess, so its clean kit
+        # carries the welder: the core kit alone reaches the low rungs and
+        # stops short of the punch-out, Employee of the Month, and the trophy.
+        display = "Revolutionary Robotics"
+        welder = tool_item_name(display, "Welder")
+        core = [access_item_name(display)] + [
+            tool_item_name(display, key) for key in ("Hands", "Incinerator")]
+        below = self.multiworld.get_location(
+            milestone_name(display, 50), self.player)
+        self.assertTrue(below.can_reach(self.state_with(core)))
+        for name in (milestone_name(display, 90),
+                     employee_of_the_month_name(display),
+                     punch_out_name(display),
+                     collectible_name(display, "Pill Case")):
+            location = self.multiworld.get_location(name, self.player)
+            self.assertFalse(location.can_reach(self.state_with(core)), name)
+            self.assertTrue(
+                location.can_reach(self.state_with(core + [welder])), name)
+
     def test_pickup_rule_pulls_a_required_tool_prerequisite_in(self):
         # A pickup that required Athena's Wrath's welder would need the J-HARM
         # that reaches it too.
@@ -935,18 +955,55 @@ class TestToolsanityBands(unittest.TestCase):
 
     def test_missing_tool_share_caps_the_over_100_climb(self):
         from ..toolsanity import CORE_KIT_KEYS, rung_in_logic, toolset_cap
-        # Revolutionary Robotics: the welder's own mess is 5610 of a 32915.5
-        # start (17.04 points), so without it the physical ceiling is the
-        # 131.74 maximum minus that share (114.70). Lift and Vendor alone must
-        # never put rungs 115 or 120 in logic.
+        # Caduceus: the welder's own mess is 3225 of a 22611.0 start (14.26
+        # points), so without it the physical ceiling is the 125 usable total
+        # minus that share (110.74). Lift and Vendor alone must never put rungs
+        # 110 or 120 in logic.
         kit = CORE_KIT_KEYS | {"Lift", "Vendor"}
-        self.assertAlmostEqual(toolset_cap("VC_Robot", 5, kit),
-                               130.0 - 5610.0 / 32915.5 * 100.0)
-        self.assertTrue(rung_in_logic("VC_Robot", 105, 5, kit))
-        self.assertFalse(rung_in_logic("VC_Robot", 115, 5, kit))
-        self.assertFalse(rung_in_logic("VC_Robot", 120, 5, kit))
+        self.assertAlmostEqual(toolset_cap("VC_Caduceus", 5, kit),
+                               125.0 - 3225.0 / 22611.0 * 100.0)
+        self.assertTrue(rung_in_logic("VC_Caduceus", 105, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Caduceus", 110, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Caduceus", 120, 5, kit))
         # The welder itself reopens the top of the ladder.
-        self.assertTrue(rung_in_logic("VC_Robot", 120, 5, kit | {"Welder"}))
+        self.assertTrue(rung_in_logic("VC_Caduceus", 120, 5, kit | {"Welder"}))
+
+    def test_robot_footprints_gate_the_top_of_revolutionary_robotics(self):
+        from ..toolsanity import (CORE_KIT_KEYS, PUNCHOUT_CLEAN_PERCENT,
+                                  core_kit_ceiling, full_clean_keys,
+                                  rung_in_logic, toolset_cap)
+        # The level's robot footprints are welder mess, so the core kit tops
+        # out at the recorded ceiling and the welder joins its clean kit.
+        self.assertEqual(core_kit_ceiling("VC_Robot"), 80.0)
+        self.assertIn("Welder", full_clean_keys("VC_Robot"))
+        kit = CORE_KIT_KEYS | {"Lift", "Vendor"}
+        self.assertEqual(toolset_cap("VC_Robot", 5, kit), 80.0)
+        self.assertTrue(rung_in_logic("VC_Robot", 75, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Robot", 80, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Robot", 100, 5, kit))
+        # Punching out in good standing waits for the welder too.
+        self.assertLess(toolset_cap("VC_Robot", 5, kit),
+                        PUNCHOUT_CLEAN_PERCENT)
+        with_welder = kit | {"Welder"}
+        self.assertTrue(rung_in_logic("VC_Robot", 100, 5, with_welder))
+        self.assertGreaterEqual(toolset_cap("VC_Robot", 5, with_welder),
+                                PUNCHOUT_CLEAN_PERCENT)
+
+    def test_unscanned_splats_join_their_owner_share(self):
+        from ..toolsanity import _BANDS, _SCAN, UNSCANNED_SPLAT_PENALTY
+        # The scan leaves an unrecognized splat type in its remainder column.
+        # Every counted one is attributed, and its points land on the tool that
+        # clears it rather than staying invisible.
+        for map_name, row in _SCAN.items():
+            self.assertEqual(row[9] > 0, map_name in UNSCANNED_SPLAT_PENALTY,
+                             map_name)
+        start = _SCAN["VC_Robot"][0]
+        self.assertAlmostEqual(
+            _BANDS["VC_Robot"].situational["Welder"],
+            (5610.0 + 65 * 30.0) / start * 100.0)
+        self.assertAlmostEqual(
+            _BANDS["VC_Uprinsing"].situational["Vendor"],
+            (320.0 + 52 * 50.0) / _SCAN["VC_Uprinsing"][0] * 100.0)
 
     def test_deduction_never_pulls_the_clean_kit_below_100(self):
         from ..toolsanity import CORE_KIT_KEYS, rung_in_logic, toolset_cap
