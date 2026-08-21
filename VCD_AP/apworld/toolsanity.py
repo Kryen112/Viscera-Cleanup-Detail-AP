@@ -23,13 +23,13 @@ of logic, but the full kit always reaches the level's over-100 maximum. The
 climb is also capped by the physical ceiling the missing tools leave: a tool's
 own measured mess share (welder marks, vendor graffiti, J-HARM barrels) is
 unreachable without that tool, so no toolset is ever credited a rung the mess it
-cannot clear puts out of reach. A few levels leave a large share of mess only
-one situational tool can clear (recorded in CORE_KIT_CEILING_PERCENT): the core
-kit tops out around that ceiling there, and every check above it waits for the
-one EXTRA_CLEAN_TOOL that closes the gap to 100. That ceiling is the only
-guard against a level whose over-100 headroom hides a tool's share, since the
-import assert compares against a theoretical maximum a real shift rarely
-banks. A tool stored where only
+cannot clear puts out of reach. A few levels leave a large share of mess the
+core kit cannot clear at all (recorded in CORE_KIT_CEILING_PERCENT): the core
+kit tops out around that ceiling there, and every check above it waits for all
+of the level's EXTRA_CLEAN_TOOLS, one on most of them and two on Uprinsing.
+That ceiling is the only guard against a level whose over-100 headroom hides a
+tool's share, since the import assert compares against a theoretical maximum a
+real shift rarely banks. A tool stored where only
 another tool reaches (TOOL_REACH_PREREQUISITES) counts as usable only once
 that prerequisite is also held. Physical pickups (collectibles and Bob notes)
 need the level's clean kit, because a trophy only banks on a not-fired
@@ -44,7 +44,7 @@ calling in here; this module only sees tool keys.
 
 from __future__ import annotations
 
-from .levels import LEVELS, MAX_CLEAN_PERCENT_BY_MAP
+from .levels import LEVELS, MAP_NAMES, MAX_CLEAN_PERCENT_BY_MAP
 from .locations import CEILING_STEP_FLOOR
 
 # Tool keys are the client-to-mod contract written into the grants file;
@@ -85,8 +85,8 @@ CORE_CLEANING_KEYS: frozenset[str] = frozenset({
 
 # The core kit: the tools that clean a level to 100 percent on their own (blood
 # and scorch with the mop and buckets, debris with the hands and incinerator).
-# Every level has all four. A level's full clean kit is this set plus any one
-# EXTRA_CLEAN_TOOL the level needs on top (see below).
+# Every level has all four. A level's full clean kit is this set plus the
+# EXTRA_CLEAN_TOOLS the level needs on top (see below).
 CORE_KIT_KEYS: frozenset[str] = frozenset({
     "Hands", "Incinerator", "Mop", "SloshOMatic",
 })
@@ -198,10 +198,11 @@ TOOL_REACH_PREREQUISITES: dict[str, dict[str, frozenset[str]]] = {
 }
 
 # Levels the core kit alone cannot clean to 100 percent, with the percent it
-# tops out at and the one situational tool that clears the rest. Incubation
+# tops out at and the situational tools that clear the rest. Incubation
 # Emergency, Core Sample, The Vulcan Affair, and Revolutionary Robotics leave
-# welder mess (bullet holes, creep, and robot footprints); Uprinsing leaves
-# vendor mess (graffiti that needs acid vials). The first three ceilings are
+# welder mess (bullet holes, creep, and robot footprints). Uprinsing leaves
+# both graffiti that needs the vendor's acid vials and a welder share larger
+# than the graffiti, so it names two tools. The first three ceilings are
 # measured with the APCleanCoreKit dev command. The Vulcan ceiling is a
 # conservative floor under the arithmetic bound of 98.86 (the known maximum
 # 115.90 minus the scanned welder 16.91 and barrel 0.13 shares), pending an
@@ -217,7 +218,13 @@ TOOL_REACH_PREREQUISITES: dict[str, dict[str, frozenset[str]]] = {
 # with the other suspects; every level below about half its headroom reaches
 # 100 with room to spare, Pestilent Penitentiary's 21 creep splats among them
 # at 7.9 percent. A level absent here is fully cleaned by the core kit
-# (ceiling 100, no extra tool). Refine a ceiling if a rung strands.
+# (ceiling 100, no extra tools). Refine a ceiling if a rung strands.
+#
+# A level can need more than one extra tool, and the ceiling then holds until
+# every one is in hand: Uprinsing leaves 23.99 percent welder mess on top of
+# its 13.04 percent of graffiti, so the vendor alone still has to bank 70
+# percent of the level's headroom to reach 100, the same bet Revolutionary
+# Robotics loses.
 CORE_KIT_CEILING_PERCENT: dict[str, float] = {
     "VC_Incubator": 80.0,
     "VC_Uprinsing": 80.0,
@@ -225,12 +232,12 @@ CORE_KIT_CEILING_PERCENT: dict[str, float] = {
     "VC_Vulcan_01": 90.0,
     "VC_Robot": 80.0,
 }
-EXTRA_CLEAN_TOOL: dict[str, str] = {
-    "VC_Incubator": "Welder",
-    "VC_Uprinsing": "Vendor",
-    "VC_Energy_01": "Welder",
-    "VC_Vulcan_01": "Welder",
-    "VC_Robot": "Welder",
+EXTRA_CLEAN_TOOLS: dict[str, frozenset[str]] = {
+    "VC_Incubator": frozenset({"Welder"}),
+    "VC_Uprinsing": frozenset({"Vendor", "Welder"}),
+    "VC_Energy_01": frozenset({"Welder"}),
+    "VC_Vulcan_01": frozenset({"Welder"}),
+    "VC_Robot": frozenset({"Welder"}),
 }
 
 # Played knowledge: levels whose deeper areas sit behind carried keys, so any
@@ -312,12 +319,13 @@ def usable_keys(map_name: str, unlocked: "frozenset[str]") -> frozenset[str]:
 
 def full_clean_keys(map_name: str) -> frozenset[str]:
     """The tools that clean the level to 100 percent: the core kit, plus the
-    one extra tool a suspect level needs on top. The free pair counts as held,
+    extra tools a suspect level needs on top. The free pair counts as held,
     so this set works for either starting kit. Holding it gates every
     cleanliness check up to and including 100 percent; each situational tool the
-    level has then adds a share over 100 (see toolset_cap)."""
-    extra = EXTRA_CLEAN_TOOL.get(map_name)
-    return CORE_KIT_KEYS | ({extra} if extra is not None else frozenset())
+    level has then adds a share over 100 (see toolset_cap). A suspect level
+    stays at its core-kit ceiling until every extra tool is held, so a level
+    needing two gives no partial credit for the first."""
+    return CORE_KIT_KEYS | EXTRA_CLEAN_TOOLS.get(map_name, frozenset())
 
 
 class _Bands:
@@ -364,6 +372,20 @@ for _map, _, _ in LEVELS:
         f" the scan counted {_counted}")
     assert _attributed is None or _attributed[0] in SITUATIONAL_TOOL_KEYS, (
         f"{_map}: UNSCANNED_SPLAT_PENALTY owner is not a situational tool")
+    _extras = EXTRA_CLEAN_TOOLS.get(_map, frozenset())
+    assert (_map in CORE_KIT_CEILING_PERCENT) == bool(_extras), (
+        f"{_map}: a core-kit ceiling and its extra tools travel together")
+    assert _extras <= frozenset(tools_present(_map)) & SITUATIONAL_TOOL_KEYS, (
+        f"{_map}: EXTRA_CLEAN_TOOLS names something other than a situational"
+        f" tool the level has")
+
+for _table_name, _table in (("CORE_KIT_CEILING_PERCENT", CORE_KIT_CEILING_PERCENT),
+                            ("EXTRA_CLEAN_TOOLS", EXTRA_CLEAN_TOOLS),
+                            ("UNSCANNED_SPLAT_PENALTY", UNSCANNED_SPLAT_PENALTY),
+                            ("NO_HANDS_CEILING_PERCENT", NO_HANDS_CEILING_PERCENT),
+                            ("TOOL_REACH_PREREQUISITES", TOOL_REACH_PREREQUISITES)):
+    _strays = set(_table) - set(MAP_NAMES)
+    assert not _strays, f"{_table_name} names no such level: {sorted(_strays)}"
 
 _BANDS: dict[str, _Bands] = {m: _Bands(m) for m, _, _ in LEVELS}
 

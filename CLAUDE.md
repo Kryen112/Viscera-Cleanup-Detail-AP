@@ -95,11 +95,13 @@ The reviewer treats a violation of any of these as a correctness blocker.
   physical ceiling the missing tools leave (a tool's own scanned mess share is
   unreachable without it, so no toolset is credited a rung it cannot clean to),
   and the full kit reaches the level's over-100 maximum with margin. Five
-  suspect levels leave mess only one tool can clear
+  suspect levels leave mess the core kit cannot clear
   (`CORE_KIT_CEILING_PERCENT`: VC_Incubator, VC_Energy_01, VC_Vulcan_01, and
-  VC_Robot need the Welder, VC_Uprinsing the Vendor); there the core kit tops
-  out at the recorded ceiling and the checks above it wait for that one
-  `EXTRA_CLEAN_TOOL`. Three ceilings are measured with APCleanCoreKit; the
+  VC_Robot need the Welder, VC_Uprinsing both the Vendor and the Welder).
+  There the core kit tops out at the recorded ceiling and the checks above it
+  wait for every one of that level's `EXTRA_CLEAN_TOOLS`, with no partial
+  credit for holding one of two. Three ceilings are measured with
+  APCleanCoreKit; the
   Vulcan ceiling is a conservative floor under the arithmetic bound its scan
   row proves and the Robot ceiling one under player reports of the core kit
   stranding short of 100 there, both pending a measurement. The Robot ceiling

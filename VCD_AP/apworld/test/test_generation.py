@@ -98,6 +98,29 @@ class TestDefault(VCDTestBase):
             self.assertTrue(
                 location.can_reach(self.state_with(core + [welder])), name)
 
+    def test_uprinsing_top_checks_need_both_its_extra_tools(self):
+        # Uprinsing leaves both graffiti and a larger welder share, so its
+        # clean kit carries the vendor and the welder. Either alone leaves the
+        # top checks out of logic.
+        display = "Uprinsing"
+        vendor = tool_item_name(display, "Vendor")
+        welder = tool_item_name(display, "Welder")
+        core = [access_item_name(display)] + [
+            tool_item_name(display, key) for key in ("Hands", "Incinerator")]
+        below = self.multiworld.get_location(
+            milestone_name(display, 50), self.player)
+        self.assertTrue(below.can_reach(self.state_with(core)))
+        for name in (milestone_name(display, 90),
+                     employee_of_the_month_name(display),
+                     punch_out_name(display)):
+            location = self.multiworld.get_location(name, self.player)
+            self.assertFalse(location.can_reach(
+                self.state_with(core + [vendor])), name)
+            self.assertFalse(location.can_reach(
+                self.state_with(core + [welder])), name)
+            self.assertTrue(location.can_reach(
+                self.state_with(core + [vendor, welder])), name)
+
     def test_pickup_rule_pulls_a_required_tool_prerequisite_in(self):
         # A pickup that required Athena's Wrath's welder would need the J-HARM
         # that reaches it too.
@@ -913,17 +936,23 @@ class TestToolsanityBands(unittest.TestCase):
             toolset_cap("VC_Hall", 5, CORE_KIT_KEYS | set(present)),
             float(usable_total("VC_Hall", 5)))
 
-    def test_suspect_level_needs_its_extra_tool(self):
+    def test_suspect_level_needs_its_extra_tools(self):
         from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
         # Incubation Emergency's core kit tops out at its 80 percent ceiling;
         # only the welder lifts it to 100 and opens the over-100 ladder.
         self.assertEqual(toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS), 80.0)
         self.assertGreaterEqual(
             toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS | {"Welder"}), 100.0)
-        # Uprinsing leans on the vendor instead.
+        # Uprinsing needs two: the vendor for its graffiti and the welder for
+        # a larger share of welder mess, so neither alone lifts the ceiling.
         self.assertEqual(toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS), 80.0)
+        self.assertEqual(
+            toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS | {"Vendor"}), 80.0)
+        self.assertEqual(
+            toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS | {"Welder"}), 80.0)
         self.assertGreaterEqual(
-            toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS | {"Vendor"}), 100.0)
+            toolset_cap("VC_Uprinsing", 5,
+                        CORE_KIT_KEYS | {"Vendor", "Welder"}), 100.0)
         # The full kit reaches each suspect's maximum.
         for m in ("VC_Incubator", "VC_Uprinsing"):
             present = self._situational_present(m)
@@ -1007,13 +1036,18 @@ class TestToolsanityBands(unittest.TestCase):
 
     def test_deduction_never_pulls_the_clean_kit_below_100(self):
         from ..toolsanity import CORE_KIT_KEYS, rung_in_logic, toolset_cap
-        # Uprinsing's welder share (23.99) subtracted from its usable total
-        # would land under 110, but the suspect row measured that the vendor
-        # closes the level to 100: the clean kit keeps 100 plus the slack
-        # step, even at coarse steps.
-        kit = CORE_KIT_KEYS | {"Vendor"}
-        self.assertEqual(toolset_cap("VC_Uprinsing", 10, kit), 110.0)
-        self.assertTrue(rung_in_logic("VC_Uprinsing", 100, 10, kit))
+        # Incubation Emergency's lift and vendor shares subtracted from its
+        # 110 usable total land under 110, but the suspect row measured that
+        # the welder closes the level to 100: the clean kit keeps 100 plus the
+        # slack step, even at coarse steps.
+        from ..toolsanity import _BANDS, usable_total
+        kit = CORE_KIT_KEYS | {"Welder"}
+        bands = _BANDS["VC_Incubator"]
+        reachable = (usable_total("VC_Incubator", 10)
+                     - bands.situational["Lift"] - bands.situational["Vendor"])
+        self.assertLess(reachable, 110.0)
+        self.assertEqual(toolset_cap("VC_Incubator", 10, kit), 110.0)
+        self.assertTrue(rung_in_logic("VC_Incubator", 100, 10, kit))
 
     def test_vulcan_waits_for_the_welder(self):
         from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
