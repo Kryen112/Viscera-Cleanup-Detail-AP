@@ -425,6 +425,8 @@ class VCDContext(CommonContext):
         self.clean_mop_maps: set[str] = set()
         # Maps where the janitor holds the Squeaky Clean Boots unlock.
         self.squeaky_boots_maps: set[str] = set()
+        # Whether the mod keeps the punch-out report filled for the janitor.
+        self.auto_fill_punchout_report: bool = False
         self.last_grants_written: "str | None" = None
         self.last_traps_written: "str | None" = None
         # The slot's baseline and applied counter from server data storage.
@@ -836,6 +838,8 @@ class VCDContext(CommonContext):
         self.last_messages_written = None
         self.last_milestones_written = None
         self.start_score_warned = set()
+        self.auto_fill_punchout_report = bool(
+            slot_data.get("auto_fill_punchout_report", False))
         self.death_link_enabled = bool(slot_data.get("death_link", False))
         self.trap_link_enabled = bool(slot_data.get("trap_link", False))
         self.link_tag = messages.session_tag(self.seed_name)
@@ -1056,6 +1060,11 @@ class VCDContext(CommonContext):
             entries.append(f"{map_name}:{' '.join(keys)}")
         return ",".join(entries)
 
+    def auto_fill_flag(self) -> str:
+        """The punch-out auto fill as the grants file spells it: "1" for on,
+        "0" for off. The dedupe payload uses the same spelling as the file."""
+        return "1" if self.auto_fill_punchout_report else "0"
+
     def write_grants_if_changed(self) -> None:
         if not self.install_dir or not self.saves_ready:
             return
@@ -1066,13 +1075,15 @@ class VCDContext(CommonContext):
         boots_ordered = [m for m, _, _ in LEVELS if m in self.squeaky_boots_maps]
         payload = ("|".join([",".join(ordered), tools_string, present_string,
                              ",".join(clean_mop_ordered),
-                             ",".join(boots_ordered)]))
+                             ",".join(boots_ordered),
+                             self.auto_fill_flag()]))
         if payload == self.last_grants_written:
             return
         try:
             grants.write(self.install_dir / "Saves" / "VCArchipelagoGrants.sav",
                          ordered, tools_string, present_string,
-                         clean_mop_ordered, boots_ordered)
+                         clean_mop_ordered, boots_ordered,
+                         self.auto_fill_punchout_report)
         except OSError as error:
             client_logger.error(f"Could not write the grants file: {error}")
             return

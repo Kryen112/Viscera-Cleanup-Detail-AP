@@ -9,6 +9,11 @@
 // The dispatch below mirrors the stock HandleInstantHit order with the grab
 // branches removed.
 //
+// This is also the one server-side sighting of a janitor using the punch
+// clock, which arms the punch-out auto fill: the placed machine's UsedBy is a
+// stub and its panel runs client-side, so the hands dispatch is all the
+// authority ever sees.
+//
 // Locked machines deny with a message here too, so a dead click never reads
 // as a bug. A locked floor tool (welder, broom, shovel) still grabs as a
 // plain carried item; only the weapon grant is withheld until its unlock.
@@ -34,6 +39,16 @@ simulated function bool HandleInstantHit(byte FiringMode, ImpactInfo Impact, opt
     if (FiringMode == 0 && Instigator != None && Role == ROLE_Authority
         && Impact.HitActor != None)
     {
+        // A hands hit that lands on the punch clock arms the punch-out auto
+        // fill. That is looser than the panel opening (a click off the screen
+        // region arms it too), which is harmless: the fill is idempotent and
+        // only ever makes a rung easier. Does nothing when the seed's option
+        // is off, and never changes the dispatch below.
+        if (VCPunchMachine(Impact.HitActor) != None
+            && VCGame_Archipelago(WorldInfo.Game) != None)
+        {
+            VCGame_Archipelago(WorldInfo.Game).NotifyPunchClockUsed();
+        }
         // Each deny mirrors the stock placement guard, so a click that stock
         // hands would not treat as machine use falls through unchanged.
         if (VCBucketDispensor(Impact.HitActor) != None

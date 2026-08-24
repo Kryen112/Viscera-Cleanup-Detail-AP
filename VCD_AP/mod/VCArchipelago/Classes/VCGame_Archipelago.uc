@@ -14,7 +14,10 @@
 // Three adjustments ride on top: the Digsite crate stacking zones widen to
 // the crate archetypes the level spawns, and the published value credits
 // partial sand pit fill (Digsite and Penumbra) and partial seed bed
-// restoration (Greenhouse) gradually (see PublishCleanliness).
+// restoration (Greenhouse) gradually (see PublishCleanliness). The punch-out
+// report's own bonus is part of the game value, and under the seed's auto fill
+// option FillPunchoutReport keeps that form answered rather than leaving it to
+// the player.
 //
 // Level access is gated two ways: the curated menu (VCGameViewportClient_Archipelago
 // hides locked levels from the list) is the front door, and EnforceLevelGate here
@@ -131,6 +134,23 @@ var bool bLinkDeathSweep;
 // Reused load target for the client-written grants file (toolsanity reads).
 var VCArchipelagoGrants GrantsFile;
 
+// Auto fill punchout report: the seed's flag, whether the paperwork is filed
+// yet (the punch clock was used, or a reloaded level came back with the report
+// already written), and how many filed death reports have been announced.
+var bool bAutoFillPunchoutReport;
+var bool bAutoFillSeedRead;
+var bool bPaperworkFiled;
+var int AnnouncedDeathReports;
+
+// The report bonus scales with the length of five text fields, so the filler
+// is a run of full stops: the scorer measures Len() and reads nothing. Built
+// once and reused, so no poll rebuilds 600 characters. The lengths are the
+// form's own maximums, which the PRI clamps a typed edit to.
+const ReportFillerLength  = 600;
+const UnionIDFillerLength = 18;
+var string ReportFiller;
+var string UnionIDFiller;
+
 // Toolsanity: the last applied unlocked-tools mask, to catch a mid-level
 // unlock transition (the sniffer is the one tool granted in place; the rest
 // re-enable machines or floor pickups that already exist in the level).
@@ -229,6 +249,10 @@ event InitGame(string Options, out string ErrorMessage)
     bPresentToolsMaskRead = false;
     bSelfCleaningMap = false;
     bSqueakyBootsMap = false;
+    bAutoFillPunchoutReport = false;
+    bAutoFillSeedRead = false;
+    bPaperworkFiled = false;
+    AnnouncedDeathReports = 0;
     AppliedToolsMask = class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
     OptionalMachineLocks = Spawn(class'VCArchipelagoOptionalMachineLocks');
     SetTimer(1.0, true, 'PublishCleanliness');
@@ -2619,6 +2643,265 @@ function WidenDigsiteCrateStackingZones()
     }
 }
 
+// Reads whether this seed asks the mod to keep the punch-out report filled,
+// from the client-written grants file. Anything but "1", an absent property
+// included, leaves the report to the player.
+function bool IsAutoFillPunchoutReportSeed()
+{
+    if (GrantsFile == None)
+        GrantsFile = new class'VCArchipelagoGrants';
+    if (!class'Engine'.static.BasicLoadObject(GrantsFile,
+        "..\\..\\Saves\\VCArchipelagoGrants.sav", true, 1))
+    {
+        return false;
+    }
+    return GrantsFile.AutoFillPunchoutReport == "1";
+}
+
+// Whether this seed asks the mod to keep the punch-out report filled. The
+// grants file is read once per level, because the option is a seed rule that
+// cannot turn on mid-shift, and the callers are hot: the hands refire while
+// the fire button is held and the cleanliness poll asks every second.
+function bool AutoFillsPunchoutReport()
+{
+    if (!bAutoFillSeedRead)
+    {
+        bAutoFillSeedRead = true;
+        bAutoFillPunchoutReport = IsAutoFillPunchoutReportSeed();
+    }
+    return bAutoFillPunchoutReport;
+}
+
+// The punch clock was used, so the paperwork is filed from here on. Reached
+// from the carry-lock hands, which dispatch every machine click on the
+// authority for the host and every guest alike, because the shipped punch
+// machine's UsedBy is a stub and its panel runs client-side. Any janitor arms
+// it: the report is one form the whole shift shares.
+function NotifyPunchClockUsed()
+{
+    local VCMapInfo MapInfo;
+    local VCPunchoutHandler_General Handler;
+
+    if (bPaperworkFiled)
+        return;
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.bIsOfficeLevel)
+        return;
+    if (!AutoFillsPunchoutReport())
+        return;
+    bPaperworkFiled = true;
+    AnnounceToEveryJanitor("Archipelago: punch-out paperwork filed.");
+    // Fill here rather than waiting for the next poll: the janitor is standing
+    // at the machine, and confirming the punch-out scores the form inside that
+    // same second.
+    Handler = VCPunchoutHandler_General(PunchoutHandler);
+    if (Handler != None)
+        FillPunchoutReport(Handler);
+}
+
+// Says one line to every janitor in the session. The paperwork is one shared
+// form, so a guest who set no option of their own still learns why the
+// cleanliness readout moved.
+function AnnounceToEveryJanitor(string Line)
+{
+    local PlayerController Listener;
+
+    foreach WorldInfo.AllControllers(class'PlayerController', Listener)
+        Listener.ClientMessage(Line);
+}
+
+// A run of full stops of the given length.
+function string FullStops(int Count)
+{
+    local string Filler;
+
+    while (Len(Filler) < Count)
+        Filler = Filler $ ".";
+    return Filler;
+}
+
+// Writes one incident report field through the handler, only when it differs
+// from what the report already holds. The value ids are the form's own, mapped
+// in VCPlayerReplicationInfo_Archipelago.
+function SetReportValue(VCPunchoutHandler_General Handler, int ValueId,
+    coerce string Current, coerce string Wanted)
+{
+    if (Current != Wanted)
+        Handler.ReceiveIncidentReportValue(0, byte(ValueId), Wanted);
+}
+
+// The same, for one filed death report addressed by its index.
+function SetDeathReportValue(VCPunchoutHandler_General Handler,
+    int ReportIndex, int ValueId, coerce string Current, coerce string Wanted)
+{
+    if (Current != Wanted)
+    {
+        Handler.ReceiveDeathReportValue(0, byte(ReportIndex), byte(ValueId),
+            Wanted);
+    }
+}
+
+// Keeps the janitor's punch-out report filled to the score it can carry, under
+// the seed's auto fill option. The report's bonus is a penalty reduction
+// inside ProcessMapState, so filled paperwork raises the same cleanliness the
+// mess does, and every rung reads one number whether the form was typed or
+// filled here.
+//
+// The incident report waits for the punch clock. Each death report fills as its
+// own PID chip goes into the machine, so the chip hunt still has to happen.
+// Every value goes through the handler's receive path, which updates the
+// report, the machine and the Office view panels together, and only on a
+// difference, because that path repaints each panel widget it touches. A remote
+// guest's copy arrives on the game's own punch-out info timer.
+function FillPunchoutReport(VCPunchoutHandler_General Handler)
+{
+    local VCPunchoutIncidentReport Report;
+    local VCPunchoutDeathReport DeathReport;
+    local int I;
+
+    if (!AutoFillsPunchoutReport())
+        return;
+    if (Handler.IncidentReports.Length == 0)
+        return;
+    Report = Handler.IncidentReports[0];
+    if (Report == None)
+        return;
+    if (ReportFiller == "")
+    {
+        ReportFiller = FullStops(ReportFillerLength);
+        UnionIDFiller = FullStops(UnionIDFillerLength);
+    }
+    // A level reloaded after the clock deserializes its own report, and the
+    // filler prose is the record that this mod filed it. A report the player
+    // wrote in a seed without the option never matches, so it never arms.
+    if (!bPaperworkFiled && Report.DescribedWorkMethod == ReportFiller)
+        bPaperworkFiled = true;
+    if (!bPaperworkFiled)
+        return;
+
+    // The text fields, each at the form's own maximum. The union complaint is
+    // the one field whose length subtracts, so it stays empty.
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldWorkMethod,
+        Report.DescribedWorkMethod, ReportFiller);
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldPlayerText,
+        Report.PlayerReport, ReportFiller);
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldPeerText,
+        Report.PeerReport, ReportFiller);
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldUnionID,
+        Report.UnionID, UnionIDFiller);
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldUnionText,
+        Report.UnionReport, "");
+
+    // The two graded choices score for being answered at all, so any value
+    // but the unset 255 earns them.
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldSeverity,
+        int(Report.IncidentSeverity), 0);
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldEfficiency,
+        int(Report.DescribedEfficiency), 0);
+
+    // The counts and the incident boxes, answered from the level's own truth.
+    // These are the answers a janitor cannot know: the scorer grades each
+    // against the value the level counted for itself.
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldIncidents,
+        Report.PEIncidentBitField, Report.IncidentBitField);
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldAliens,
+        Report.PENumDeadAliens, Report.NumDeadAliens);
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldCasings,
+        Report.PENumCasings, Report.NumCasings);
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldBulletHoles,
+        Report.PENumBulletHoles, Report.NumBulletHoles);
+    // Incinerated items climb as the shift burns debris, so this one tracks.
+    SetReportValue(Handler,
+        class'VCPlayerReplicationInfo_Archipelago'.const.ReportFieldIncinerated,
+        Report.IncineratedItemsEstimate, Report.NumIncineratedItems);
+
+    for (I = 0; I < Report.DeceasedWorkers.Length; I++)
+    {
+        DeathReport = Report.DeceasedWorkers[I];
+        if (DeathReport == None)
+            continue;
+        // The level's designer set the causes of death on the chip's own
+        // report, so the guess is copied from the answer, never the reverse.
+        SetDeathReportValue(Handler, I,
+            class'VCPlayerReplicationInfo_Archipelago'.const.DeathReportFieldGuessedCauses,
+            DeathReport.PEDeathBitField, DeathReport.DeathBitField);
+        SetDeathReportValue(Handler, I,
+            class'VCPlayerReplicationInfo_Archipelago'.const.DeathReportFieldRemoval,
+            int(DeathReport.MethodOfRemoval), 0);
+        SetDeathReportValue(Handler, I,
+            class'VCPlayerReplicationInfo_Archipelago'.const.DeathReportFieldDignity,
+            int(DeathReport.DignityShown), 0);
+        SetDeathReportValue(Handler, I,
+            class'VCPlayerReplicationInfo_Archipelago'.const.DeathReportFieldCadaver,
+            DeathReport.StateOfCadaver, ReportFiller);
+        SetDeathReportValue(Handler, I,
+            class'VCPlayerReplicationInfo_Archipelago'.const.DeathReportFieldIncidentText,
+            DeathReport.IncidentReport, ReportFiller);
+    }
+
+    // One line per newly filed report. A deleted report shortens the list, so
+    // the count follows it down rather than going quiet.
+    if (AnnouncedDeathReports > Report.DeceasedWorkers.Length)
+        AnnouncedDeathReports = Report.DeceasedWorkers.Length;
+    while (AnnouncedDeathReports < Report.DeceasedWorkers.Length)
+    {
+        AnnouncedDeathReports++;
+        AnnounceToEveryJanitor("Archipelago: death report "
+            $ AnnouncedDeathReports $ " filed.");
+    }
+}
+
+// Dev command: files the paperwork the punch clock would file, and reports
+// what this level's report is worth against its starting score. The flag is
+// forced in memory only, so a normal shift still follows the seed's option.
+function DevFilePaperwork(PlayerController Requester)
+{
+    local VCPunchoutHandler_General Handler;
+    local int Filed;
+
+    Handler = VCPunchoutHandler_General(PunchoutHandler);
+    if (Handler == None || Handler.StartingCleanupScore <= 0.0
+        || Handler.IncidentReports.Length == 0)
+    {
+        if (Requester != None)
+            Requester.ClientMessage("No punch-out report on this level.");
+        return;
+    }
+    bAutoFillPunchoutReport = true;
+    bAutoFillSeedRead = true;
+    bPaperworkFiled = true;
+    FillPunchoutReport(Handler);
+    // The handler publishes what the report took off the penalty on its last
+    // pass, so this reads the standing worth whether this call filed the form
+    // or a poll already had.
+    Handler.ProcessMapState(self, None);
+    Filed = Handler.IncidentReports[0].DeceasedWorkers.Length;
+    if (Requester != None)
+    {
+        Requester.ClientMessage("Paperwork filed. The report is worth "
+            $ int(Handler.ReportsPenalty) $ " points of "
+            $ int(Handler.StartingCleanupScore) $ ", "
+            $ int((Handler.ReportsPenalty / Handler.StartingCleanupScore)
+                * 100.0)
+            $ " percent, over " $ Filed $ " filed death reports.");
+    }
+    `log("VCAP PAPERWORK map=" $ WorldInfo.GetMapName(true)
+        $ "|Start=" $ Handler.StartingCleanupScore
+        $ "|Report=" $ Handler.ReportsPenalty
+        $ "|DeathReports=" $ Filed);
+}
+
 function PublishCleanliness()
 {
     local VCPunchoutHandler_General Handler;
@@ -2644,6 +2927,10 @@ function PublishCleanliness()
     // Every poll: idempotent, and it catches crates a factory spawns after
     // the first pass.
     WidenDigsiteCrateStackingZones();
+
+    // Under the seed's auto fill option, before the scan reads the penalty the
+    // report reduces, so one poll publishes the paperwork and the mess alike.
+    FillPunchoutReport(Handler);
 
     Handler.ProcessMapState(self, None);
     LivePenalty = Handler.FinalPenalty;

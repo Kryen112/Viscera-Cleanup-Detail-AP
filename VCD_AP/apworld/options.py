@@ -32,7 +32,8 @@ class AboveAndBeyond(Toggle):
     """Extend each level's milestone ladder past 100 percent (levels overfill
     via restorables and bonus points). The ladder tops out a full step under
     the level's known maximum cleanliness, so the last rung stays attainable.
-    Off by default."""
+    Those top rungs lean on the punch-out report, which the
+    auto_fill_punchout_report option can fill for you. Off by default."""
     display_name = "Above and beyond"
 
 
@@ -71,6 +72,18 @@ class HardStartSqueakyBoots(DefaultOnToggle):
     level's boots item is granted up front instead of entering the pool.
     On by default. Does nothing without random_starting_kit."""
     display_name = "Hard start Squeaky Clean Boots"
+
+
+class AutoFillPunchoutReport(Toggle):
+    """Fill the punch-out report for the janitor. The form's paperwork counts
+    toward cleanliness, and some of its answers (the causes of death on each
+    PID, the casing and bullet-hole counts) cannot be known from playing, so
+    this fills the whole form in: the report fills itself when you first use
+    the punch clock, and each PID chip fills its own death report when you feed
+    it into the machine. You still have to find the chips. While this is on the
+    mod keeps the form filled, so your own writing in it does not stick. Off by
+    default."""
+    display_name = "Auto fill punchout report"
 
 
 class TrapPercentage(Range):
@@ -197,6 +210,7 @@ class VCDOptions(PerGameCommonOptions):
     toolsanity: Toolsanity
     random_starting_kit: RandomStartingKit
     hard_start_squeaky_boots: HardStartSqueakyBoots
+    auto_fill_punchout_report: AutoFillPunchoutReport
     trap_percentage: TrapPercentage
     useful_percentage: UsefulPercentage
     death_link: VCDDeathLink

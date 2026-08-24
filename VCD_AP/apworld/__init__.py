@@ -630,6 +630,8 @@ class VCDWorld(World):
             "toolsanity": bool(self.options.toolsanity),
             "hard_start_squeaky_boots": bool(
                 self.options.hard_start_squeaky_boots),
+            "auto_fill_punchout_report": bool(
+                self.options.auto_fill_punchout_report),
             "hard_start_maps": sorted(self.hard_start_maps),
             "started_maps": sorted(self.started_maps),
             "pooled_maps": list(self.pooled_maps),

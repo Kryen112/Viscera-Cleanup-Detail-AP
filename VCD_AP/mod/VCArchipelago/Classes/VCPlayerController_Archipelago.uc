@@ -124,6 +124,18 @@ exec function APSpawnBobNotes()
         Game.DevSpawnBobNotes(self);
 }
 
+// Files the punch-out paperwork the way the punch clock does under the auto
+// fill option, and reports what this level's report is worth. In memory only,
+// so a normal shift still follows the seed's option.
+exec function APFilePaperwork()
+{
+    local VCGame_Archipelago Game;
+
+    Game = DevCommandGame();
+    if (Game != None)
+        Game.DevFilePaperwork(self);
+}
+
 // Shows every level in the menu and passes the bounce gate for the rest of
 // this game session, for the measurement tour. Never writes the grants file.
 exec function APLevelsUnlockAll()

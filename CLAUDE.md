@@ -245,6 +245,26 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   count toward cleanliness, but each report field is clamped to its UI maximum
   server-side (600 characters, or 18 for the numeric Union ID), so a pasted
   overflow cannot inflate the score past what the fields legitimately hold.
+  The whole form's value ids are mapped in
+  `VCPlayerReplicationInfo_Archipelago`, the one id table. Under the
+  `auto_fill_punchout_report` option (off by default, carried to the mod as the
+  grants file's `AutoFillPunchoutReport` property, "1" for on) the mod keeps
+  that form filled to the score it can carry: the incident report from the
+  first hands hit that lands on the punch clock, and each death report as its
+  own PID chip reaches the machine, so the chip hunt survives. The placed punch machine is
+  `VCDPunchMachine_Content`, whose `UsedBy` is an empty stub and whose panel
+  runs client-side through `VCMachineUIPanelComponent`, so the only
+  server-side sighting of a janitor using the clock is the carry-lock hands
+  dispatching the click (`VCWeap_Hands_Archipelago.HandleInstantHit`). The
+  legacy `VCPunchMachine.PawnUsed` and `ShowPunchOutMenu` path never runs.
+  Filler is a run of full stops (the scorer measures only `Len()`),
+  the union complaint field stays empty because its length subtracts, and the
+  guessed causes of death are copied from the chip's own `DeathBitField`,
+  never the reverse. Values go through the handler's receive path and only on
+  a difference. The option is strictly permissive, so no logic, ceiling, or
+  known-maximum changes with it: it makes a rung easier to reach, never
+  harder. `APFilePaperwork` files it on demand and reports what a level's
+  report is worth.
   Three documented adjustments ride on top of the game value: the mod widens
   the Digsite's crate stacking zones to the crate archetypes the level spawns
   (the shipped map data lists only Type1 crates, which the level barely has;

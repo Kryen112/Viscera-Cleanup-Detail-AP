@@ -59,14 +59,23 @@ class TestGrantsCodec(unittest.TestCase):
             "PresentTools": "VC_Hall:Hands Welder Incinerator,VC_Cryo:Hands",
             "SelfCleaningMaps": "VC_Hall,VC_Cryo",
             "SqueakyBootsMaps": "VC_Cryo",
+            "AutoFillPunchoutReport": "0",
         })
+
+    def test_write_carries_the_auto_fill_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "VCArchipelagoGrants.sav"
+            grants.write(path, ["VC_Hall"], auto_fill_punchout_report=True)
+            properties = read_sav_properties(path.read_bytes())
+        self.assertEqual(properties["AutoFillPunchoutReport"], "1")
 
     def test_write_defaults_to_toolsanity_off(self) -> None:
         # Empty UnlockedTools and PresentTools are the toolsanity-off
         # contract: the mod treats every tool as unlocked and the HUD panel
         # shows the all-available fallback. Empty SelfCleaningMaps means the
         # mop dirties normally everywhere; empty SqueakyBootsMaps means the
-        # janitor tracks bloody footprints everywhere.
+        # janitor tracks bloody footprints everywhere. "0" for the auto fill
+        # leaves the punch-out report to the player.
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "VCArchipelagoGrants.sav"
             grants.write(path, ["VC_Hall"])
@@ -75,6 +84,8 @@ class TestGrantsCodec(unittest.TestCase):
         self.assertEqual(properties["PresentTools"], "")
         self.assertEqual(properties["SelfCleaningMaps"], "")
         self.assertEqual(properties["SqueakyBootsMaps"], "")
+        # Anything but "1" leaves the punch-out report to the player.
+        self.assertEqual(properties["AutoFillPunchoutReport"], "0")
 
 
 if __name__ == "__main__":

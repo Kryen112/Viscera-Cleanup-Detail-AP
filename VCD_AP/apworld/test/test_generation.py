@@ -303,6 +303,37 @@ class TestLinkOptionsDefaultOff(VCDTestBase):
         self.assertIs(slot_data["trap_link"], False)
 
 
+class TestAutoFillPunchoutReport(VCDTestBase):
+    options = {"auto_fill_punchout_report": True}
+
+    def test_slot_data_reports_the_auto_fill_on(self):
+        slot_data = self.world.fill_slot_data()
+        self.assertIs(slot_data["auto_fill_punchout_report"], True)
+
+    def test_the_auto_fill_leaves_logic_alone(self):
+        # The option only tells the mod to fill the punch-out form, which can
+        # make a rung easier to reach but never harder, so logic stays exactly
+        # as it is with the option off. Same assertions as the default world.
+        access = [access_item_name("Waste Disposal")]
+        kit = self.pickup_kit("VC_Sewer")
+        high = self.multiworld.get_location(
+            milestone_name("Waste Disposal", 95), self.player)
+        punch = self.multiworld.get_location(
+            punch_out_name("Waste Disposal"), self.player)
+        self.assertFalse(high.can_reach(self.state_with(access)))
+        self.assertTrue(high.can_reach(self.state_with(access + kit)))
+        self.assert_needs_every_item(punch.can_reach, access + kit,
+                                     "Punch Out")
+
+
+class TestAutoFillPunchoutReportDefaultOff(VCDTestBase):
+    options = {}
+
+    def test_slot_data_reports_the_auto_fill_off(self):
+        slot_data = self.world.fill_slot_data()
+        self.assertIs(slot_data["auto_fill_punchout_report"], False)
+
+
 class TestUsefulPercentage(VCDTestBase):
     options = {"trap_percentage": 0, "useful_percentage": 50}
 

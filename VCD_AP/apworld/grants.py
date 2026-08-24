@@ -1,7 +1,8 @@
 """Codec for the save files the client writes and the mod reads via
-``BasicLoadObject``: the grants file (``Saves\\VCArchipelagoGrants.sav``, one
-``StrProperty`` named ``UnlockedMaps``) and, through ``build_object``, any
-sibling file holding a list of string properties (the traps file uses this).
+``BasicLoadObject``: the grants file (``Saves\\VCArchipelagoGrants.sav``, a
+list of ``StrProperty`` entries starting with ``UnlockedMaps``) and, through
+``build_object``, any sibling file holding a list of string properties (the
+traps file uses this).
 
 Byte layout (little-endian), decoded from a mod-written file:
     int32 revision = 1
@@ -79,7 +80,8 @@ def write_atomic(path: Path, data: bytes) -> None:
 def write(path: Path, map_names: Iterable[str],
           unlocked_tools: str = "", present_tools: str = "",
           self_cleaning_maps: Iterable[str] = (),
-          squeaky_boots_maps: Iterable[str] = ()) -> None:
+          squeaky_boots_maps: Iterable[str] = (),
+          auto_fill_punchout_report: bool = False) -> None:
     """Write the grants file atomically. ``unlocked_tools`` is the toolsanity
     string (``"VC_Hall:Hands Welder,VC_Cryo:"``, keys space-joined per map);
     empty means toolsanity off, and the mod treats every tool as unlocked.
@@ -89,11 +91,15 @@ def write(path: Path, map_names: Iterable[str],
     names where the janitor holds the Self-Cleaning Mop; a map absent means the
     mop dirties normally there (absent means off, like ``UnlockedMaps``).
     ``squeaky_boots_maps`` is the same, for the Squeaky Clean Boots: a map
-    absent means the janitor tracks bloody footprints there normally."""
+    absent means the janitor tracks bloody footprints there normally.
+    ``auto_fill_punchout_report`` writes ``"1"`` when the seed asks the mod to
+    keep the punch-out report filled; anything else, an absent property
+    included, leaves the report to the player."""
     write_atomic(path, build_object([
         ("UnlockedMaps", join_maps(map_names)),
         ("UnlockedTools", unlocked_tools),
         ("PresentTools", present_tools),
         ("SelfCleaningMaps", join_maps(self_cleaning_maps)),
         ("SqueakyBootsMaps", join_maps(squeaky_boots_maps)),
+        ("AutoFillPunchoutReport", "1" if auto_fill_punchout_report else "0"),
     ]))

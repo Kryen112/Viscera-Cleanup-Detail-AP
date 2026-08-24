@@ -32,3 +32,9 @@ var string SelfCleaningMaps;
 // Boots, so that level's janitor never tracks bloody footprints. A map absent
 // means the janitor tracks prints normally there (absent means off).
 var string SqueakyBootsMaps;
+
+// Auto fill punchout report: "1" asks the mod to keep the janitor's punch-out
+// report filled to the score it can carry. Anything else, including an absent
+// property, leaves the report to the player, which keeps older clients and
+// seeds without the option on stock behavior.
+var string AutoFillPunchoutReport;

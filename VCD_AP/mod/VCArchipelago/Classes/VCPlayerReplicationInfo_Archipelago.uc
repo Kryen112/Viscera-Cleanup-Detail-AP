@@ -32,11 +32,30 @@ const ReportFieldUnionText   = 11;
 const ReportTextFieldLimit   = 600;
 const ReportUnionIDLimit     = 18;
 
+// The rest of the incident report's value ids. Nothing clamps these (their
+// bonuses are ratio-clamped against the level's own truth, so no value
+// inflates them), but the auto fill in the game mode writes them, and one id
+// map for the whole form beats two.
+const ReportFieldIncinerated = 0;
+const ReportFieldSeverity    = 1;
+const ReportFieldEfficiency  = 4;
+const ReportFieldIncidents   = 5;
+const ReportFieldAliens      = 6;
+const ReportFieldCasings     = 7;
+const ReportFieldBulletHoles = 8;
+
 // The per-employee death report carries the same length-based bonus on two
 // text fields (value ids 3 and 6, both capped at 600 in the UI), through its
 // own server RPC, so it needs the same clamp.
 const DeathReportFieldCadaver     = 3;
 const DeathReportFieldIncidentText = 6;
+
+// The rest of the per-employee death report's value ids, for the same auto
+// fill. Id 1 holds the correct answer the level's designer set, so the auto
+// fill reads it and writes id 2, never the other way round.
+const DeathReportFieldGuessedCauses = 2;
+const DeathReportFieldRemoval       = 4;
+const DeathReportFieldDignity       = 5;
 
 reliable server function ServerReceiveUICommand(Actor TargetObject, name CommandID,
     optional int IntData, optional string StringData, optional Object ObjectData)
