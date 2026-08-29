@@ -240,12 +240,16 @@ EXTRA_CLEAN_TOOLS: dict[str, frozenset[str]] = {
     "VC_Robot": frozenset({"Welder"}),
 }
 
-# Played knowledge: levels whose deeper areas sit behind carried keys, so any
-# toolset without Hands hits a hard ceiling no scan can see. House of
-# Horror's measured ceiling is 45 percent with mop and buckets alone,
-# incident reports included.
+# Played knowledge: levels where a toolset without Hands hits a hard ceiling no
+# scan can see. House of Horror walls its deeper areas behind carried keys and
+# measures 45 percent with mop and buckets alone, incident reports included.
+# Penumbra's 40 is a conservative floor under its rung 49 playing out of reach,
+# which proves only that the same pair stops short of the 54.60 its scanned mop
+# share credits, pending a measurement. No mechanism is recorded there, so
+# revise it from play, never from the scan.
 NO_HANDS_CEILING_PERCENT: dict[str, float] = {
     "VC_Horror_01": 45.0,
+    "VC_Darkening": 40.0,
 }
 
 # A hands-and-incinerator start without a mop spreads bloody footprints while
@@ -399,6 +403,15 @@ for _map, _, _ in LEVELS:
         assert _reachable >= 100.0, (
             f"{_map}: the scan's situational shares contradict the"
             f" core-kit-cleans-to-100 claim ({_reachable:.2f})")
+
+# A no-hands ceiling only means something below what the mop and buckets reach
+# on their own; a row at or above that share is a silent no-op that reads as a
+# live constraint. The import fails loudly instead.
+for _map, _ceiling in NO_HANDS_CEILING_PERCENT.items():
+    _mop_only = _BANDS[_map].free + _BANDS[_map].mop
+    assert _ceiling < _mop_only, (
+        f"{_map}: a no-hands ceiling of {_ceiling} clamps nothing, the mop"
+        f" and buckets reach {_mop_only:.2f} there")
 
 
 def _slack_step(step: int) -> int:

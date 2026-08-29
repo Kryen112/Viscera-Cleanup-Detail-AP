@@ -909,8 +909,9 @@ class TestToolsanityBands(unittest.TestCase):
         self.assertTrue(rung_in_logic("VC_Incubator", 5, 5, kit))
         self.assertFalse(rung_in_logic("VC_Incubator", 15, 5, kit))
 
-    def test_no_hands_ceiling_on_key_gated_levels(self):
-        from ..toolsanity import DEFAULT_FREE_KEYS, rung_in_logic, toolset_cap
+    def test_no_hands_ceiling_holds_the_mop_only_ladder_down(self):
+        from ..toolsanity import (DEFAULT_FREE_KEYS, free_kit_rungs,
+                                  rung_in_logic, toolset_cap)
         kit = frozenset(DEFAULT_FREE_KEYS)
         # House of Horror walls its deeper areas behind carried keys: without
         # hands the measured ceiling is 45 percent, under the 66 the mop share
@@ -922,6 +923,22 @@ class TestToolsanityBands(unittest.TestCase):
         # level reaches its over-100 maximum.
         self.assertTrue(rung_in_logic(
             "VC_Horror_01", 45, 5, kit | {"Hands", "Incinerator"}))
+        # Penumbra's conservative 40 holds the same pair under the 54.60 its
+        # mop share would credit, so the mop-only ladder tops out at rung 35.
+        self.assertEqual(toolset_cap("VC_Darkening", 5, kit), 40.0)
+        self.assertTrue(rung_in_logic("VC_Darkening", 35, 5, kit))
+        self.assertFalse(rung_in_logic("VC_Darkening", 40, 5, kit))
+        self.assertTrue(rung_in_logic(
+            "VC_Darkening", 100, 5, kit | {"Hands", "Incinerator"}))
+        # The scanned mop share would have credited rung 49 on the fine step,
+        # which plays out of reach. The ceiling is what holds it out.
+        self.assertFalse(rung_in_logic("VC_Darkening", 49, 1, kit))
+        self.assertTrue(rung_in_logic("VC_Darkening", 35, 1, kit))
+        # The coarse step puts rung 30 plus a full step of slack exactly on the
+        # cap, so the free kit still opens Penumbra with three rungs, one over
+        # the two a starting level has to clear.
+        self.assertEqual(free_kit_rungs("VC_Darkening", 10, set()),
+                         [10, 20, 30])
         # A map absent from the ceiling table with mop only is exactly its
         # scanned mop share.
         self.assertAlmostEqual(toolset_cap("VC_Sewer", 5, kit),
