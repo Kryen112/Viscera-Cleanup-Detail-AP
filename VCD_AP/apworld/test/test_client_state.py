@@ -17,9 +17,9 @@ from NetUtils import ClientStatus
 from .bases import read_sav_properties
 from .. import _launch_client, installer, messages, milestones
 from ..saves import SaveManager
-from ..client import (VCDContext, death_cause, death_count_to_bounce,
-                      goal_locations_from_slot_data, launch,
-                      location_names_from_state, message_segments,
+from ..client import (LINK_KINDS, VCDCommandProcessor, VCDContext, death_cause,
+                      death_count_to_bounce, goal_locations_from_slot_data,
+                      launch, location_names_from_state, message_segments,
                       parse_launch_args, parse_rungs, print_json_relevant,
                       spawn_marker_to_bounce, start_score_mismatch,
                       state_is_current, traps_applied_to_push)
@@ -355,6 +355,14 @@ class TestOnBounced(unittest.TestCase):
         ctx._on_bounced(self._bounce("Alice", "Ice Trap"))
         self.assertEqual(ctx.link_entries, [])
 
+    def test_a_disabled_link_queues_nothing_while_the_tag_lingers(self) -> None:
+        # A mid-run /traplink off clears the flag now and drops the tag a loop
+        # turn later, so a bounce landing in between must still queue nothing.
+        ctx = _links_context(None)
+        ctx.trap_link_enabled = False
+        ctx._on_bounced(self._bounce("Alice", "Ice Trap"))
+        self.assertEqual(ctx.link_entries, [])
+
 
 class TestOnDeathlink(unittest.TestCase):
     def test_inbound_death_queues_and_toasts(self) -> None:
@@ -371,13 +379,184 @@ class TestOnDeathlink(unittest.TestCase):
         self.assertEqual(ctx.link_entries, ["1:Death"])
         self.assertIn("Alice", ctx.message_entries[0])
 
-    def test_death_link_off_still_toasts_but_never_queues(self) -> None:
-        # Defensive only: the tag is off with the option, so no bounce should
-        # arrive; if one does, the janitor must not die.
+    def test_death_link_off_neither_queues_nor_toasts(self) -> None:
+        # The tag is off with the link, so no bounce should arrive. One that
+        # lands in the turn between a mid-run disable and the tag dropping must
+        # neither kill the janitor nor toast a death with nothing behind it.
         ctx = _links_context(None)
         ctx.death_link_enabled = False
         ctx.on_deathlink({"time": 1.0, "source": "Alice"})
         self.assertEqual(ctx.link_entries, [])
+        self.assertEqual(ctx.message_entries, [])
+
+
+def _link_toggle_context(install_dir: "Path | None" = None,
+                         enabled: bool = False) -> VCDContext:
+    """A context carrying only the link-toggle state, skipping __init__ so no
+    framework plumbing is needed. No server, so the tag updates never send.
+    `enabled` starts both links on, the way a connected slot that rolled them
+    on would sit, so a test can exercise turning one off."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.install_dir = install_dir
+    ctx.saves_ready = install_dir is not None
+    ctx.seed_name = "seed_1"
+    ctx.death_link_enabled = enabled
+    ctx.trap_link_enabled = enabled
+    ctx.link_overrides = {kind: None for kind in LINK_KINDS}
+    ctx.link_seed_state = {kind: enabled for kind in LINK_KINDS}
+    ctx.link_seed_known = False
+    ctx.link_tag = "seed_1-feedface"
+    ctx.link_index = 0
+    ctx.link_entries = []
+    ctx.last_links_written = None
+    ctx.tags = {"AP", "DeathLink", "TrapLink"} if enabled else {"AP"}
+    ctx.server = None
+    ctx.last_death_link = 0.0
+    return ctx
+
+
+class _RecordingProcessor(VCDCommandProcessor):
+    """The command processor with its output captured instead of printed."""
+
+    def __init__(self, ctx: VCDContext) -> None:
+        self.ctx = ctx
+        self.lines: list[str] = []
+
+    def output(self, text: str) -> None:
+        self.lines.append(text)
+
+
+def _run_link(body):
+    """Run a link-command body in a loop, so the create_task tag updates the
+    commands schedule actually execute before the assertions."""
+    async def run():
+        result = body()
+        await asyncio.sleep(0)
+        return result
+    return asyncio.run(run())
+
+
+class TestLinkToggleCommands(unittest.TestCase):
+    """The /deathlink and /traplink commands: an override the player sets by
+    hand beats what the seed rolled, survives a reconnect, and carries into the
+    links file the mod reads."""
+
+    def test_bare_command_flips_the_effective_state(self) -> None:
+        def body():
+            processor = _RecordingProcessor(_link_toggle_context())
+            processor._cmd_deathlink("")
+            return processor
+        processor = _run_link(body)
+        self.assertTrue(processor.ctx.death_link_enabled)
+        self.assertIn("DeathLink", processor.ctx.tags)
+        self.assertTrue(processor.ctx.link_overrides["death"])
+
+    def test_explicit_arguments_set_the_override(self) -> None:
+        # Each argument starts from the opposite state, so an assertion can
+        # never pass on a value that was already correct.
+        for argument, expected in (("on", True), ("off", False),
+                                   ("1", True), ("0", False),
+                                   ("true", True), ("false", False)):
+            with self.subTest(argument=argument):
+                def body():
+                    processor = _RecordingProcessor(
+                        _link_toggle_context(enabled=not expected))
+                    processor._cmd_traplink(argument)
+                    return processor
+                processor = _run_link(body)
+                self.assertEqual(processor.ctx.trap_link_enabled, expected)
+                self.assertEqual(processor.ctx.link_overrides["trap"], expected)
+                self.assertEqual("TrapLink" in processor.ctx.tags, expected)
+
+    def test_turning_a_live_link_off_drops_the_tag(self) -> None:
+        def body():
+            processor = _RecordingProcessor(_link_toggle_context(enabled=True))
+            processor._cmd_deathlink("off")
+            return processor
+        processor = _run_link(body)
+        self.assertFalse(processor.ctx.death_link_enabled)
+        self.assertNotIn("DeathLink", processor.ctx.tags)
+        # The other link is untouched by its neighbor's toggle.
+        self.assertTrue(processor.ctx.trap_link_enabled)
+        self.assertIn("TrapLink", processor.ctx.tags)
+
+    def test_seed_argument_drops_the_override(self) -> None:
+        def body():
+            ctx = _link_toggle_context(enabled=True)
+            ctx.link_seed_known = True
+            processor = _RecordingProcessor(ctx)
+            # Off by hand, then handed back to the seed, which rolled it on.
+            processor._cmd_traplink("off")
+            processor._cmd_traplink("seed")
+            return processor
+        processor = _run_link(body)
+        self.assertIsNone(processor.ctx.link_overrides["trap"])
+        self.assertTrue(processor.ctx.trap_link_enabled)
+        self.assertIn("TrapLink", processor.ctx.tags)
+
+    def test_unknown_argument_reports_usage_and_changes_nothing(self) -> None:
+        def body():
+            processor = _RecordingProcessor(_link_toggle_context())
+            processor._cmd_deathlink("maybe")
+            return processor
+        processor = _run_link(body)
+        self.assertIsNone(processor.ctx.link_overrides["death"])
+        self.assertFalse(processor.ctx.death_link_enabled)
+        self.assertIn("Usage: /deathlink [on | off | seed]",
+                      processor.lines[0])
+
+    def test_override_survives_a_reconnect(self) -> None:
+        def body():
+            processor = _RecordingProcessor(_link_toggle_context())
+            processor._cmd_deathlink("on")
+            # A reconnect whose slot data still says off must not undo it.
+            processor.ctx.refresh_links({"death_link": False,
+                                         "trap_link": False})
+            return processor
+        processor = _run_link(body)
+        self.assertTrue(processor.ctx.death_link_enabled)
+        self.assertTrue(processor.ctx.link_wanted("death"))
+        self.assertFalse(processor.ctx.link_seed_state["death"])
+        # The tag is what actually keeps traffic flowing across the reconnect.
+        self.assertIn("DeathLink", processor.ctx.tags)
+
+    def test_reconnect_without_an_override_follows_the_seed(self) -> None:
+        def body():
+            ctx = _link_toggle_context()
+            ctx.refresh_links({"death_link": True, "trap_link": False})
+            return ctx
+        ctx = _run_link(body)
+        self.assertTrue(ctx.death_link_enabled)
+        self.assertFalse(ctx.trap_link_enabled)
+        self.assertIn("DeathLink", ctx.tags)
+        self.assertNotIn("TrapLink", ctx.tags)
+
+    def test_death_toggle_rewrites_the_links_file(self) -> None:
+        # The mod sweeps the crew on this file's flag, so a toggle has to reach
+        # the game and not just the server.
+        for argument, expected, enabled in (("on", "1", False),
+                                            ("off", "0", True)):
+            with self.subTest(argument=argument):
+                with tempfile.TemporaryDirectory() as folder:
+                    def body():
+                        processor = _RecordingProcessor(_link_toggle_context(
+                            Path(folder), enabled=enabled))
+                        processor._cmd_deathlink(argument)
+                        return processor
+                    _run_link(body)
+                    path = Path(folder) / "Saves" / "VCArchipelagoLinks.sav"
+                    properties = read_sav_properties(path.read_bytes())
+                self.assertEqual(properties["DeathLinkOn"], expected)
+                self.assertEqual(properties["SessionTag"], "seed_1-feedface")
+
+    def test_message_before_connect_says_the_seed_is_unknown(self) -> None:
+        def body():
+            processor = _RecordingProcessor(_link_toggle_context())
+            processor._cmd_traplink("on")
+            return processor
+        processor = _run_link(body)
+        self.assertEqual(processor.lines,
+                         ["TrapLink is now on, whatever the seed rolls."])
 
 
 def _traps_context() -> VCDContext:

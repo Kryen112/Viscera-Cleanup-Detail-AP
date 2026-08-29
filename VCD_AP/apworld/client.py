@@ -24,6 +24,7 @@ import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 import Utils
 from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser,
@@ -67,6 +68,31 @@ QUEUE_ID_TO_TYPE: dict[int, str] = {
 TRAP_NAME_BY_TYPE: dict[str, str] = {
     queue_type: name for name, queue_type in traps.TRAP_TYPE_BY_NAME.items()
 }
+
+
+class LinkKind(NamedTuple):
+    """One bounce link the player can flip while connected."""
+    noun: str                       # "DeathLink"
+    command: str                    # "/deathlink"
+    slot_data_key: str              # "death_link"
+    state_attribute: str            # "death_link_enabled"
+    updater: str                    # the coroutine that moves the tag
+    carries_into_links_file: bool   # the mod reads this link's flag
+
+
+# The two links a player may flip mid-run. Neither is an item nor a location,
+# so toggling one cannot change what the seed requires or make it unsolvable.
+LINK_KINDS: dict[str, LinkKind] = {
+    "death": LinkKind("DeathLink", "/deathlink", "death_link",
+                      "death_link_enabled", "update_death_link", True),
+    "trap": LinkKind("TrapLink", "/traplink", "trap_link",
+                     "trap_link_enabled", "update_trap_link", False),
+}
+
+# Accepted arguments to a link command. "seed" drops the override and a bare
+# command flips the effective state, so neither needs a row here.
+LINK_ARGUMENTS: dict[str, bool] = {"on": True, "true": True, "1": True,
+                                   "off": False, "false": False, "0": False}
 
 # Received-item id to (internal map name, tool key), so a granted tool item
 # unlocks its tool on its level through the grants file.
@@ -404,6 +430,55 @@ class VCDCommandProcessor(ClientCommandProcessor):
         the mod again while auto-install is on (the default)."""
         self.ctx.uninstall_mod()
 
+    def _set_link(self, kind: str, state: str) -> None:
+        """Shared body of the two link commands: resolve the argument to an
+        override, re-apply the tag, and report what the seed rolled once slot
+        data has arrived."""
+        link_kind = LINK_KINDS[kind]
+        argument = state.strip().lower()
+        if argument in LINK_ARGUMENTS:
+            self.ctx.link_overrides[kind] = LINK_ARGUMENTS[argument]
+        elif argument == "seed":
+            self.ctx.link_overrides[kind] = None
+        elif argument == "":
+            self.ctx.link_overrides[kind] = not self.ctx.link_wanted(kind)
+        else:
+            self.output(f"Usage: {link_kind.command} [on | off | seed]. "
+                        f"Bare {link_kind.command} flips it.")
+            return
+        wanted = self.ctx.link_wanted(kind)
+        self.ctx.apply_link_state(kind, wanted)
+        word = "on" if wanted else "off"
+        if not self.ctx.link_seed_known:
+            # Not connected yet, so what the seed rolled is still unknown.
+            if self.ctx.link_overrides[kind] is None:
+                self.output(f"{link_kind.noun} follows whatever the seed "
+                            f"rolls.")
+            else:
+                self.output(f"{link_kind.noun} is now {word}, whatever the "
+                            f"seed rolls.")
+        elif self.ctx.link_overrides[kind] is None:
+            self.output(f"{link_kind.noun} follows the seed again: {word}.")
+        else:
+            seed_word = "on" if self.ctx.link_seed_state[kind] else "off"
+            self.output(f"{link_kind.noun} is now {word} (the seed rolled "
+                        f"{seed_word}). Survives a reconnect. Resets when the "
+                        f"client restarts.")
+
+    def _cmd_deathlink(self, state: str = "") -> None:
+        """Turn DeathLink on or off mid-run, overriding what the seed rolled.
+        Usage: /deathlink [on | off | seed]. Bare /deathlink flips it and
+        'seed' drops the override. While it is on, any death takes the whole
+        crew down."""
+        self._set_link("death", state)
+
+    def _cmd_traplink(self, state: str = "") -> None:
+        """Turn TrapLink on or off mid-run, overriding what the seed rolled.
+        Usage: /traplink [on | off | seed]. Bare /traplink flips it and 'seed'
+        drops the override. Turning it off stops both the traps you send and
+        the ones you receive."""
+        self._set_link("trap", state)
+
 
 class VCDContext(CommonContext):
     game = "Viscera Cleanup Detail"
@@ -460,6 +535,15 @@ class VCDContext(CommonContext):
         # it as the baseline, so a connect never re-bounces old state.
         self.death_link_enabled: bool = False
         self.trap_link_enabled: bool = False
+        # A link the player flipped by command, per kind: None follows the
+        # seed. Set outside the connect path on purpose, so an override
+        # survives a reconnect. A client only ever talks to the one seed it
+        # first latched, so restarting it is what hands the links back.
+        self.link_overrides: dict[str, "bool | None"] = {
+            kind: None for kind in LINK_KINDS}
+        self.link_seed_state: dict[str, bool] = {
+            kind: False for kind in LINK_KINDS}
+        self.link_seed_known: bool = False
         self.link_tag: "str | None" = None
         self.link_index: int = 0
         self.link_entries: list[str] = []
@@ -755,7 +839,12 @@ class VCDContext(CommonContext):
 
     def _on_bounced(self, args: dict) -> None:
         """Inbound TrapLink bounces queue the closest local trap for the mod.
-        DeathLink bounces ride the framework's on_deathlink hook instead."""
+        DeathLink bounces ride the framework's on_deathlink hook instead. The
+        live flag is checked alongside the tag because a mid-run disable sets
+        the flag now and drops the tag a loop turn later, so the flag alone
+        closes that window."""
+        if not self.trap_link_enabled:
+            return
         if "TrapLink" not in self.tags or "TrapLink" not in args.get("tags", []):
             return
         if not self.slot:
@@ -840,16 +929,13 @@ class VCDContext(CommonContext):
         self.start_score_warned = set()
         self.auto_fill_punchout_report = bool(
             slot_data.get("auto_fill_punchout_report", False))
-        self.death_link_enabled = bool(slot_data.get("death_link", False))
-        self.trap_link_enabled = bool(slot_data.get("trap_link", False))
         self.link_tag = messages.session_tag(self.seed_name)
         self.link_index = 0
         self.link_entries = []
         self.last_links_written = None
         self.last_death_count = None
         self.last_spawn_marker = None
-        asyncio.create_task(self.update_death_link(self.death_link_enabled))
-        asyncio.create_task(self.update_trap_link(self.trap_link_enabled))
+        self.refresh_links(slot_data)
         self.enqueue_message([(messages.WHITE, "Archipelago connected.")])
         # Subscribe to the slot's shared baseline and applied counter and
         # fetch both; the Retrieved answer releases the traps-file write gate.
@@ -860,6 +946,36 @@ class VCDContext(CommonContext):
             {"cmd": "Get", "keys": keys},
         ]))
         asyncio.create_task(self.setup_and_launch())
+
+    def refresh_links(self, slot_data: dict) -> None:
+        """Apply both link tags for a connected slot. Runs on every connect, so
+        a reconnect re-asserts them. An override beats slot data, so a
+        reconnect keeps the player's choice instead of silently reverting to
+        what the seed rolled. The framework refuses a connect whose seed name
+        differs from the one already latched, so an override can only ever
+        outlive its own seed by restarting the client."""
+        self.link_seed_known = True
+        for kind, link_kind in LINK_KINDS.items():
+            self.link_seed_state[kind] = bool(
+                slot_data.get(link_kind.slot_data_key, False))
+            self.apply_link_state(kind, self.link_wanted(kind))
+
+    def link_wanted(self, kind: str) -> bool:
+        """Effective state of one link: the player's override when they have
+        set one, else what the seed rolled."""
+        override = self.link_overrides[kind]
+        return self.link_seed_state[kind] if override is None else override
+
+    def apply_link_state(self, kind: str, enabled: bool) -> None:
+        """Register or drop one link's tag to match. Applied unconditionally,
+        so a tag that ever drifted from its flag is repaired rather than left.
+        Death link also carries into the links file, whose flag is what the mod
+        sweeps the crew on."""
+        link_kind = LINK_KINDS[kind]
+        setattr(self, link_kind.state_attribute, enabled)
+        asyncio.create_task(getattr(self, link_kind.updater)(enabled))
+        if link_kind.carries_into_links_file:
+            self.write_links_if_changed()
 
     async def update_trap_link(self, trap_link: bool) -> None:
         """Set the TrapLink connection tag on or off, mirroring the
@@ -876,12 +992,16 @@ class VCDContext(CommonContext):
         """An inbound death: the framework logs it; this queues the kill for
         the mod and toasts it in game."""
         super().on_deathlink(data)
+        # The guard precedes the toast, so a death arriving in the turn between
+        # a mid-run disable and the tag dropping never toasts with no kill
+        # behind it.
+        if not self.death_link_enabled:
+            return
         source = str(data.get("source", "someone"))
         cause = str(data.get("cause", "") or "").strip()
         line = cause if cause else f"DeathLink: received from {source}."
         self.enqueue_message([(messages.named_color("red"), line)])
-        if self.death_link_enabled:
-            self.enqueue_link(links.DEATH_TYPE)
+        self.enqueue_link(links.DEATH_TYPE)
 
     async def announce_death(self, state: dict[str, str]) -> None:
         """Send the janitor's own death out over DeathLink."""
@@ -1208,17 +1328,20 @@ async def vcd_bridge_loop(ctx: VCDContext) -> None:
             }])
         # The death counter and the spawn marker also save without an APSeq
         # bump. Each first same-seed sighting adopts silently as the baseline;
-        # only a later move bounces, and only while the matching tag is on.
+        # only a later move bounces, and only while the matching link is on.
+        # Both gates read the live flag as well as the tag, because a mid-run
+        # disable clears the flag now and drops the tag a loop turn later.
         death = death_count_to_bounce(state, ctx.seed_name, ctx.last_death_count)
         if death is not None:
             ctx.last_death_count = death[0]
-            if death[1] and "DeathLink" in ctx.tags:
+            if death[1] and ctx.death_link_enabled and "DeathLink" in ctx.tags:
                 await ctx.announce_death(state)
         spawn = spawn_marker_to_bounce(state, ctx.seed_name,
                                        ctx.last_spawn_marker)
         if spawn is not None:
             ctx.last_spawn_marker = spawn[0]
-            if spawn[1] is not None and "TrapLink" in ctx.tags:
+            if (spawn[1] is not None and ctx.trap_link_enabled
+                    and "TrapLink" in ctx.tags):
                 await ctx.send_trap_link(spawn[1])
         # A write that failed (a transient share violation) or is still held
         # (the storage read not answered) retries here: each writer no-ops
