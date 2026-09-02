@@ -2,8 +2,9 @@
 snapshot maps to location names (with the punch-out and speedrun policy, and
 only a seed-stamped snapshot counting), PrintJSON traffic filters and encodes
 into the messages file, the missing-locations set encodes into the milestones
-file that drives the in-game next-milestone indicator, and the launch entry
-parses only the args the component forwards."""
+file that drives the in-game next-milestone indicator, the /autoplay override
+and the player-connect arm decide whether a connect launches the game, and
+the launch entry parses only the args the component forwards."""
 import asyncio
 import sys
 import tempfile
@@ -12,10 +13,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from CommonClient import CommonContext
 from NetUtils import ClientStatus
 
 from .bases import read_sav_properties
-from .. import _launch_client, installer, messages, milestones
+from .. import _launch_client, client, installer, messages, milestones
 from ..saves import SaveManager
 from ..client import (LINK_KINDS, VCDCommandProcessor, VCDContext, death_cause,
                       death_count_to_bounce, goal_locations_from_slot_data,
@@ -559,6 +561,231 @@ class TestLinkToggleCommands(unittest.TestCase):
                          ["TrapLink is now on, whatever the seed rolls."])
 
 
+def _auto_launch_context(game_up: bool = False) -> VCDContext:
+    """A context carrying only the connect-time launch state, skipping
+    __init__ so no framework plumbing is needed. The install is known, the
+    mod check and every file write are stubbed, the process probe answers
+    game_up (through the real game_is_up, so a dropped await on it shows),
+    and a launch is counted in ctx.launched instead of spawning UDK.exe."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.install_dir = Path("install")
+    ctx.save_manager = None
+    ctx.saves_ready = False
+    ctx.player_connect_pending = False
+    ctx.auto_launch_override = None
+    ctx.game_running = lambda: game_up
+    ctx.launched = 0
+
+    async def ensure_mod_current() -> None:
+        return None
+    ctx.ensure_mod_current = ensure_mod_current
+    for name in ("write_grants_if_changed", "write_traps_if_changed",
+                 "write_messages_if_changed", "write_milestones_if_changed",
+                 "write_links_if_changed"):
+        setattr(ctx, name, lambda: None)
+
+    def launch_game() -> None:
+        ctx.launched += 1
+    ctx.launch_game = launch_game
+    return ctx
+
+
+def _connect(ctx: VCDContext, auto_launch_game: bool,
+             player_connected: bool = True) -> None:
+    """Run the connect-time launch step against stand-in host.yaml settings
+    (auto_launch_game as given, the mod check off), so no test reads or
+    writes the real host.yaml. player_connected arms the step the way
+    connect() does; False stands for the framework's automatic reconnect."""
+    ctx.player_connect_pending = player_connected
+    world = SimpleNamespace(settings=SimpleNamespace(
+        auto_install_mod=False, auto_launch_game=auto_launch_game))
+    with mock.patch.object(client, "VCDWorld", world):
+        asyncio.run(ctx.setup_and_launch())
+
+
+class TestAutoplayCommand(unittest.TestCase):
+    """The /autoplay command: a session override that beats the
+    auto_launch_game setting at the next connect and never launches anything
+    on its own."""
+
+    def test_bare_command_flips_from_the_setting(self) -> None:
+        processor = _RecordingProcessor(_auto_launch_context())
+        with mock.patch.object(client, "auto_launch_setting", return_value=True):
+            processor._cmd_autoplay("")
+            self.assertFalse(processor.ctx.auto_launch_wanted())
+            self.assertTrue(processor.lines[-1].startswith("Auto-launch is off"))
+            processor._cmd_autoplay("")
+            self.assertTrue(processor.ctx.auto_launch_wanted())
+            self.assertTrue(processor.lines[-1].startswith("Auto-launch is on"))
+        self.assertEqual(processor.ctx.launched, 0)
+
+    def test_explicit_arguments_beat_the_setting_either_way(self) -> None:
+        processor = _RecordingProcessor(_auto_launch_context())
+        with mock.patch.object(client, "auto_launch_setting", return_value=True):
+            processor._cmd_autoplay("off")
+            self.assertFalse(processor.ctx.auto_launch_wanted())
+        with mock.patch.object(client, "auto_launch_setting", return_value=False):
+            processor._cmd_autoplay(" ON ")
+            self.assertTrue(processor.ctx.auto_launch_wanted())
+        self.assertEqual(processor.ctx.launched, 0)
+
+    def test_unknown_argument_reports_usage_and_changes_nothing(self) -> None:
+        processor = _RecordingProcessor(_auto_launch_context())
+        processor._cmd_autoplay("maybe")
+        self.assertIsNone(processor.ctx.auto_launch_override)
+        self.assertEqual(processor.lines,
+                         ["Usage: /autoplay [on | off]. Bare /autoplay flips it."])
+
+    def test_override_off_keeps_a_connect_from_launching(self) -> None:
+        ctx = _auto_launch_context()
+        ctx.auto_launch_override = False
+        _connect(ctx, auto_launch_game=True)
+        self.assertEqual(ctx.launched, 0)
+
+    def test_override_on_launches_with_the_setting_off(self) -> None:
+        ctx = _auto_launch_context()
+        ctx.auto_launch_override = True
+        _connect(ctx, auto_launch_game=False)
+        self.assertEqual(ctx.launched, 1)
+
+    def test_no_override_follows_the_setting(self) -> None:
+        for setting in (True, False):
+            with self.subTest(setting=setting):
+                ctx = _auto_launch_context()
+                _connect(ctx, auto_launch_game=setting)
+                self.assertEqual(ctx.launched, 1 if setting else 0)
+
+
+class TestAutoLaunchDecision(unittest.TestCase):
+    """A connect launches the game only when the player made it (the Connect
+    button, /connect, the startup connect), never on the framework's
+    automatic reconnect, and never next to a game that is already up. The
+    up-check is the real async game_is_up over a stubbed process probe, so a
+    dropped await on it (a bare coroutine reads as up) fails here."""
+
+    def test_player_connect_launches_and_consumes_the_arm(self) -> None:
+        ctx = _auto_launch_context()
+        _connect(ctx, auto_launch_game=True)
+        self.assertEqual(ctx.launched, 1)
+        self.assertFalse(ctx.player_connect_pending)
+
+    def test_automatic_reconnect_never_launches(self) -> None:
+        ctx = _auto_launch_context()
+        _connect(ctx, auto_launch_game=True, player_connected=False)
+        self.assertEqual(ctx.launched, 0)
+
+    def test_running_game_is_not_duplicated_and_names_play(self) -> None:
+        ctx = _auto_launch_context(game_up=True)
+        with self.assertLogs("Client", level="INFO") as captured:
+            _connect(ctx, auto_launch_game=True)
+        self.assertEqual(ctx.launched, 0)
+        self.assertTrue(any("/play" in line for line in captured.output))
+        self.assertFalse(ctx.player_connect_pending)
+
+    def test_arm_is_consumed_even_when_nothing_launches(self) -> None:
+        ctx = _auto_launch_context()
+        _connect(ctx, auto_launch_game=False)
+        self.assertEqual(ctx.launched, 0)
+        self.assertFalse(ctx.player_connect_pending)
+
+    def test_arm_is_consumed_before_the_install_folder_check(self) -> None:
+        # No install folder yet: the step returns early and the arm still
+        # goes, so a later /install plus a reconnect never launches.
+        ctx = _auto_launch_context()
+        ctx.install_dir = None
+        with mock.patch.object(client, "gui_enabled", False), \
+                self.assertLogs("Client", level="WARNING"):
+            _connect(ctx, auto_launch_game=True)
+        self.assertEqual(ctx.launched, 0)
+        self.assertFalse(ctx.player_connect_pending)
+
+
+class TestConnectArmsTheLaunch(unittest.TestCase):
+    def test_connect_arms_then_defers_to_the_framework(self) -> None:
+        ctx = _auto_launch_context()
+        with mock.patch.object(CommonContext, "connect",
+                               new=mock.AsyncMock()) as base:
+            asyncio.run(ctx.connect("host:38281"))
+        self.assertTrue(ctx.player_connect_pending)
+        base.assert_awaited_once_with("host:38281")
+
+
+class TestGameIsUp(unittest.TestCase):
+    """The real game_is_up: the process this client launched answers first,
+    without a probe; otherwise the process list decides."""
+
+    @staticmethod
+    def _ctx(process) -> VCDContext:
+        ctx = VCDContext.__new__(VCDContext)
+        ctx.game_process = process
+        return ctx
+
+    def test_client_launched_game_counts_without_probing(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = None
+        with mock.patch.object(client, "game_process_running",
+                               side_effect=AssertionError):
+            self.assertTrue(asyncio.run(self._ctx(process).game_is_up()))
+
+    def test_otherwise_the_process_list_decides(self) -> None:
+        exited = mock.Mock()
+        exited.poll.return_value = 0
+        for process in (None, exited):
+            for running in (True, False):
+                with self.subTest(process=process, running=running), \
+                        mock.patch.object(client, "game_process_running",
+                                          return_value=running):
+                    self.assertEqual(
+                        asyncio.run(self._ctx(process).game_is_up()), running)
+
+
+def _installer_context(game_up: bool) -> VCDContext:
+    """A context carrying only what the mod install path touches, skipping
+    __init__ so no framework plumbing is needed. The process probe answers
+    game_up through the real game_is_up."""
+    ctx = VCDContext.__new__(VCDContext)
+    ctx.install_dir = Path("install")
+    ctx.game_running = lambda: game_up
+    return ctx
+
+
+class TestInstallerRefusesWhileGameIsUp(unittest.TestCase):
+    """The connect-time mod check and /installmod read the same up-check as
+    auto-launch. Both entry points run down to the patched installer, so a
+    dropped await on the up-check (a bare coroutine reads as up) fails here
+    rather than in a player's client."""
+
+    def test_stale_mod_is_left_alone_while_game_is_up(self) -> None:
+        ctx = _installer_context(game_up=True)
+        with mock.patch.object(installer, "mod_is_current", return_value=False), \
+                mock.patch.object(installer, "deploy", side_effect=AssertionError), \
+                self.assertLogs("Client", level="WARNING") as captured:
+            asyncio.run(ctx.ensure_mod_current())
+        self.assertTrue(any("/installmod" in line for line in captured.output))
+
+    def test_stale_mod_is_deployed_when_no_game_is_up(self) -> None:
+        ctx = _installer_context(game_up=False)
+        with mock.patch.object(installer, "mod_is_current", return_value=False), \
+                mock.patch.object(installer, "deploy", return_value=[]) as deploy, \
+                self.assertLogs("Client", level="INFO"):
+            asyncio.run(ctx.ensure_mod_current())
+        deploy.assert_called_once_with(Path("install"))
+
+    def test_install_mod_warns_and_skips_deploy_while_game_is_up(self) -> None:
+        ctx = _installer_context(game_up=True)
+        with mock.patch.object(installer, "deploy", side_effect=AssertionError), \
+                self.assertLogs("Client", level="WARNING") as captured:
+            asyncio.run(ctx.install_mod())
+        self.assertTrue(any("/installmod" in line for line in captured.output))
+
+    def test_install_mod_deploys_when_no_game_is_up(self) -> None:
+        ctx = _installer_context(game_up=False)
+        with mock.patch.object(installer, "deploy", return_value=[]) as deploy, \
+                self.assertLogs("Client", level="INFO"):
+            asyncio.run(ctx.install_mod())
+        deploy.assert_called_once_with(Path("install"))
+
+
 def _traps_context() -> VCDContext:
     """A context carrying only the trap-baseline state, skipping __init__ so
     no framework plumbing is needed. Sent server messages land in ctx.sent."""
@@ -631,7 +858,6 @@ class TestGameProcessRunning(unittest.TestCase):
         # The callers guard destructive moves (save swaps, package
         # overwrites), so an error must read as "running", never as safe.
         from unittest import mock
-        from .. import client
         with mock.patch.object(client.sys, "platform", "win32"), \
                 mock.patch.object(client.subprocess, "run",
                                   side_effect=OSError("tasklist missing")):
@@ -645,7 +871,6 @@ class TestGameProcessRunning(unittest.TestCase):
     def test_absent_process_reads_not_running(self) -> None:
         from types import SimpleNamespace as Namespace
         from unittest import mock
-        from .. import client
         with mock.patch.object(client.sys, "platform", "win32"), \
                 mock.patch.object(client.subprocess, "run",
                                   return_value=Namespace(stdout="INFO: none")):

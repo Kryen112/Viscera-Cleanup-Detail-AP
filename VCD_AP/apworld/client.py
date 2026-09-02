@@ -89,10 +89,11 @@ LINK_KINDS: dict[str, LinkKind] = {
                      "trap_link_enabled", "update_trap_link", False),
 }
 
-# Accepted arguments to a link command. "seed" drops the override and a bare
-# command flips the effective state, so neither needs a row here.
-LINK_ARGUMENTS: dict[str, bool] = {"on": True, "true": True, "1": True,
-                                   "off": False, "false": False, "0": False}
+# Accepted on/off words for the link commands and /autoplay. "seed" drops a
+# link override and a bare command flips the effective state, so neither
+# needs a row here.
+ON_OFF_ARGUMENTS: dict[str, bool] = {"on": True, "true": True, "1": True,
+                                     "off": False, "false": False, "0": False}
 
 # Received-item id to (internal map name, tool key), so a granted tool item
 # unlocks its tool on its level through the grants file.
@@ -392,6 +393,11 @@ def looks_like_install(path: Path) -> bool:
     return (path / "Binaries" / "Win32" / "UDK.exe").is_file()
 
 
+def auto_launch_setting() -> bool:
+    """The auto_launch_game host.yaml setting."""
+    return bool(VCDWorld.settings.auto_launch_game)
+
+
 class VCDCommandProcessor(ClientCommandProcessor):
     def _cmd_install(self, path: str = "") -> None:
         """Choose the Viscera install folder (the one holding Binaries and UDKGame)
@@ -413,6 +419,26 @@ class VCDCommandProcessor(ClientCommandProcessor):
     def _cmd_play(self) -> None:
         """Launch the game, or relaunch it to resume after quitting."""
         self.ctx.launch_game()
+
+    def _cmd_autoplay(self, state: str = "") -> None:
+        """Turn auto-launch on or off for this client session, overriding the
+        auto_launch_game setting. Usage: /autoplay [on | off]. Bare /autoplay
+        flips it. Applies to your next connect; /play starts the game now."""
+        argument = state.strip().lower()
+        if argument in ON_OFF_ARGUMENTS:
+            self.ctx.auto_launch_override = ON_OFF_ARGUMENTS[argument]
+        elif argument == "":
+            self.ctx.auto_launch_override = not self.ctx.auto_launch_wanted()
+        else:
+            self.output("Usage: /autoplay [on | off]. Bare /autoplay flips it.")
+            return
+        if self.ctx.auto_launch_wanted():
+            self.output("Auto-launch is on: the game starts when you connect (/play "
+                        "starts it now). Resets when the client restarts.")
+        else:
+            self.output("Auto-launch is off: the game stays closed when you connect "
+                        "(/play starts it). Resets when the client restarts. Set "
+                        "auto_launch_game in host.yaml to make it permanent.")
 
     def _cmd_restore(self) -> None:
         """Restore your career saves, undoing Archipelago save isolation. Close the
@@ -436,8 +462,8 @@ class VCDCommandProcessor(ClientCommandProcessor):
         data has arrived."""
         link_kind = LINK_KINDS[kind]
         argument = state.strip().lower()
-        if argument in LINK_ARGUMENTS:
-            self.ctx.link_overrides[kind] = LINK_ARGUMENTS[argument]
+        if argument in ON_OFF_ARGUMENTS:
+            self.ctx.link_overrides[kind] = ON_OFF_ARGUMENTS[argument]
         elif argument == "seed":
             self.ctx.link_overrides[kind] = None
         elif argument == "":
@@ -553,7 +579,13 @@ class VCDContext(CommonContext):
         self.goal_location_ids: list[int] = []
         self.goal_need: int = 0
         self.last_seq: "str | None" = None
-        self.game_launched: bool = False
+        # /autoplay override for this client session. None follows the
+        # auto_launch_game setting; True or False beats it on every connect.
+        self.auto_launch_override: "bool | None" = None
+        # Armed by connect() and the startup connect, consumed by the next
+        # Connected's launch step, so only a connection the player asked for
+        # launches the game. The framework's automatic reconnect never arms it.
+        self.player_connect_pending: bool = False
         self.saves_ready: bool = False
         self.game_process: "subprocess.Popen | None" = None
 
@@ -590,7 +622,13 @@ class VCDContext(CommonContext):
     async def setup_and_launch(self) -> None:
         """On connect: make sure an install folder is known (picker on first run),
         bring the installed mod up to date, isolate this seed's saves, then
-        auto-launch the game if that setting is on."""
+        auto-launch the game when the player made this connection, the /autoplay
+        override (else the auto_launch_game setting) asks for it, and no game is
+        up yet."""
+        # Consume the arm before the first await, so a Connected the player did
+        # not ask for (the framework's automatic reconnect) never launches.
+        player_asked = self.player_connect_pending
+        self.player_connect_pending = False
         if not self.install_dir:
             if gui_enabled:
                 await self.pick_install_dir()
@@ -609,8 +647,16 @@ class VCDContext(CommonContext):
         self.write_messages_if_changed()
         self.write_milestones_if_changed()
         self.write_links_if_changed()
-        if not self.game_launched and bool(VCDWorld.settings.auto_launch_game):
-            self.launch_game()
+        if not player_asked or not self.auto_launch_wanted():
+            return
+        # A running game never gets a duplicate, whether this client launched
+        # it or the player did.
+        if await self.game_is_up():
+            client_logger.info(
+                "Not auto-launching: Viscera Cleanup Detail looks to be running "
+                "already. If it is not, type /play.")
+            return
+        self.launch_game()
 
     def _isolate_saves(self) -> None:
         """Swap in this seed's own save set, unless disabled. Skipped if the game is
@@ -665,8 +711,14 @@ class VCDContext(CommonContext):
         except OSError as error:
             client_logger.error(f"Could not launch the game: {error}")
             return
-        self.game_launched = True
         client_logger.info("Launched Viscera Cleanup Detail.")
+
+    def auto_launch_wanted(self) -> bool:
+        """Whether a connect launches the game: the /autoplay override when
+        set, else the auto_launch_game setting."""
+        if self.auto_launch_override is not None:
+            return self.auto_launch_override
+        return auto_launch_setting()
 
     def game_running(self) -> bool:
         # The client-launched process is authoritative, but a game the player
@@ -676,6 +728,11 @@ class VCDContext(CommonContext):
             return True
         return game_process_running()
 
+    async def game_is_up(self) -> bool:
+        """game_running() for the connect path: the process probe shells out to
+        tasklist, so it runs off the event loop instead of stalling it."""
+        return await asyncio.get_event_loop().run_in_executor(None, self.game_running)
+
     async def install_mod(self) -> None:
         """Copy the precompiled mod package into the install and wire it up (via
         /installmod and the connect check). Nothing compiles: every player runs
@@ -684,7 +741,7 @@ class VCDContext(CommonContext):
         if not self.install_dir:
             client_logger.warning("No install folder set. Use /install first.")
             return
-        if self.game_running():
+        if await self.game_is_up():
             client_logger.warning(
                 "The game is running. Close it first, then run /installmod.")
             return
@@ -707,7 +764,7 @@ class VCDContext(CommonContext):
             return
         if current:
             return
-        if self.game_running():
+        if await self.game_is_up():
             client_logger.warning(
                 "This apworld carries a different mod than the install, but the "
                 "game is running. Close it and run /installmod, then relaunch.")
@@ -1034,6 +1091,14 @@ class VCDContext(CommonContext):
         if not print_json_relevant(args, self.slot_concerns_self, self.team):
             return
         self.enqueue_message(message_segments(args.get("data", []), self))
+
+    async def connect(self, address: "str | None" = None) -> None:
+        """Every connection the player asks for (the Connect button, /connect)
+        comes through here. The framework's automatic reconnect starts
+        server_loop directly and skips it, so arming here is what keeps a
+        reconnect the player did not ask for from launching the game."""
+        self.player_connect_pending = True
+        await super().connect(address)
 
     async def disconnect(self, allow_autoreconnect: bool = False) -> None:
         # Skipped during shutdown: the game is closing and the save restore may
@@ -1376,6 +1441,10 @@ def launch(*launch_args: str) -> None:
         ctx = VCDContext(args.connect, args.password)
         if args.install:
             ctx.set_install_dir(args.install)
+        # A startup connect is the player's own (they opened the client with a
+        # room to join), so it arms the launch like the Connect button does.
+        if args.connect:
+            ctx.player_connect_pending = True
         ctx.server_task = asyncio.create_task(server_loop(ctx), name="ServerLoop")
         if gui_enabled:
             ctx.run_gui()

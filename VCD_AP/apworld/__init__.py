@@ -79,9 +79,11 @@ class VCDSettings(settings.Group):
         required = False
 
     class AutoLaunchGame(settings.Bool):
-        """Launch UDK.exe automatically when the client connects to a seed (once per
-        client session). On by default. Set to false to launch it yourself or with
-        the /play command."""
+        """Launch UDK.exe automatically each time you connect (the Connect button
+        or /connect), unless the game is already running. A reconnect the client
+        makes by itself after a dropped connection never launches. On by default.
+        Set to false to launch it yourself or with the /play command. The client's
+        /autoplay command overrides this for one client session."""
 
     class IsolateSaves(settings.Bool):
         """Keep each Archipelago seed's Office, job saves, and collectibles in their
