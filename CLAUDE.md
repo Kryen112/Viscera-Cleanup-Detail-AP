@@ -206,6 +206,10 @@ The reviewer treats a violation of any of these as a correctness blocker.
   the newest index), so a stale death never fires on a level load. Any
   death, organic or inbound, kills every janitor in the session when death
   link is on; a sweep latch keeps those deaths from counting or cascading.
+  A leaving player is not a death: their controller's CleanupPawn suicides
+  the pawn with `DmgType_Suicided`, so `Killed` drops that damage type before
+  it counts or sweeps, and a co-op guest quitting never takes the crew down.
+  Real hazard deaths carry a `VCDamageType` and are unaffected.
   Outbound, the mod publishes the organic death count (`APDeathCount`) and
   the last item-queue spawn applied (`APLastSpawn`, "index:Type"; never
   written by the link queue, so a linked trap cannot re-broadcast); the

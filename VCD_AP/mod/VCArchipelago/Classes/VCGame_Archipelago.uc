@@ -805,7 +805,8 @@ function KillAllJanitors(Pawn AlreadyDead)
 
 // Counts every organic janitor death for the client's DeathLink bounce and,
 // with death link on, takes the rest of the crew down with it. Deaths a link
-// kill causes are latched out above, so they neither count nor sweep.
+// kill causes are latched out above, and a player leaving is dropped below, so
+// neither counts nor sweeps.
 function Killed(Controller Killer, Controller KilledPlayer, Pawn KilledPawn, class<DamageType> DamageType)
 {
     local VCMapInfo MapInfo;
@@ -814,6 +815,12 @@ function Killed(Controller Killer, Controller KilledPlayer, Pawn KilledPawn, cla
     if (bLinkDeathSweep || APState == None)
         return;
     if (KilledPlayer == None || !KilledPlayer.bIsPlayer)
+        return;
+    // A player leaving destroys their controller, whose CleanupPawn suicides
+    // the pawn with DmgType_Suicided. That is a disconnect, not a shift death,
+    // so a co-op guest quitting neither counts nor sweeps the crew. A real
+    // hazard death carries a VCDamageType and is unaffected.
+    if (DamageType == class'Engine.DmgType_Suicided')
         return;
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
     if (MapInfo == None || MapInfo.bIsOfficeLevel)
