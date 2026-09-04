@@ -74,6 +74,16 @@ class HardStartSqueakyBoots(DefaultOnToggle):
     display_name = "Hard start Squeaky Clean Boots"
 
 
+class MopStartSelfCleaningMop(DefaultOnToggle):
+    """With random_starting_kit on, a level that rolls the mop and
+    Slosh-O-Matic start also starts with its Self-Cleaning Mop, so the mop
+    never needs rinsing while cleaning the easy way. That level's Self-Cleaning
+    Mop item is granted up front instead of entering the pool. On by default.
+    Does nothing without random_starting_kit (a hard-start level's Self-Cleaning
+    Mop stays in the pool, where it stands in for the itemized Slosh-O-Matic)."""
+    display_name = "Mop start Self-Cleaning Mop"
+
+
 class AutoFillPunchoutReport(Toggle):
     """Fill the punch-out report for the janitor. The form's paperwork counts
     toward cleanliness, and some of its answers (the causes of death on each
@@ -210,6 +220,7 @@ class VCDOptions(PerGameCommonOptions):
     toolsanity: Toolsanity
     random_starting_kit: RandomStartingKit
     hard_start_squeaky_boots: HardStartSqueakyBoots
+    mop_start_self_cleaning_mop: MopStartSelfCleaningMop
     auto_fill_punchout_report: AutoFillPunchoutReport
     trap_percentage: TrapPercentage
     useful_percentage: UsefulPercentage

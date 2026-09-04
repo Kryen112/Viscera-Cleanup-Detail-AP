@@ -138,6 +138,10 @@ class VCDWorld(World):
     # per hard-start level, where the mop stands in for the itemized
     # Slosh-O-Matic in logic. Empty until generate_early rolls the kits.
     progression_clean_mop_items: frozenset[str] = frozenset()
+    # The mop-start levels (the complement of hard_start_maps) whose
+    # Self-Cleaning Mop is granted up front under mop_start_self_cleaning_mop.
+    # Empty unless toolsanity, random_starting_kit, and the option are all on.
+    mop_start_clean_mop_maps: set[str]
 
     @staticmethod
     def _countable_collectibles(maps: set[str]) -> int:
@@ -219,6 +223,10 @@ class VCDWorld(World):
         self.progression_clean_mop_items = frozenset(
             self_cleaning_mop_name(DISPLAY_BY_MAP[m])
             for m in self.hard_start_maps)
+        # Slot data from builds without the key leaves no mop-start freebie, so
+        # every Self-Cleaning Mop stays in the pool as it did then.
+        self.mop_start_clean_mop_maps = set(
+            slot_data.get("mop_start_clean_mop_maps", []))
         self.started_maps = set(slot_data["started_maps"])
 
     def generate_early(self) -> None:
@@ -272,6 +280,14 @@ class VCDWorld(World):
         self.progression_clean_mop_items = frozenset(
             self_cleaning_mop_name(DISPLAY_BY_MAP[m])
             for m in self.hard_start_maps)
+        # The mop-start levels (the ones that kept mop and Slosh-O-Matic) hand
+        # over their Self-Cleaning Mop up front under mop_start_self_cleaning_mop,
+        # the mirror of the hands-start Squeaky Clean Boots freebie.
+        self.mop_start_clean_mop_maps = set()
+        if (self.options.toolsanity and self.options.random_starting_kit
+                and self.options.mop_start_self_cleaning_mop):
+            self.mop_start_clean_mop_maps = {
+                m for m in candidates if m not in self.hard_start_maps}
         start_n = min(int(self.options.starting_levels.value), len(candidates))
         self.started_maps = self._draw_started_maps(candidates, start_n)
 
@@ -388,10 +404,15 @@ class VCDWorld(World):
             # The Self-Cleaning Mop and the Squeaky Clean Boots are always
             # created, one of each per pooled level, independent of toolsanity.
             # A hard-start level's boots start granted under
-            # hard_start_squeaky_boots, so the hands opening tracks no prints.
-            self.multiworld.itempool.append(
-                self.create_item(self_cleaning_mop_name(display)))
-            placed += 1
+            # hard_start_squeaky_boots, so the hands opening tracks no prints;
+            # a mop-start level's Self-Cleaning Mop starts granted under
+            # mop_start_self_cleaning_mop, the mirror freebie.
+            clean_mop = self.create_item(self_cleaning_mop_name(display))
+            if map_name in self.mop_start_clean_mop_maps:
+                self.multiworld.push_precollected(clean_mop)
+            else:
+                self.multiworld.itempool.append(clean_mop)
+                placed += 1
             boots = self.create_item(squeaky_boots_name(display))
             if (map_name in self.hard_start_maps
                     and self.options.hard_start_squeaky_boots):
@@ -636,6 +657,9 @@ class VCDWorld(World):
             "auto_fill_punchout_report": bool(
                 self.options.auto_fill_punchout_report),
             "hard_start_maps": sorted(self.hard_start_maps),
+            # The mop-start levels whose Self-Cleaning Mop was granted up front,
+            # so a tracker regeneration precollects the same items.
+            "mop_start_clean_mop_maps": sorted(self.mop_start_clean_mop_maps),
             "started_maps": sorted(self.started_maps),
             "pooled_maps": list(self.pooled_maps),
             "death_link": bool(self.options.death_link),

@@ -502,6 +502,24 @@ class TestRandomStartingKit(VCDTestBase):
                 self.assertNotIn(name, precollected, map_name)
                 self.assertEqual(pooled.count(name), 1, map_name)
 
+    def test_mop_start_levels_start_with_their_clean_mop(self):
+        # mop_start_self_cleaning_mop is on by default: a mop-start level's
+        # Self-Cleaning Mop starts granted instead of entering the pool, while a
+        # hard-start level keeps its copy in the pool, where it stands in for
+        # the itemized Slosh-O-Matic.
+        from ..items import self_cleaning_mop_name
+        pooled = [item.name for item in self.multiworld.itempool]
+        precollected = [item.name for item in
+                        self.multiworld.precollected_items[self.player]]
+        for map_name in self.world.pooled_maps:
+            name = self_cleaning_mop_name(DISPLAY_BY_MAP[map_name])
+            if map_name in self.world.hard_start_maps:
+                self.assertNotIn(name, precollected, map_name)
+                self.assertEqual(pooled.count(name), 1, map_name)
+            else:
+                self.assertIn(name, precollected, map_name)
+                self.assertNotIn(name, pooled, map_name)
+
     def test_clean_mop_classifies_progression_only_on_hard_start_levels(self):
         from BaseClasses import ItemClassification
         from ..items import self_cleaning_mop_name
@@ -565,6 +583,8 @@ class TestTrackerRegeneration(VCDTestBase):
                          self.world.hard_start_maps)
         self.assertEqual(regenerated.progression_clean_mop_items,
                          self.world.progression_clean_mop_items)
+        self.assertEqual(regenerated.mop_start_clean_mop_maps,
+                         self.world.mop_start_clean_mop_maps)
         self.assertEqual(regenerated._step(), self.world._step())
         self.assertEqual(regenerated.options.goal.current_key, "find_bob")
         self.assertTrue(regenerated.options.above_and_beyond)
@@ -624,6 +644,42 @@ class TestHardStartBootsOff(VCDTestBase):
             name = squeaky_boots_name(DISPLAY_BY_MAP[map_name])
             self.assertNotIn(name, precollected, map_name)
             self.assertEqual(pooled.count(name), 1, map_name)
+
+
+class TestMopStartCleanMopOff(VCDTestBase):
+    options = {"random_starting_kit": True,
+               "mop_start_self_cleaning_mop": False}
+
+    def test_every_clean_mop_stays_in_the_pool(self):
+        # With the freebie off, every Self-Cleaning Mop is in the pool: the
+        # hard-start copies as progression stand-ins, the mop-start copies as
+        # useful items. None are granted up front.
+        from ..items import self_cleaning_mop_name
+        pooled = [item.name for item in self.multiworld.itempool]
+        precollected = [item.name for item in
+                        self.multiworld.precollected_items[self.player]]
+        self.assertEqual(self.world.mop_start_clean_mop_maps, set())
+        for map_name in self.world.pooled_maps:
+            name = self_cleaning_mop_name(DISPLAY_BY_MAP[map_name])
+            self.assertNotIn(name, precollected, map_name)
+            self.assertEqual(pooled.count(name), 1, map_name)
+
+
+class TestMopStartCleanMopWithoutRandomKit(VCDTestBase):
+    # The freebie is on by default but scoped to random_starting_kit: without
+    # it there is no mop-start roll, so every Self-Cleaning Mop stays in the
+    # pool as a useful item.
+    options = {}
+
+    def test_no_clean_mop_is_granted_up_front(self):
+        from ..items import self_cleaning_mop_name
+        precollected = [item.name for item in
+                        self.multiworld.precollected_items[self.player]]
+        self.assertEqual(self.world.mop_start_clean_mop_maps, set())
+        for map_name in self.world.pooled_maps:
+            self.assertNotIn(
+                self_cleaning_mop_name(DISPLAY_BY_MAP[map_name]),
+                precollected, map_name)
 
 
 class TestStep1(VCDTestBase):
