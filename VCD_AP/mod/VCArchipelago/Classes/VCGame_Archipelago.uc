@@ -36,6 +36,10 @@
 // and debris change (NotifyMessChanged), which runs a debounced immediate
 // scan, and a 1s floor timer catches scoring changes that add or remove no
 // actor (a barrel uprighted, a medpack restored, an incinerator door closed).
+// The scan is held for a settle window after a level loads
+// (bCleanlinessSettling): save-restored mess spawns back in a moment after the
+// load, so an early sample would read near-spotless and latch rungs the
+// janitor never earned.
 class VCGame_Archipelago extends VCGame;
 
 // The published state object. Not named "State": that is a reserved UnrealScript
@@ -51,10 +55,20 @@ var int LastPublishedPercent;
 // burst scan cannot run against a torn-down level.
 var bool bCleanlinessProbeStopped;
 
+// True from level init until the settle delay elapses. The cleanliness probe
+// is held off during it, so save-restored mess that has not finished spawning
+// cannot read as a cleanliness spike and latch rungs the janitor never earned.
+var bool bCleanlinessSettling;
+
 // A splat or debris change coalesces into one scan after this delay, so a
 // burst (a spill, a mess-dump trap, a mop sweep clearing several splats)
 // folds into a single scan instead of one per actor.
 const CleanlinessBurstDelaySeconds = 0.2;
+
+// The first cleanliness probe waits this long after a level loads, so the save
+// system finishes restoring mess before the readout is trusted. A save-loaded
+// level briefly reads near-spotless while its mess spawns back in.
+const CleanlinessSettleDelaySeconds = 10.0;
 
 // Janitors under a timed speed effect, with the base speeds to restore.
 // Same-level references only; the GameInfo and these arrays die with the
@@ -257,6 +271,7 @@ event InitGame(string Options, out string ErrorMessage)
     HighestReportedRung = 0;
     LastPublishedPercent = -1;
     bCleanlinessProbeStopped = false;
+    bCleanlinessSettling = true;
     bPresentToolsMaskRead = false;
     bSelfCleaningMap = false;
     bSqueakyBootsMap = false;
@@ -267,6 +282,9 @@ event InitGame(string Options, out string ErrorMessage)
     AppliedToolsMask = class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll;
     OptionalMachineLocks = Spawn(class'VCArchipelagoOptionalMachineLocks');
     SetTimer(1.0, true, 'PublishCleanliness');
+    // Hold the probe until save-restored mess settles, then take the first
+    // trusted sample; the one-second timer above no-ops until then.
+    SetTimer(CleanlinessSettleDelaySeconds, false, 'FinishCleanlinessSettle');
     SetTimer(5.0, true, 'PollTraps');
     SetTimer(5.0, true, 'PollLinks');
     SetTimer(1.0, true, 'PollMilestones');
@@ -439,6 +457,7 @@ function BounceLockedLevel()
     bCleanlinessProbeStopped = true;
     ClearTimer('PublishCleanliness');
     ClearTimer('PublishCleanlinessBurst');
+    ClearTimer('FinishCleanlinessSettle');
     ClearTimer('PollTraps');
     ClearTimer('PollLinks');
     ClearTimer('PollMilestones');
@@ -2575,10 +2594,14 @@ function PunchoutFromGame(VCPunchMachine PunchoutMachine)
     // marker lifts with it (the punch-out flow saves after the restore).
     RestoreGravity();
     ClearPendingGravityRestoreMarker();
+    // Force the final capture past the settle guard: a shift can only end after
+    // the window, but a punch-out on a fast level must still bank its rungs.
+    bCleanlinessSettling = false;
     PublishCleanliness();
     bCleanlinessProbeStopped = true;
     ClearTimer('PublishCleanliness');
     ClearTimer('PublishCleanlinessBurst');
+    ClearTimer('FinishCleanlinessSettle');
     ClearTimer('PollTraps');
     ClearTimer('PollLinks');
 
@@ -2992,6 +3015,18 @@ function DevFilePaperwork(PlayerController Requester)
         $ "|DeathReports=" $ Filed);
 }
 
+// Ends the post-load settle window and takes the first trusted cleanliness
+// sample at once, so a level loaded already clean publishes its rungs now
+// instead of waiting for the next one-second poll. A no-op once the probe has
+// stopped, so a punch-out or bounce inside the window is never overwritten.
+function FinishCleanlinessSettle()
+{
+    if (bCleanlinessProbeStopped)
+        return;
+    bCleanlinessSettling = false;
+    PublishCleanliness();
+}
+
 function PublishCleanliness()
 {
     local VCPunchoutHandler_General Handler;
@@ -3004,6 +3039,12 @@ function PublishCleanliness()
     local float clean;
     local int percent;
     local bool changed;
+
+    // Held during the post-load settle window: save-restored mess is still
+    // spawning, so a sample now would overstate cleanliness and latch rungs
+    // the janitor never earned.
+    if (bCleanlinessSettling)
+        return;
 
     // Never probe the Office or menu maps; they are not cleanable levels.
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
@@ -3123,7 +3164,7 @@ function PublishCleanliness()
 // out, so a queued burst cannot rescan a torn-down level.
 function NotifyMessChanged()
 {
-    if (bCleanlinessProbeStopped)
+    if (bCleanlinessProbeStopped || bCleanlinessSettling)
         return;
     if (!IsTimerActive('PublishCleanlinessBurst'))
         SetTimer(CleanlinessBurstDelaySeconds, false, 'PublishCleanlinessBurst');
