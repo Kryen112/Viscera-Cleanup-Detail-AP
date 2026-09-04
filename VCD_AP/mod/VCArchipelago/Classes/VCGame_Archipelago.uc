@@ -119,6 +119,17 @@ const MagnetizeLiftSpeed      = 190.0;
 // pile up garbage objects between collections.
 var VCArchipelagoTraps TrapQueueFile;
 
+// Set true by the first trap poll of a level that collapses the backlog of
+// entries pending at level start or at a mid-level connect. Fresh false on
+// every level load, since the GameInfo is spawned per map, so each level
+// collapses its own backlog exactly once.
+var bool bTrapsBacklogCollapsed;
+
+// How many of each supply type a backlog collapse hands back near the janitor.
+// Traps and any supplies past this per-type tail are dropped, not spawned, so a
+// player back from a break is never flooded with a session's worth of drops.
+const BacklogSupplyTailKeep = 3;
+
 // Reused load target for the client-written milestones file.
 var VCArchipelagoMilestones MilestoneFile;
 
@@ -526,6 +537,20 @@ function PollTraps()
         SaveAPState();
     }
 
+    // The queue in hand once the seed is latched, at a level start or after a
+    // mid-level connect, is a backlog: every entry received while no cleanable
+    // level was draining it, all pending at once. Collapse it once rather than
+    // draining it one entry per poll, which floods a player back from a break
+    // with a session's worth of spawns. A short tail of each supply type is
+    // handed back; traps and the rest of the backlog are dropped. Only entries
+    // arriving after this drain one per poll below.
+    if (!bTrapsBacklogCollapsed)
+    {
+        bTrapsBacklogCollapsed = true;
+        CollapseTrapsBacklog();
+        return;
+    }
+
     ParseStringIntoArray(TrapQueueFile.TrapQueue, Entries, ",", true);
     for (I = 0; I < Entries.Length; I++)
     {
@@ -541,6 +566,56 @@ function PollTraps()
         SaveAPState();
         return;
     }
+}
+
+// Drops the backlog of queue entries pending once a level's seed is latched,
+// keeping only the newest few of each supply type. The applied counter jumps to
+// the highest index in the queue first, so a spawn that fails, or a relaunch
+// during the collapse, never re-drops the backlog, then the kept supplies spawn
+// near the janitor. APLastSpawn is left untouched: a dropped or handed-back
+// supply is not a trap and must never feed the client's TrapLink bounce.
+function CollapseTrapsBacklog()
+{
+    local array<string> Entries;
+    local int I, EntryIndex, HighestIndex;
+    local string QueueType;
+    local array<string> KeptTypes;
+    local int BucketKept, BinKept, LanternKept;
+
+    ParseStringIntoArray(TrapQueueFile.TrapQueue, Entries, ",", true);
+    HighestIndex = APState.APTrapsApplied;
+    // Walk newest first, so each supply tail keeps the most recent drops.
+    for (I = Entries.Length - 1; I >= 0; I--)
+    {
+        EntryIndex = int(Left(Entries[I], InStr(Entries[I], ":")));
+        if (EntryIndex > HighestIndex)
+            HighestIndex = EntryIndex;
+        if (EntryIndex <= APState.APTrapsApplied)
+            continue;
+        QueueType = Mid(Entries[I], InStr(Entries[I], ":") + 1);
+        if (QueueType ~= "CleanBucket" && BucketKept < BacklogSupplyTailKeep)
+        {
+            KeptTypes.AddItem(QueueType);
+            BucketKept++;
+        }
+        else if (QueueType ~= "EmptyBin" && BinKept < BacklogSupplyTailKeep)
+        {
+            KeptTypes.AddItem(QueueType);
+            BinKept++;
+        }
+        else if (QueueType ~= "Lantern" && LanternKept < BacklogSupplyTailKeep)
+        {
+            KeptTypes.AddItem(QueueType);
+            LanternKept++;
+        }
+    }
+    // No entry past the counter: no backlog to drop, and nothing to hand back.
+    if (HighestIndex <= APState.APTrapsApplied)
+        return;
+    APState.APTrapsApplied = HighestIndex;
+    SaveAPState();
+    for (I = 0; I < KeptTypes.Length; I++)
+        ApplyQueueEntry(KeptTypes[I]);
 }
 
 function ApplyQueueEntry(string QueueType)

@@ -174,7 +174,15 @@ The reviewer treats a violation of any of these as a correctness blocker.
   "index:Type" queue keyed by received-item position). The mod stores the last
   applied index in its config state, applies one entry per poll, only in
   cleanable levels, and never replays another seed's queue or a pre-connect
-  backlog. Two keys live in server data storage: the slot's baseline
+  backlog. Once the queue's seed is latched in a cleanable level (at a level
+  start, or after a mid-level connect), the next poll collapses whatever backlog
+  is pending instead of draining it one per poll, which would flood a player
+  back from a break: it hands back only the
+  newest `BacklogSupplyTailKeep` (3) of each supply type near the janitor and
+  drops the rest, traps included, then jumps the applied counter to the queue
+  end so the drop rides the server high-water mark and never re-applies. Only
+  entries that arrive after that first poll drain one per poll. Two keys live
+  in server data storage: the slot's baseline
   (`vcd_traps_baseline_{team}_{slot}`, written exactly once at the slot's
   first-ever connect via the Set default-if-absent path, so nothing is ever
   inferred from packet order) and the applied high-water mark
