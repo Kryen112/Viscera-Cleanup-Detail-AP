@@ -92,7 +92,12 @@ simulated function bool HandleInstantHit(byte FiringMode, ImpactInfo Impact, opt
 }
 
 // Equipment stays carryable under the carry-lock: buckets (the mop needs its
-// rinse water nearby), bins, the radio, the janitor trunk, and the J-HARM.
+// rinse water nearby), bins, the radio, the janitor trunk, the J-HARM, and
+// lanterns, since a level with dark corners is unworkable without light and
+// half the levels place a lantern for exactly that. Broken ones pass too,
+// which is deliberate: an intact lantern scores nothing, but a lantern that
+// smashes in the janitor's hands would otherwise become mess they could not
+// clear until the Hands unlock. Only Penumbra places one already broken.
 // Only a direct hit on equipment that can be held right now passes through:
 // the stock grab then takes the directly hit actor as its target, so nearby
 // mess can never ride along, and a hit the stock path cannot hold (a raised
@@ -117,7 +122,8 @@ simulated function bool IsEquipmentGrab(Actor HitActor)
         || VCBin(HitActor) != None
         || VCRadio(HitActor) != None
         || VCTrunk(HitActor) != None
-        || VCScissorLift(HitActor) != None;
+        || VCScissorLift(HitActor) != None
+        || VCLantern(HitActor) != None;
 }
 
 // True when the actor is a floor tool drop whose weapon is still locked.

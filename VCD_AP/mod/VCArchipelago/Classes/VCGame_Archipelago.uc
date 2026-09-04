@@ -545,6 +545,8 @@ function PollTraps()
 
 function ApplyQueueEntry(string QueueType)
 {
+    local VCLantern DroppedLantern;
+
     `log("VCAP QUEUE type="$QueueType);
     if (QueueType ~= "MessDump")
     {
@@ -581,6 +583,14 @@ function ApplyQueueEntry(string QueueType)
     else if (QueueType ~= "EmptyBin")
     {
         SpawnSupplyNearJanitor(class'VCBin');
+    }
+    else if (QueueType ~= "Lantern")
+    {
+        // A spawned lantern is dark until something grabs it, which is no use
+        // in the rooms it is wanted for, so light it where it lands.
+        DroppedLantern = VCLantern(SpawnSupplyNearJanitor(class'VCLantern'));
+        if (DroppedLantern != None)
+            DroppedLantern.IgniteLantern();
     }
 }
 
@@ -2412,23 +2422,27 @@ event GameEnding()
     super.GameEnding();
 }
 
-// Drops a supply item on the floor near the janitor. A plain spawn is exactly
-// what the game's own dispensers vend: a fresh VCBucket is full of clean water
-// and a fresh VCBin is empty, and both score as misplaced equipment if left
-// out, same as a vended one.
-function SpawnSupplyNearJanitor(class<VCDebris> SupplyClass)
+// Drops a supply item on the floor near the janitor and returns it. A plain
+// spawn is exactly what the game's own dispensers vend: a fresh VCBucket is
+// full of clean water, a fresh VCBin is empty, and the supply machine stocks
+// the lantern as its first item. A bucket or bin left out scores as misplaced
+// equipment, same as a vended one; an intact lantern scores nothing, since its
+// CountAsMess only turns true once it smashes.
+function VCDebris SpawnSupplyNearJanitor(class<VCDebris> SupplyClass)
 {
     local VCPawn Janitor;
     local Vector Start, HitLocation, HitNormal, Offset, Spot, SupplyExtent;
     local Actor Floor;
+    local VCDebris Dropped;
     local int I;
 
     Janitor = PickRandomJanitor();
     if (Janitor == None)
-        return;
+        return None;
 
-    // Half-size box around the bin, the larger of the two supplies; a spot
-    // with this much clearance takes either one without clipping anything.
+    // Half-size box around the bin. A spot with this much clearance takes a
+    // bucket or a lantern too, and a supply that does overhang it is one the
+    // physics pushes clear rather than one that wedges.
     SupplyExtent = vect(22, 22, 26);
 
     for (I = 0; I < 16; I++)
@@ -2451,12 +2465,13 @@ function SpawnSupplyNearJanitor(class<VCDebris> SupplyClass)
         // wedged spot is rejected, so nothing spawns inside a wall.
         if (!FindSpot(SupplyExtent, Spot))
             continue;
-        if (Spawn(SupplyClass,,, Spot) != None)
-            return;
+        Dropped = Spawn(SupplyClass,,, Spot);
+        if (Dropped != None)
+            return Dropped;
     }
     // No clear spot took the spawn; drop it from above the janitor, whose own
     // footprint is proven open.
-    Spawn(SupplyClass,,, Janitor.Location + vect(0, 0, 96));
+    return Spawn(SupplyClass,,, Janitor.Location + vect(0, 0, 96));
 }
 
 // The game's single legitimate punch-out path: the punch machine and the level

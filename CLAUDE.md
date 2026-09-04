@@ -161,7 +161,8 @@ The reviewer treats a violation of any of these as a correctness blocker.
   classifies progression because it stands in for that level's itemized
   Slosh-O-Matic in logic. The `trap_percentage` (default 5) and
   `useful_percentage` (default 15) options convert shares of filler slots,
-  traps first.
+  traps first. Traps draw uniformly; the useful share draws weighted, so a
+  new supply picks its own rarity rather than diluting the others evenly.
 - Toolsanity state travels client to mod inside the grants file as the
   `UnlockedTools` string (`"VC_Hall:Hands Welder,VC_Cryo:"`); a map absent
   from it means toolsanity off for that map, so old clients and
@@ -182,8 +183,12 @@ The reviewer treats a violation of any of these as a correctness blocker.
   reconnect never truncates an in-flight burst; the client holds the traps
   file write until the connect-time storage read answers. A trap must never
   softlock, block a required check, or corrupt a save. Supply drops reuse the
-  game's own dispenser spawns (a plain VCBucket or VCBin) so they score
-  exactly like vended equipment; both anchor on a random living janitor.
+  game's own dispenser and vendor spawns (a plain VCBucket, VCBin, or
+  VCLantern) so they score exactly like vended equipment; all three anchor on
+  a random living janitor. A lantern is lit where it lands, since a spawned
+  one is dark until grabbed, and an intact one scores nothing at all: its
+  CountAsMess only turns true once it smashes. The three share the useful
+  slots by `USEFUL_WEIGHT_BY_NAME` (2:2:1), the lantern rarest.
 - DeathLink and TrapLink (both options off by default) ride a second queue,
   `Saves\VCArchipelagoLinks.sav` (a per-connect SessionTag, the DeathLinkOn
   flag, and "index:Type" entries; the client is the only writer), because
@@ -276,6 +281,15 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   and every per-map punchout handler confirms these are the only stacking
   zone mismatches and the only break-on-first group infractions; every other
   special mess scores per item.
+- The hands carry-lock exempts equipment a shift cannot run without:
+  `VCWeap_Hands_Archipelago.IsEquipmentGrab` passes buckets, bins, the radio,
+  the janitor trunk, the J-HARM, and `VCLantern`. The lantern cast is
+  deliberately unqualified, so it also passes `VCLantern_Broken` (Penumbra
+  places one) and the DLC lanterns `VCSRLantern` and `VCSWLantern`, both of
+  which extend `VCLantern` and so need no compile-time reference to their
+  optional packages. Passing broken ones is intentional: an intact lantern
+  scores nothing, but one that smashes in a locked janitor's hands would
+  otherwise be mess they could not clear.
 - Prefer calling the game's own functions over reimplementing them. Read the
   decompiled source first to know which are free of side effects.
 - Detection cross-checks from save files (read-only): `GlobalStatsData.sav` is

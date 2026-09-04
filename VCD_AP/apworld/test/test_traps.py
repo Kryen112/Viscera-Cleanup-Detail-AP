@@ -18,6 +18,7 @@ MAGNETIZE = ITEM_NAME_TO_ID["Magnetize Trap"]
 ZERO_GRAVITY = ITEM_NAME_TO_ID["Zero Gravity Trap"]
 CLEAN_BUCKET = ITEM_NAME_TO_ID["Clean Water Bucket"]
 EMPTY_BIN = ITEM_NAME_TO_ID["Empty Bin"]
+LANTERN = ITEM_NAME_TO_ID["Lantern"]
 FILLER = ITEM_NAME_TO_ID["Overtime Pay"]
 
 
@@ -48,9 +49,9 @@ class TestBuildQueue(unittest.TestCase):
                          "2:MessDump,5:Slowdown")
 
     def test_useful_items_ride_the_queue_in_receive_order(self) -> None:
-        received = [MESS_DUMP, CLEAN_BUCKET, FILLER, EMPTY_BIN]
+        received = [MESS_DUMP, CLEAN_BUCKET, FILLER, EMPTY_BIN, LANTERN]
         self.assertEqual(traps.build_queue(received, QUEUE_ID_TO_TYPE),
-                         "1:MessDump,2:CleanBucket,4:EmptyBin")
+                         "1:MessDump,2:CleanBucket,4:EmptyBin,5:Lantern")
 
     def test_speedup_rides_the_queue_with_its_own_token(self) -> None:
         received = [SLOWDOWN, FILLER, SPEEDUP]
@@ -93,11 +94,17 @@ class TestItemIdStability(unittest.TestCase):
                          ITEM_NAME_TO_ID[SQUEAKY_BOOTS_ITEMS[-1]] + 1)
 
     def test_zero_gravity_appends_after_the_frozen_tail(self) -> None:
-        # The zero gravity trap is the newest name, so it sits after the
-        # magnetize trap and holds the highest id in the table.
+        # The zero gravity trap sits after the magnetize trap.
         self.assertEqual(ITEM_NAME_TO_ID["Zero Gravity Trap"],
                          ITEM_NAME_TO_ID["Magnetize Trap"] + 1)
-        self.assertEqual(ITEM_NAME_TO_ID["Zero Gravity Trap"],
+
+    def test_lantern_appends_after_the_frozen_tail(self) -> None:
+        # The lantern is the newest name, so it sits after the zero gravity
+        # trap and holds the highest id. A seed rolled before it existed keeps
+        # every id it had.
+        self.assertEqual(ITEM_NAME_TO_ID["Lantern"],
+                         ITEM_NAME_TO_ID["Zero Gravity Trap"] + 1)
+        self.assertEqual(ITEM_NAME_TO_ID["Lantern"],
                          max(ITEM_NAME_TO_ID.values()))
 
     def test_retired_names_hold_their_id_slot_but_leave_the_table(self) -> None:
@@ -106,6 +113,33 @@ class TestItemIdStability(unittest.TestCase):
         self.assertNotIn("Spare Bucket", ITEM_NAME_TO_ID)
         self.assertNotIn(ITEM_ID_BASE + 28, ITEM_NAME_TO_ID.values())
         self.assertEqual(ITEM_NAME_TO_ID["Coffee Break"], ITEM_ID_BASE + 27)
+
+
+class TestUsefulSupplyWeights(unittest.TestCase):
+    """The three supply drops share the useful slots unevenly: the lantern is
+    the rarest, since light is situational where a bucket or a bin is not."""
+
+    def test_every_useful_name_carries_a_weight(self) -> None:
+        # A name added without a weight would raise at import; pin the pairing
+        # so the two tables cannot drift apart silently.
+        self.assertEqual(set(traps.USEFUL_WEIGHT_BY_NAME), set(traps.USEFUL_NAMES))
+        self.assertEqual(len(traps.USEFUL_WEIGHTS), len(traps.USEFUL_NAMES))
+
+    def test_weights_are_positive_so_every_supply_can_roll(self) -> None:
+        self.assertTrue(all(weight > 0 for weight in traps.USEFUL_WEIGHTS))
+
+    def test_the_lantern_is_rarer_than_the_bucket_and_the_bin(self) -> None:
+        weights = traps.USEFUL_WEIGHT_BY_NAME
+        self.assertLess(weights["Lantern"], weights["Clean Water Bucket"])
+        self.assertLess(weights["Lantern"], weights["Empty Bin"])
+        # Two to two to one: the lantern takes a fifth of the useful slots.
+        self.assertEqual(weights["Lantern"] / sum(traps.USEFUL_WEIGHTS), 0.2)
+
+    def test_the_lantern_rides_the_queue_with_its_own_token(self) -> None:
+        self.assertEqual(traps.USEFUL_TYPE_BY_NAME["Lantern"], "Lantern")
+        self.assertIn("Lantern", traps.QUEUE_TYPE_BY_NAME)
+        # A supply drop is never a trap, so it can never bounce over TrapLink.
+        self.assertNotIn("Lantern", traps.TRAP_TYPE_BY_NAME)
 
 
 class TestQueueFields(unittest.TestCase):

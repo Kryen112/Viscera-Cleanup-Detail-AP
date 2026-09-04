@@ -41,7 +41,7 @@ from .toolsanity import (CORE_CLEANING_KEYS, PROGRESSION_TOOL_KEYS,
                          PUNCHOUT_CLEAN_PERCENT, TOOL_REACH_PREREQUISITES,
                          free_keys, free_kit_rungs, full_clean_keys,
                          item_keys, rung_in_logic, tool_item_name)
-from .traps import TRAP_NAMES, USEFUL_NAMES
+from .traps import TRAP_NAMES, USEFUL_NAMES, USEFUL_WEIGHTS
 
 GAME_NAME = "Viscera Cleanup Detail"
 PROGRESSION_ITEM_NAMES: frozenset[str] = frozenset(
@@ -414,8 +414,9 @@ class VCDWorld(World):
             filler_slots - trap_slots)
         for _ in range(trap_slots):
             self.multiworld.itempool.append(self.create_item(self.random.choice(TRAP_NAMES)))
-        for _ in range(useful_slots):
-            self.multiworld.itempool.append(self.create_item(self.random.choice(USEFUL_NAMES)))
+        for name in self.random.choices(USEFUL_NAMES, USEFUL_WEIGHTS,
+                                        k=useful_slots):
+            self.multiworld.itempool.append(self.create_item(name))
         for _ in range(filler_slots - trap_slots - useful_slots):
             self.multiworld.itempool.append(self.create_item(self.get_filler_item_name()))
 

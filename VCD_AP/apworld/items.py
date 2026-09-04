@@ -82,6 +82,7 @@ _ID_ORDERED_NAMES: list[str] = LEVEL_ACCESS_ITEMS + FILLER_NAMES + [
 ] + TOOL_ITEMS + CLEAN_MOP_ITEMS + SQUEAKY_BOOTS_ITEMS + [
     "Magnetize Trap",
     "Zero Gravity Trap",
+    "Lantern",
 ]
 assert sorted(_ID_ORDERED_NAMES) == sorted(
     LEVEL_ACCESS_ITEMS + FILLER_NAMES + RETIRED_NAMES

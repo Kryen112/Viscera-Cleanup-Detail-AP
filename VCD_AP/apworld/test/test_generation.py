@@ -358,6 +358,20 @@ class TestUsefulPercentage(VCDTestBase):
             item = self.world.create_item(name)
             self.assertEqual(item.classification, ItemClassification.useful)
 
+    def test_every_supply_reaches_the_pool_with_the_lantern_rarest(self):
+        # End to end on the weighted draw: all three supplies roll, and the
+        # lantern comes up less often than either workhorse supply. The useful
+        # share here is large enough that a fifth of it cannot land empty.
+        from ..traps import USEFUL_NAMES
+        counts = {name: 0 for name in USEFUL_NAMES}
+        for item in self.multiworld.itempool:
+            if item.name in counts:
+                counts[item.name] += 1
+        for name, count in counts.items():
+            self.assertGreater(count, 0, name)
+        self.assertLess(counts["Lantern"], counts["Clean Water Bucket"])
+        self.assertLess(counts["Lantern"], counts["Empty Bin"])
+
 
 class TestTrapAndUsefulSharesCapAtTheFiller(VCDTestBase):
     options = {"trap_percentage": 60, "useful_percentage": 60}

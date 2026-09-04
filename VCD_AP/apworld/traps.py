@@ -37,8 +37,19 @@ TRAP_NAMES: list[str] = list(TRAP_TYPE_BY_NAME)
 USEFUL_TYPE_BY_NAME: dict[str, str] = {
     "Clean Water Bucket": "CleanBucket",
     "Empty Bin": "EmptyBin",
+    "Lantern": "Lantern",
 }
 USEFUL_NAMES: list[str] = list(USEFUL_TYPE_BY_NAME)
+
+# Relative share of the useful slots each supply takes. The lantern is the
+# rarer drop: a bucket or a bin is wanted on every shift, while light is
+# situational and half the levels place a lantern of their own.
+USEFUL_WEIGHT_BY_NAME: dict[str, int] = {
+    "Clean Water Bucket": 2,
+    "Empty Bin": 2,
+    "Lantern": 1,
+}
+USEFUL_WEIGHTS: list[int] = [USEFUL_WEIGHT_BY_NAME[name] for name in USEFUL_NAMES]
 
 # Every queued spawn type, trap and useful alike, for building the queue.
 QUEUE_TYPE_BY_NAME: dict[str, str] = {**TRAP_TYPE_BY_NAME, **USEFUL_TYPE_BY_NAME}
