@@ -282,17 +282,36 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   known-maximum changes with it: it makes a rung easier to reach, never
   harder. `APFilePaperwork` files it on demand and reports what a level's
   report is worth.
-  Three documented adjustments ride on top of the game value: the mod widens
+  Documented adjustments ride on top of the game value. The mod widens
   the Digsite's crate stacking zones to the crate archetypes the level spawns
   (the shipped map data lists only Type1 crates, which the level barely has;
-  this raises the game's own score, live and at punch-out), and the published
+  this raises the game's own score, live and at punch-out). The published
   live value credits two flat all-or-nothing infractions gradually: sand pit
   fill on the Digsite and Penumbra (bit 262144 on both handlers, 150 points)
   and seed bed restoration on the Greenhouse (bit 1048576, 40 points). Live
   and paper agree once the job completes. A sweep of all 26 level packages
   and every per-map punchout handler confirms these are the only stacking
   zone mismatches and the only break-on-first group infractions; every other
-  special mess scores per item.
+  special mess scores per item. Finally, while a level's Incinerator tool is
+  locked (`AppliedToolsMask`), `PublishCleanliness` credits every loose bucket
+  back out of the live penalty: the incinerator lock shuts the disposal
+  volumes too, so a mop-and-buckets shift fills buckets it can never empty that
+  would otherwise pile up as mess it cannot clear. A bucket's whole score
+  rides one infraction (`GetPenaltyFor(bucket, 512)`, 15 to 45 points dirty, a
+  flat share clean) in `ProcessMapState`, so one subtraction per bucket removes
+  it in any state. It skips exactly the buckets the handler skips (the
+  `bShutdown` ones and a player trunk's or incinerator's contents), rebuilding
+  that exclusion the way the handler does, from `GetContents`: a `MyContainer`
+  test would miss a bucket resting on the trunk lid (inside the handler's box
+  test, but no `MyContainer`) and credit it back though the handler never
+  penalized it. The moment the incinerator unlocks buckets count again, since
+  disposal is then in reach.
+  This is what makes toolsanity's wet-only credit (the mop-and-buckets kit
+  reaching its blood-and-scorch share, `free + mop`) physically accurate. It
+  is strictly permissive (live cleanliness only rises), so no logic, ceiling,
+  or known-maximum moves; the two measured no-hands ceilings (House of Horror,
+  Penumbra) stay valid access limits, now conservative since they were measured
+  with buckets still counting.
 - The hands carry-lock exempts equipment a shift cannot run without:
   `VCWeap_Hands_Archipelago.IsEquipmentGrab` passes buckets, bins, the radio,
   the janitor trunk, the J-HARM, and `VCLantern`. The lantern cast is

@@ -11,10 +11,12 @@
 // Cleanliness is the game's own value: 1 - FinalPenalty / StartingCleanupScore,
 // where the punchout handler's ProcessMapState recomputes FinalPenalty. Every
 // per-map handler extends VCPunchoutHandler_General, which owns those fields.
-// Three adjustments ride on top: the Digsite crate stacking zones widen to
-// the crate archetypes the level spawns, and the published value credits
-// partial sand pit fill (Digsite and Penumbra) and partial seed bed
-// restoration (Greenhouse) gradually (see PublishCleanliness). The punch-out
+// Adjustments ride on top: the Digsite crate stacking zones widen to the
+// crate archetypes the level spawns; the published value credits partial sand
+// pit fill (Digsite and Penumbra) and partial seed bed restoration
+// (Greenhouse) gradually; and while the incinerator is locked it credits back
+// every loose bucket, dirty water a mop-and-buckets shift cannot dispose (see
+// PublishCleanliness). The punch-out
 // report's own bonus is part of the game value, and under the seed's auto fill
 // option FillPunchoutReport keeps that form answered rather than leaving it to
 // the player.
@@ -3041,6 +3043,11 @@ function PublishCleanliness()
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
     local VCSandTrap SandTrap;
     local VCSeedBed SeedBed;
+    local VCBucket Bucket;
+    local VCTrunk Trunk;
+    local VCIncinerator Incinerator;
+    local array<VCDebris> Stowed, ContentsBuffer;
+    local int I;
     local int SeedBedTotal, SeedBedRestored;
     local float LivePenalty, SandFilledSum, SandFillMaxSum;
     local float clean;
@@ -3072,6 +3079,44 @@ function PublishCleanliness()
 
     Handler.ProcessMapState(self, None);
     LivePenalty = Handler.FinalPenalty;
+
+    // Without the incinerator the janitor cannot dispose of dirty water (the
+    // incinerator lock shuts the disposal volumes too), so a mop-and-buckets
+    // shift fills buckets it can never empty and they pile up as mess. While
+    // the incinerator is locked, credit every counted bucket back out: its
+    // whole score rides one infraction (bit 512) in ProcessMapState, dirty or
+    // clean. Skip exactly what the handler skips, and rebuild that set the way
+    // it does, from GetContents: a bShutdown bucket, and the contents of a
+    // player trunk or an incinerator. A bucket resting on the trunk lid is in
+    // the trunk by the handler's box test but has no MyContainer, so a
+    // MyContainer test would over-credit it. Buckets count once more the moment
+    // the incinerator unlocks and disposal is in reach.
+    if ((AppliedToolsMask
+        & class'VCGameReplicationInfo_Archipelago'.const.ToolIncinerator) == 0)
+    {
+        foreach AllActors(class'VCTrunk', Trunk)
+        {
+            if (!Trunk.bIsPlayerTrunk)
+                continue;
+            ContentsBuffer.Length = 0;
+            Trunk.GetContents(ContentsBuffer);
+            for (I = 0; I < ContentsBuffer.Length; I++)
+                Stowed.AddItem(ContentsBuffer[I]);
+        }
+        foreach AllActors(class'VCIncinerator', Incinerator)
+        {
+            ContentsBuffer.Length = 0;
+            Incinerator.GetContents(ContentsBuffer);
+            for (I = 0; I < ContentsBuffer.Length; I++)
+                Stowed.AddItem(ContentsBuffer[I]);
+        }
+        foreach DynamicActors(class'VCBucket', Bucket)
+        {
+            if (Bucket.bShutdown || Stowed.Find(Bucket) != -1)
+                continue;
+            LivePenalty -= Handler.GetPenaltyFor(Bucket, 512);
+        }
+    }
 
     // The Digsite and Darkening handlers score the sand pits as one flat
     // infraction (the same bit on both) while any pit is uncovered, so
