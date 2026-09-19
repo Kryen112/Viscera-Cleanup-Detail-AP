@@ -326,6 +326,12 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   inventory, so a tool the janitor owns never waits on the Hands item. That
   grab is strictly permissive, so no logic, ceiling, or known-maximum moves;
   the no-hands ceilings stay valid access limits.
+- The stock spawn activates the level's mop, so a locked Mop item is the one
+  lock that leaves a janitor holding nothing. `ApplyPawnInventoryLocks` brings
+  the hands up in that state (`EquipHandsWhenUnarmed`), gated on the Mop bit
+  rather than on the pawn's held weapon: a co-op guest's server-side
+  `Pawn.Weapon` reads None until that guest reports one back, so every other
+  test would force the hands on each guest spawn.
 - Prefer calling the game's own functions over reimplementing them. Read the
   decompiled source first to know which are free of side effects.
 - Detection cross-checks from save files (read-only): `GlobalStatsData.sav` is

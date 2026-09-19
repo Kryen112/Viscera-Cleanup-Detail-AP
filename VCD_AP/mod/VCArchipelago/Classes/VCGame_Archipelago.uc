@@ -1344,6 +1344,32 @@ function ApplyPawnInventoryLocks(VCPawn Janitor, int Mask)
     }
     for (I = 0; I < LockedWeapons.Length; I++)
         RemoveLockedWeapon(Janitor, LockedWeapons[I]);
+    // The stock spawn activates the level's mop, so a locked Mop is the one
+    // lock that leaves the janitor holding nothing.
+    if ((Mask & class'VCGameReplicationInfo_Archipelago'.const.ToolMop) == 0)
+        EquipHandsWhenUnarmed(Janitor);
+}
+
+// Brings the hands up while the level's Mop is locked and the janitor holds
+// nothing. It backs up the engine's own best-weapon switch, which a co-op
+// guest misses until they report a weapon back, so each lock pass retries.
+function EquipHandsWhenUnarmed(VCPawn Janitor)
+{
+    local VCWeap_Hands Candidate, Hands;
+
+    if (Janitor == None || Janitor.InvManager == None || Janitor.Health <= 0)
+        return;
+    if (Janitor.Weapon != None || Janitor.InvManager.PendingWeapon != None)
+        return;
+    foreach Janitor.InvManager.InventoryActors(class'VCWeap_Hands', Candidate)
+    {
+        Hands = Candidate;
+        break;
+    }
+    // A map that overrides the hands slot with something else leaves the
+    // janitor as the stock spawn left them.
+    if (Hands != None)
+        Janitor.InvManager.SetCurrentWeapon(Hands);
 }
 
 // Returns the locked tool to the world as its floor pickup unless a world
