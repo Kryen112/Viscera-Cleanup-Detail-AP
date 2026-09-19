@@ -17,6 +17,8 @@
 // Locked machines deny with a message here too, so a dead click never reads
 // as a bug. A locked floor tool (welder, broom, shovel) still grabs as a
 // plain carried item; only the weapon grant is withheld until its unlock.
+// An unlocked floor tool grabs through the carry-lock, because a tool the
+// janitor already owns must never wait on the Hands item to reach their hands.
 class VCWeap_Hands_Archipelago extends VCWeap_Hands;
 
 // Seconds between deny messages, so holding the button does not flood the HUD.
@@ -98,6 +100,9 @@ simulated function bool HandleInstantHit(byte FiringMode, ImpactInfo Impact, opt
 // which is deliberate: an intact lantern scores nothing, but a lantern that
 // smashes in the janitor's hands would otherwise become mess they could not
 // clear until the Hands unlock. Only Penumbra places one already broken.
+// An unlocked floor tool's drop passes as well: its grab is the only way that
+// weapon reaches the inventory, so the lock would otherwise hold a tool the
+// janitor already owns out of their hands.
 // Only a direct hit on equipment that can be held right now passes through:
 // the stock grab then takes the directly hit actor as its target, so nearby
 // mess can never ride along, and a hit the stock path cannot hold (a raised
@@ -106,6 +111,7 @@ simulated function bool HandleInstantHit(byte FiringMode, ImpactInfo Impact, opt
 simulated function bool IsEquipmentGrab(Actor HitActor)
 {
     local VCHoldableInterface Holdable, Redirected;
+    local int ToolBit;
 
     Holdable = VCHoldableInterface(HitActor);
     if (Holdable == None)
@@ -118,6 +124,9 @@ simulated function bool IsEquipmentGrab(Actor HitActor)
     }
     if (!Holdable.CanHold(Instigator))
         return false;
+    ToolBit = ToolDropToolBit(HitActor);
+    if (ToolBit != 0)
+        return IsToolUnlocked(ToolBit);
     return VCBucket(HitActor) != None
         || VCBin(HitActor) != None
         || VCRadio(HitActor) != None
@@ -126,16 +135,25 @@ simulated function bool IsEquipmentGrab(Actor HitActor)
         || VCLantern(HitActor) != None;
 }
 
+// The tool bit a floor tool drop grants, or zero when the actor is not one.
+simulated function int ToolDropToolBit(Actor DropActor)
+{
+    if (VCItemDrop_WeldingLaser(DropActor) != None)
+        return class'VCGameReplicationInfo_Archipelago'.const.ToolWelder;
+    if (VCItemDrop_Broom(DropActor) != None)
+        return class'VCGameReplicationInfo_Archipelago'.const.ToolBroom;
+    if (VCItemDrop_Shovel(DropActor) != None)
+        return class'VCGameReplicationInfo_Archipelago'.const.ToolShovel;
+    return 0;
+}
+
 // True when the actor is a floor tool drop whose weapon is still locked.
 simulated function bool IsLockedToolDrop(Actor DropActor)
 {
-    if (VCItemDrop_WeldingLaser(DropActor) != None)
-        return !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolWelder);
-    if (VCItemDrop_Broom(DropActor) != None)
-        return !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolBroom);
-    if (VCItemDrop_Shovel(DropActor) != None)
-        return !IsToolUnlocked(class'VCGameReplicationInfo_Archipelago'.const.ToolShovel);
-    return false;
+    local int ToolBit;
+
+    ToolBit = ToolDropToolBit(DropActor);
+    return ToolBit != 0 && !IsToolUnlocked(ToolBit);
 }
 
 // A grabbed floor tool whose weapon is still locked stays a plain carried

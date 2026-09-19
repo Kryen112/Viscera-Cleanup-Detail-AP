@@ -320,7 +320,12 @@ re-decompile packages as needed (`NEXT_APWORLD_PLAYBOOK.md` Appendix B.1).
   which extend `VCLantern` and so need no compile-time reference to their
   optional packages. Passing broken ones is intentional: an intact lantern
   scores nothing, but one that smashes in a locked janitor's hands would
-  otherwise be mess they could not clear.
+  otherwise be mess they could not clear. It also passes a floor tool drop
+  whose own tool is already unlocked (`ToolDropToolBit`), because a hands grab
+  of that drop is the only way the welder, shovel, or broom reaches the
+  inventory, so a tool the janitor owns never waits on the Hands item. That
+  grab is strictly permissive, so no logic, ceiling, or known-maximum moves;
+  the no-hands ceilings stay valid access limits.
 - Prefer calling the game's own functions over reimplementing them. Read the
   decompiled source first to know which are free of side effects.
 - Detection cross-checks from save files (read-only): `GlobalStatsData.sav` is
