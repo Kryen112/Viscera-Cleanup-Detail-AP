@@ -113,6 +113,12 @@ HARD_START_FREE_KEYS: frozenset[str] = frozenset({"Hands", "Incinerator"})
 # counts splats the scan's chain does not recognize; their points sit
 # unattributed inside the remainder, so UNSCANNED_SPLAT_PENALTY below names the
 # tool that owns each one.
+# A handler can also score mess on an actor that is neither VCDebris nor
+# VCSplat, which the scan's chains do not walk, so those points sit in the
+# level's remainder with no tool owning them. APScanReport sorts the two such
+# infractions on Incubation Emergency; the rows of the other levels that have
+# them (sand traps, seed beds, crystal deposits, mantis eggs, sentry mounts)
+# still carry their points in the remainder.
 _SCAN: dict[str, tuple[float, float, float, float, float, float, float,
                        float, float, int]] = {
     "VC_SplatterStation": (7851.0, 3605.0, 475.0, 3630.0, 75.0, 66.0, 0.0, 0.0, 0.0, 0),

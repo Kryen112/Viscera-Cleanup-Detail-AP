@@ -1628,6 +1628,8 @@ function RunScanReport(PlayerController Requester)
     local VCSplat Splat;
     local VCIncinerator Incinerator;
     local VCMedpackBox MedpackBox;
+    local VCBiomass Biomass;
+    local VCIncubator Incubator;
     local VCLowGravityVolume GravityVolume;
     local VCBucketDispensor BucketDispensor;
     local VCBinDispensor BinDispensor;
@@ -1787,6 +1789,36 @@ function RunScanReport(PlayerController Requester)
         {
             VendorPenalty += Handler.GetPenaltyFor(MedpackBox, 2048);
             VendorCount++;
+        }
+    }
+    // Incubation Emergency scores two infractions on actors that are neither
+    // VCDebris nor VCSplat, so the chains above do not see them and their
+    // points fall into the remainder. The guard is the handler class that
+    // defines the two bits, since nine other handlers give bit 262144 a
+    // meaning of their own.
+    if (VCPunchoutHandler_Incubator(PunchoutHandler) != None)
+    {
+        foreach AllActors(class'VCBiomass', Biomass)
+        {
+            // Biomass takes only welder and fire damage, so the welder owns it.
+            if (Biomass.CountAsMess())
+            {
+                WelderPenalty += Handler.GetPenaltyFor(Biomass,
+                    class'VCPunchoutHandler_Incubator'.const.RESULT_Biomass);
+                WelderCount++;
+            }
+        }
+        foreach AllActors(class'VCIncubator', Incubator)
+        {
+            // A pod restores on an unbroken light bulb in its mounting plus
+            // its alien egg. The egg is a breakable prop the hands carry, so
+            // the vendor's replacement bulb is the binding half.
+            if (!Incubator.CheckRestored())
+            {
+                VendorPenalty += Handler.GetPenaltyFor(Incubator,
+                    class'VCPunchoutHandler_Incubator'.const.RESULT_Incubator);
+                VendorCount++;
+            }
         }
     }
     foreach AllActors(class'VCIncinerator', Incinerator)
@@ -2028,7 +2060,9 @@ function CleanAllCoreKitMess(PlayerController Requester)
     Requester.ClientMessage("APCleanCoreKit: cleared "$Removed$" core-kit mess"
         $" actors. Read the cleanliness readout for the core-kit ceiling. Welder"
         $" and vendor marks, barrels, buckets, bins, collectibles, and Bob notes"
-        $" stay; any other loose prop the game counts as mess is cleared too.");
+        $" stay, as does mess the game scores on an actor that is neither"
+        $" VCDebris nor VCSplat, such as biomass and incubator pods. Any other"
+        $" loose prop the game counts as mess is cleared.");
 }
 
 // Picks a random living janitor as a trap or supply anchor, so in co-op the
