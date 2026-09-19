@@ -121,6 +121,35 @@ class TestDefault(VCDTestBase):
             self.assertTrue(location.can_reach(
                 self.state_with(core + [vendor, welder])), name)
 
+    def test_incubator_top_checks_need_both_its_extra_tools(self):
+        # Incubation Emergency's core kit is measured at 38 percent: its
+        # biomass takes the welder and its incubator pods restock from the
+        # vendor, so its clean kit carries both and the ladder stalls at 30
+        # without them.
+        display = "Incubation Emergency"
+        vendor = tool_item_name(display, "Vendor")
+        welder = tool_item_name(display, "Welder")
+        core = [access_item_name(display)] + [
+            tool_item_name(display, key) for key in ("Hands", "Incinerator")]
+        below = self.multiworld.get_location(
+            milestone_name(display, 30), self.player)
+        self.assertTrue(below.can_reach(self.state_with(core)))
+        # The old 80 ceiling put this rung in logic on the core kit alone.
+        stranded = self.multiworld.get_location(
+            milestone_name(display, 50), self.player)
+        self.assertFalse(stranded.can_reach(self.state_with(core)))
+        for name in (milestone_name(display, 50),
+                     milestone_name(display, 90),
+                     employee_of_the_month_name(display),
+                     punch_out_name(display)):
+            location = self.multiworld.get_location(name, self.player)
+            self.assertFalse(location.can_reach(
+                self.state_with(core + [vendor])), name)
+            self.assertFalse(location.can_reach(
+                self.state_with(core + [welder])), name)
+            self.assertTrue(location.can_reach(
+                self.state_with(core + [vendor, welder])), name)
+
     def test_pickup_rule_pulls_a_required_tool_prerequisite_in(self):
         # A pickup that required Athena's Wrath's welder would need the J-HARM
         # that reaches it too.
@@ -1056,11 +1085,17 @@ class TestToolsanityBands(unittest.TestCase):
 
     def test_suspect_level_needs_its_extra_tools(self):
         from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
-        # Incubation Emergency's core kit tops out at its 80 percent ceiling;
-        # only the welder lifts it to 100 and opens the over-100 ladder.
-        self.assertEqual(toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS), 80.0)
+        # Incubation Emergency needs two as well: the welder for its biomass
+        # and the vendor to restock its incubator pods, so the core kit holds
+        # at the measured 38 percent and neither tool alone lifts it.
+        self.assertEqual(toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS), 38.0)
+        self.assertEqual(
+            toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS | {"Welder"}), 38.0)
+        self.assertEqual(
+            toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS | {"Vendor"}), 38.0)
         self.assertGreaterEqual(
-            toolset_cap("VC_Incubator", 5, CORE_KIT_KEYS | {"Welder"}), 100.0)
+            toolset_cap("VC_Incubator", 5,
+                        CORE_KIT_KEYS | {"Welder", "Vendor"}), 100.0)
         # Uprinsing needs two: the vendor for its graffiti and the welder for
         # a larger share of welder mess, so neither alone lifts the ceiling.
         self.assertEqual(toolset_cap("VC_Uprinsing", 5, CORE_KIT_KEYS), 80.0)
@@ -1076,6 +1111,46 @@ class TestToolsanityBands(unittest.TestCase):
             present = self._situational_present(m)
             self.assertEqual(toolset_cap(m, 5, CORE_KIT_KEYS | present),
                              float(usable_total(m, 5)))
+
+    def test_a_measured_share_replaces_the_scanned_one(self):
+        from ..toolsanity import (MEASURED_TOOL_SHARE_PERCENT, _BANDS,
+                                  SITUATIONAL_TOOL_KEYS,
+                                  scanned_situational_percent, tools_present)
+        # The scan walks only VCDebris and VCSplat, so mess a handler scores
+        # on any other actor class has no owner in the row. A measured row
+        # replaces the scanned share outright, and only ever raises it, or the
+        # band model credits a toolset with mess it cannot reach. The baseline
+        # it has to beat includes the tool's unscanned splats.
+        for map_name, shares in MEASURED_TOOL_SHARE_PERCENT.items():
+            present = frozenset(tools_present(map_name))
+            for key, percent in shares.items():
+                self.assertIn(key, SITUATIONAL_TOOL_KEYS)
+                self.assertIn(key, present)
+                self.assertEqual(_BANDS[map_name].situational[key], percent)
+                self.assertGreaterEqual(
+                    percent, scanned_situational_percent(map_name, key))
+
+    def test_a_scanned_share_carries_its_unscanned_splats(self):
+        from ..toolsanity import (UNSCANNED_SPLAT_PENALTY, _SCAN,
+                                  scanned_situational_percent)
+        # The baseline a measured row has to beat is the scan column plus the
+        # splats the scan could not classify, or a measured row could silently
+        # drop mess the unscanned table already attributed.
+        for map_name, row in UNSCANNED_SPLAT_PENALTY.items():
+            owner, count, penalty = row
+            start = _SCAN[map_name][0]
+            self.assertGreaterEqual(
+                scanned_situational_percent(map_name, owner),
+                count * penalty / start * 100.0)
+
+    def test_incubator_vendor_share_covers_its_pods(self):
+        from ..toolsanity import _BANDS
+        # Measured in game: APCleanCoreKit leaves the level at 38.04 percent,
+        # restocking its pods reaches 48.53, and its medpack boxes 49.29. The
+        # row carries a margin over that 11.25 for the spam paperwork the
+        # vendor dispenses and for stock that breaks in transit.
+        self.assertGreaterEqual(_BANDS["VC_Incubator"].situational["Vendor"],
+                                11.25)
 
     def test_a_tool_stored_behind_another_waits_for_its_prerequisite(self):
         from ..toolsanity import CORE_KIT_KEYS, toolset_cap, usable_total
@@ -1154,15 +1229,15 @@ class TestToolsanityBands(unittest.TestCase):
 
     def test_deduction_never_pulls_the_clean_kit_below_100(self):
         from ..toolsanity import CORE_KIT_KEYS, rung_in_logic, toolset_cap
-        # Incubation Emergency's lift and vendor shares subtracted from its
-        # 110 usable total land under 110, but the suspect row measured that
-        # the welder closes the level to 100: the clean kit keeps 100 plus the
-        # slack step, even at coarse steps.
+        # Incubation Emergency's lift share subtracted from its 110 usable
+        # total lands under 110, but the suspect row measured that its clean
+        # kit closes the level to 100: the clean kit keeps 100 plus the slack
+        # step, even at coarse steps.
         from ..toolsanity import _BANDS, usable_total
-        kit = CORE_KIT_KEYS | {"Welder"}
+        kit = CORE_KIT_KEYS | {"Welder", "Vendor"}
         bands = _BANDS["VC_Incubator"]
         reachable = (usable_total("VC_Incubator", 10)
-                     - bands.situational["Lift"] - bands.situational["Vendor"])
+                     - bands.situational["Lift"])
         self.assertLess(reachable, 110.0)
         self.assertEqual(toolset_cap("VC_Incubator", 10, kit), 110.0)
         self.assertTrue(rung_in_logic("VC_Incubator", 100, 10, kit))

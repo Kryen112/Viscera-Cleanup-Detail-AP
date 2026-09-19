@@ -26,7 +26,8 @@ unreachable without that tool, so no toolset is ever credited a rung the mess it
 cannot clear puts out of reach. A few levels leave a large share of mess the
 core kit cannot clear at all (recorded in CORE_KIT_CEILING_PERCENT): the core
 kit tops out around that ceiling there, and every check above it waits for all
-of the level's EXTRA_CLEAN_TOOLS, one on most of them and two on Uprinsing.
+of the level's EXTRA_CLEAN_TOOLS, one on most of them and two on Uprinsing and
+Incubation Emergency.
 That ceiling is the only guard against a level whose over-100 headroom hides a
 tool's share, since the import assert compares against a theoretical maximum a
 real shift rarely banks. A tool stored where only
@@ -138,6 +139,10 @@ _SCAN: dict[str, tuple[float, float, float, float, float, float, float,
     "VC_Robot": (32915.5, 11562.5, 5610.0, 8395.0, 0.0, 48.0, 560.0, 0.0, 6740.0, 65),
     "VC_Jungle": (11821.5, 5042.5, 1985.0, 4220.0, 75.0, 99.0, 400.0, 0.0, 0.0, 0),
     "VC_IceStation": (7033.5, 3867.5, 0.0, 2765.0, 15.0, 66.0, 320.0, 0.0, 0.0, 0),
+    # This row understates the welder by its biomass and the vendor by its
+    # incubator pods, which is what MEASURED_TOOL_SHARE_PERCENT covers for the
+    # vendor. A re-scan sorts both and reports no unknown splats here, so it
+    # retires this level's UNSCANNED_SPLAT_PENALTY row in the same edit.
     "VC_Incubator": (41951.0, 6697.5, 1690.0, 4325.0, 7.5, 66.0, 320.0, 0.0, 28845.0, 364),
     "VC_Uprinsing": (22385.5, 5277.5, 5370.0, 6595.0, 60.0, 33.0, 320.0, 0.0, 4730.0, 52),
     "VC_Energy_01": (25311.0, 6667.5, 2295.0, 9400.0, 0.0, 51.0, 560.0, 0.0, 6337.5, 0),
@@ -166,6 +171,26 @@ UNSCANNED_SPLAT_PENALTY: dict[str, tuple[str, int, float]] = {
     "VC_Mantis_01": ("Welder", 21, 30.0),    # Creep, handler bit 1048576
     "VC_Incubator": ("Welder", 364, 30.0),   # Creep, handler bit 2097152
     "VC_Uprinsing": ("Vendor", 52, 50.0),    # Paint, handler bit 2097152
+}
+
+# Played knowledge: a tool's real share, measured in game, where the scan
+# cannot see it. The scan walks VCDebris and VCSplat, so a handler that scores
+# mess on any other actor class leaves those points in the remainder with no
+# owner. A row here replaces the scanned share outright, so it is the whole of
+# what that tool owns on that level.
+#
+# Incubation Emergency: APCleanCoreKit leaves the level at 38.04 percent.
+# Restocking its 23 incubator pods lifts it to 48.53, and the four medpack
+# boxes to 49.29, so the vendor owns 11.25 percent there. The scan sees only
+# 0.76 of that (the medpack boxes exactly); every pod sits in its remainder.
+# The row carries 15 rather than the measured 11.25 because banking the
+# measurement costs mess of its own: the vendor dispenses spam paperwork
+# alongside each item, and a bulb or an egg that breaks in transit is mess the
+# restock has to make good before the share lands. The margin gates no rung
+# while the vendor sits in this level's EXTRA_CLEAN_TOOLS, since a held tool is
+# never deducted; it is what the model falls back on if that changes.
+MEASURED_TOOL_SHARE_PERCENT: dict[str, dict[str, float]] = {
+    "VC_Incubator": {"Vendor": 15.0},
 }
 
 # Levels holding each optional tool. Hands, Incinerator, Mop, Slosh-O-Matic,
@@ -204,18 +229,24 @@ TOOL_REACH_PREREQUISITES: dict[str, dict[str, frozenset[str]]] = {
 }
 
 # Levels the core kit alone cannot clean to 100 percent, with the percent it
-# tops out at and the situational tools that clear the rest. Incubation
-# Emergency, Core Sample, The Vulcan Affair, and Revolutionary Robotics leave
-# welder mess (bullet holes, creep, and robot footprints). Uprinsing leaves
-# both graffiti that needs the vendor's acid vials and a welder share larger
-# than the graffiti, so it names two tools. The first three ceilings are
-# measured with the APCleanCoreKit dev command. The Vulcan ceiling is a
-# conservative floor under the arithmetic bound of 98.86 (the known maximum
-# 115.90 minus the scanned welder 16.91 and barrel 0.13 shares), pending an
-# APCleanCoreKit measurement; the bound proves the core kit cannot reach 100
-# there. Played knowledge: Revolutionary Robotics strands the core kit short
-# of 100, so it sits with the measured three at a conservative 80, pending its
-# own measurement.
+# tops out at and the situational tools that clear the rest. Core Sample, The
+# Vulcan Affair, and Revolutionary Robotics leave welder mess (bullet holes,
+# creep, and robot footprints). Uprinsing leaves both graffiti that needs the
+# vendor's acid vials and a welder share larger than the graffiti, so it names
+# two tools. Incubation Emergency leaves both: its biomass takes only the
+# welder, and its incubator pods only restock from the vendor, so it names two
+# as well. Incubation Emergency, Core Sample, and Uprinsing carry
+# APCleanCoreKit readings. The Vulcan ceiling is a conservative floor
+# under the arithmetic bound of 98.86 (the known maximum 115.90 minus the
+# scanned welder 16.91 and barrel 0.13 shares), pending an APCleanCoreKit
+# measurement; the bound proves the core kit cannot reach 100 there. Played
+# knowledge: Revolutionary Robotics strands the core kit short of 100, so it
+# sits at a conservative 80, pending its own measurement.
+#
+# A ceiling on a level whose remainder is unattributed is provisional, however
+# it was arrived at. Incubation Emergency scores more than half its mess on
+# actor classes no scan column walks, and its ceiling moves 42 points between
+# measurements. Re-measure before trusting one.
 #
 # The test that sorts a suspect from a safe level is what share of a level's
 # over-100 headroom the core kit has to bank to make up the mess it cannot
@@ -232,14 +263,14 @@ TOOL_REACH_PREREQUISITES: dict[str, dict[str, frozenset[str]]] = {
 # percent of the level's headroom to reach 100, the same bet Revolutionary
 # Robotics loses.
 CORE_KIT_CEILING_PERCENT: dict[str, float] = {
-    "VC_Incubator": 80.0,
+    "VC_Incubator": 38.0,
     "VC_Uprinsing": 80.0,
     "VC_Energy_01": 80.0,
     "VC_Vulcan_01": 90.0,
     "VC_Robot": 80.0,
 }
 EXTRA_CLEAN_TOOLS: dict[str, frozenset[str]] = {
-    "VC_Incubator": frozenset({"Welder"}),
+    "VC_Incubator": frozenset({"Welder", "Vendor"}),
     "VC_Uprinsing": frozenset({"Vendor", "Welder"}),
     "VC_Energy_01": frozenset({"Welder"}),
     "VC_Vulcan_01": frozenset({"Welder"}),
@@ -338,6 +369,26 @@ def full_clean_keys(map_name: str) -> frozenset[str]:
     return CORE_KIT_KEYS | EXTRA_CLEAN_TOOLS.get(map_name, frozenset())
 
 
+# The _SCAN column each situational tool's scanned share reads from. The
+# shovel has no scanned share of its own.
+_SITUATIONAL_SCAN_COLUMN: dict[str, int] = {
+    "Welder": 2, "Lift": 4, "Vendor": 6,
+}
+
+
+def scanned_situational_percent(map_name: str, key: str) -> float:
+    """A situational tool's share as the scan alone reports it, including the
+    unscanned splats attributed to it. What a measured row has to beat."""
+    row = _SCAN[map_name]
+    start = row[0]
+    column = _SITUATIONAL_SCAN_COLUMN.get(key)
+    percent = 0.0 if column is None else row[column] / start * 100.0
+    unscanned = UNSCANNED_SPLAT_PENALTY.get(map_name)
+    if unscanned is not None and unscanned[0] == key:
+        percent += unscanned[1] * unscanned[2] / start * 100.0
+    return percent
+
+
 class _Bands:
     """Precomputed mess shares for one level, as percents of the starting
     cleanup score. `free` is machine-use work no lock gates; `mop` is the
@@ -355,15 +406,12 @@ class _Bands:
         self.free = free / start * 100.0
         self.mop = _mop / start * 100.0
         self.situational = {
-            "Welder": _welder / start * 100.0,
-            "Vendor": _vendor / start * 100.0,
-            "Lift": _barrels / start * 100.0,
-            "Shovel": 0.0,
+            key: scanned_situational_percent(map_name, key)
+            for key in SITUATIONAL_TOOL_KEYS
         }
-        unscanned = UNSCANNED_SPLAT_PENALTY.get(map_name)
-        if unscanned is not None:
-            owner, count, penalty = unscanned
-            self.situational[owner] += count * penalty / start * 100.0
+        measured = MEASURED_TOOL_SHARE_PERCENT.get(map_name, {})
+        for owner, percent in measured.items():
+            self.situational[owner] = percent
 
 
 # Every splat the scan could not classify has to be attributed to a tool, or
@@ -389,8 +437,26 @@ for _map, _, _ in LEVELS:
         f"{_map}: EXTRA_CLEAN_TOOLS names something other than a situational"
         f" tool the level has")
 
+# A measured share replaces what the scan reports, so it has to name a
+# situational tool the level has and has to sit above the share it replaces.
+# A row at or under the scanned share is a silent no-op that reads as a live
+# constraint, and one naming a tool the level lacks never deducts anything.
+for _map, _shares in MEASURED_TOOL_SHARE_PERCENT.items():
+    for _key, _percent in _shares.items():
+        assert _key in SITUATIONAL_TOOL_KEYS, (
+            f"{_map}: MEASURED_TOOL_SHARE_PERCENT names {_key}, which is not"
+            f" a situational tool")
+        assert _key in tools_present(_map), (
+            f"{_map}: MEASURED_TOOL_SHARE_PERCENT names {_key}, which the"
+            f" level does not have")
+        _scanned = scanned_situational_percent(_map, _key)
+        assert _percent >= _scanned, (
+            f"{_map}: the measured {_key} share {_percent} sits under the"
+            f" scanned {_scanned:.2f} it replaces")
+
 for _table_name, _table in (("CORE_KIT_CEILING_PERCENT", CORE_KIT_CEILING_PERCENT),
                             ("EXTRA_CLEAN_TOOLS", EXTRA_CLEAN_TOOLS),
+                            ("MEASURED_TOOL_SHARE_PERCENT", MEASURED_TOOL_SHARE_PERCENT),
                             ("UNSCANNED_SPLAT_PENALTY", UNSCANNED_SPLAT_PENALTY),
                             ("NO_HANDS_CEILING_PERCENT", NO_HANDS_CEILING_PERCENT),
                             ("TOOL_REACH_PREREQUISITES", TOOL_REACH_PREREQUISITES)):

@@ -96,16 +96,21 @@ The reviewer treats a violation of any of these as a correctness blocker.
   unreachable without it, so no toolset is credited a rung it cannot clean to),
   and the full kit reaches the level's over-100 maximum with margin. Five
   suspect levels leave mess the core kit cannot clear
-  (`CORE_KIT_CEILING_PERCENT`: VC_Incubator, VC_Energy_01, VC_Vulcan_01, and
-  VC_Robot need the Welder, VC_Uprinsing both the Vendor and the Welder).
+  (`CORE_KIT_CEILING_PERCENT`: VC_Energy_01, VC_Vulcan_01, and VC_Robot need
+  the Welder, VC_Uprinsing and VC_Incubator both the Vendor and the Welder).
   There the core kit tops out at the recorded ceiling and the checks above it
   wait for every one of that level's `EXTRA_CLEAN_TOOLS`, with no partial
   credit for holding one of two. Three ceilings are measured with
-  APCleanCoreKit; the
+  APCleanCoreKit (VC_Incubator at 38, VC_Energy_01 and VC_Uprinsing at 80); the
   Vulcan ceiling is a conservative floor under the arithmetic bound its scan
   row proves and the Robot ceiling one under player reports of the core kit
-  stranding short of 100 there, both pending a measurement. The Robot ceiling
-  sits at the same 80 as the measured three. The ceiling table
+  stranding short of 100 there, both pending a measurement. A ceiling on a
+  level whose remainder is unattributed is provisional however it was reached,
+  since the scan walks only `VCDebris` and `VCSplat` and a handler can score
+  mess on any other actor class: VC_Incubator's ceiling moved 42 points when it
+  was measured again. `MEASURED_TOOL_SHARE_PERCENT` carries a tool's real share
+  where the scan cannot see it, replacing the scanned share outright, and an
+  import assert holds it at or above what it replaces. The ceiling table
   is the only guard on a level whose over-100 headroom hides a tool's share:
   the import assert compares against a theoretical maximum a real shift
   rarely banks, so it clears a level the headroom masks. A module-import
