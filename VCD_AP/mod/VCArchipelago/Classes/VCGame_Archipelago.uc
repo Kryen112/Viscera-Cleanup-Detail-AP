@@ -188,6 +188,13 @@ var int AppliedToolsMask;
 var bool bDevToolMaskActive;
 var int DevToolMask;
 
+// Dev override for the two perks that ride their own grants lists rather than
+// the tool mask (Squeaky Clean Boots, Self-Cleaning Mop). In-memory only, so a
+// level reload drops it.
+var bool bDevPerkOverrideActive;
+var bool bDevSqueakyBoots;
+var bool bDevSelfCleaningMop;
+
 // Toolsanity: the tools the level HAS, for the HUD unlock panel. Constant per
 // level, so it is read once from the grants file and cached (0 means no
 // toolsanity data, which the panel shows as all-available).
@@ -1012,15 +1019,31 @@ function PublishSelfCleaningMopFlag()
 {
     local VCMapInfo MapInfo;
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local bool bActive;
 
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
     if (MapInfo != None && MapInfo.bIsOfficeLevel)
         return;
     if (!bSelfCleaningMap)
         bSelfCleaningMap = IsSelfCleaningMap(WorldInfo.GetMapName(true));
+    bActive = SelfCleaningMopActive();
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
-    if (ReplicatedInfo != None && ReplicatedInfo.bSelfCleaningMop != bSelfCleaningMap)
-        ReplicatedInfo.bSelfCleaningMop = bSelfCleaningMap;
+    if (ReplicatedInfo != None && ReplicatedInfo.bSelfCleaningMop != bActive)
+        ReplicatedInfo.bSelfCleaningMop = bActive;
+}
+
+// The effective Self-Cleaning Mop state for the current level: the dev
+// override wins over the client-written grant, the way it does for tools.
+function bool SelfCleaningMopActive()
+{
+    local VCMapInfo MapInfo;
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.bIsOfficeLevel)
+        return false;
+    if (bDevPerkOverrideActive)
+        return bDevSelfCleaningMop;
+    return bSelfCleaningMap;
 }
 
 // Keeps the mop clean on a Self-Cleaning Mop level, so it never fills, paints
@@ -1034,7 +1057,7 @@ function PollSelfCleaningMop()
     local VCWeap_Mop Mop;
 
     PublishSelfCleaningMopFlag();
-    if (!bSelfCleaningMap)
+    if (!SelfCleaningMopActive())
         return;
     foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
     {
@@ -1076,15 +1099,31 @@ function PublishSqueakyBootsFlag()
 {
     local VCMapInfo MapInfo;
     local VCGameReplicationInfo_Archipelago ReplicatedInfo;
+    local bool bActive;
 
     MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
     if (MapInfo != None && MapInfo.bIsOfficeLevel)
         return;
     if (!bSqueakyBootsMap)
         bSqueakyBootsMap = IsSqueakyBootsMap(WorldInfo.GetMapName(true));
+    bActive = SqueakyBootsActive();
     ReplicatedInfo = VCGameReplicationInfo_Archipelago(GameReplicationInfo);
-    if (ReplicatedInfo != None && ReplicatedInfo.bSqueakyBoots != bSqueakyBootsMap)
-        ReplicatedInfo.bSqueakyBoots = bSqueakyBootsMap;
+    if (ReplicatedInfo != None && ReplicatedInfo.bSqueakyBoots != bActive)
+        ReplicatedInfo.bSqueakyBoots = bActive;
+}
+
+// The effective Squeaky Clean Boots state for the current level: the dev
+// override wins over the client-written grant, the way it does for tools.
+function bool SqueakyBootsActive()
+{
+    local VCMapInfo MapInfo;
+
+    MapInfo = VCMapInfo(WorldInfo.GetMapInfo());
+    if (MapInfo != None && MapInfo.bIsOfficeLevel)
+        return false;
+    if (bDevPerkOverrideActive)
+        return bDevSqueakyBoots;
+    return bSqueakyBootsMap;
 }
 
 // Suppresses bloody footprints on a Squeaky Clean Boots level. The primary stop
@@ -1099,7 +1138,7 @@ function PollSqueakyBoots()
     local VCPawn Janitor;
 
     PublishSqueakyBootsFlag();
-    if (!bSqueakyBootsMap)
+    if (!SqueakyBootsActive())
         return;
     foreach WorldInfo.AllPawns(class'VCPawn', Janitor)
     {
@@ -1486,6 +1525,48 @@ function GrantSniffers()
     }
 }
 
+// Dev override of one perk's lock. The two perks carry no tool bit, so they
+// get their own override, started from the current effective state so one perk
+// command leaves the other where the grants left it. Returns false when the
+// key names no perk, which sends the caller on to the tool mask.
+function bool DevSetPerkLock(string PerkKey, bool bUnlock)
+{
+    if (!(PerkKey ~= "SqueakyBoots") && !(PerkKey ~= "SelfCleaningMop"))
+        return false;
+    if (!bDevPerkOverrideActive)
+    {
+        bDevSqueakyBoots = bSqueakyBootsMap;
+        bDevSelfCleaningMop = bSelfCleaningMap;
+        bDevPerkOverrideActive = true;
+    }
+    if (PerkKey ~= "SqueakyBoots")
+        bDevSqueakyBoots = bUnlock;
+    else
+        bDevSelfCleaningMop = bUnlock;
+    PublishSqueakyBootsFlag();
+    PublishSelfCleaningMopFlag();
+    return true;
+}
+
+// The whole unlocked readout for the dev messages: the tool mask plus the two
+// perks, which live outside it.
+function string DescribeDevUnlocks()
+{
+    local string Described;
+    local int ToolMask;
+
+    ToolMask = CurrentToolsMask();
+    if (ToolMask != 0)
+        Described = class'VCGameReplicationInfo_Archipelago'.static.DescribeToolMask(ToolMask)$" ";
+    if (SqueakyBootsActive())
+        Described $= "SqueakyBoots ";
+    if (SelfCleaningMopActive())
+        Described $= "SelfCleaningMop ";
+    if (Described == "")
+        return "none";
+    return Left(Described, Len(Described) - 1);
+}
+
 // Dev override of one tool's lock, from the measurement tour commands. The
 // override starts from the current effective mask, so single locks compose
 // with the grants-driven state.
@@ -1493,11 +1574,18 @@ function DevSetToolLock(string ToolKey, bool bUnlock, PlayerController Requester
 {
     local int ToolBit;
 
+    if (DevSetPerkLock(ToolKey, bUnlock))
+    {
+        Requester.ClientMessage("Dev override active. Unlocked: "
+            $DescribeDevUnlocks());
+        return;
+    }
     ToolBit = class'VCGameReplicationInfo_Archipelago'.static.ToolBitForKey(ToolKey);
     if (ToolBit == 0)
     {
         Requester.ClientMessage("Unknown tool key '"$ToolKey
-            $"'. Keys: Hands Welder Shovel Lift Vendor Incinerator Sniffer Broom Bins Mop SloshOMatic.");
+            $"'. Keys: Hands Welder Shovel Lift Vendor Incinerator Sniffer Broom Bins Mop"
+            $" SloshOMatic SqueakyBoots SelfCleaningMop.");
         return;
     }
     if (!bDevToolMaskActive)
@@ -1510,25 +1598,34 @@ function DevSetToolLock(string ToolKey, bool bUnlock, PlayerController Requester
     else
         DevToolMask = DevToolMask & ~ToolBit;
     EnforceToolLocks();
-    Requester.ClientMessage("Dev tool override active. Unlocked: "
-        $class'VCGameReplicationInfo_Archipelago'.static.DescribeToolMask(DevToolMask));
+    Requester.ClientMessage("Dev override active. Unlocked: "
+        $DescribeDevUnlocks());
 }
 
-function DevSetToolMask(int Mask, PlayerController Requester)
+// The all-on and all-off commands, which carry the perks along with the mask.
+function DevSetToolMask(int Mask, bool bPerksUnlocked, PlayerController Requester)
 {
     bDevToolMaskActive = true;
     DevToolMask = Mask;
+    bDevPerkOverrideActive = true;
+    bDevSqueakyBoots = bPerksUnlocked;
+    bDevSelfCleaningMop = bPerksUnlocked;
     EnforceToolLocks();
-    Requester.ClientMessage("Dev tool override active. Unlocked: "
-        $class'VCGameReplicationInfo_Archipelago'.static.DescribeToolMask(DevToolMask));
+    PublishSqueakyBootsFlag();
+    PublishSelfCleaningMopFlag();
+    Requester.ClientMessage("Dev override active. Unlocked: "
+        $DescribeDevUnlocks());
 }
 
 function DevClearToolMask(PlayerController Requester)
 {
     bDevToolMaskActive = false;
+    bDevPerkOverrideActive = false;
     EnforceToolLocks();
-    Requester.ClientMessage("Dev tool override cleared. Unlocked: "
-        $class'VCGameReplicationInfo_Archipelago'.static.DescribeToolMask(CurrentToolsMask()));
+    PublishSqueakyBootsFlag();
+    PublishSelfCleaningMopFlag();
+    Requester.ClientMessage("Dev override cleared. Unlocked: "
+        $DescribeDevUnlocks());
 }
 
 // Dev shortcut for the Bob goal: saves the two Digsite storyline stats

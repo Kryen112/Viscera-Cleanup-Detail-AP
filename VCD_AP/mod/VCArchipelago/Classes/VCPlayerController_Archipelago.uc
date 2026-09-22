@@ -17,6 +17,8 @@ function VCGame_Archipelago DevCommandGame()
     return VCGame_Archipelago(WorldInfo.Game);
 }
 
+// The tool keys are Hands Welder Shovel Lift Vendor Incinerator Sniffer Broom
+// Bins Mop SloshOMatic, plus the two perks SqueakyBoots and SelfCleaningMop.
 exec function APToolLock(string ToolKey)
 {
     local VCGame_Archipelago Game;
@@ -41,7 +43,7 @@ exec function APToolLockAll()
 
     Game = DevCommandGame();
     if (Game != None)
-        Game.DevSetToolMask(0, self);
+        Game.DevSetToolMask(0, false, self);
 }
 
 exec function APToolUnlockAll()
@@ -50,7 +52,8 @@ exec function APToolUnlockAll()
 
     Game = DevCommandGame();
     if (Game != None)
-        Game.DevSetToolMask(class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll, self);
+        Game.DevSetToolMask(class'VCGameReplicationInfo_Archipelago'.const.ToolMaskAll,
+            true, self);
 }
 
 // Drops the dev override and returns to the client-written grants state.
