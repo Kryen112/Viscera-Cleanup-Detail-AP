@@ -387,7 +387,14 @@ Standing rules:
   (`VCMapInfo.bIsOfficeLevel`) and throttle or event-drive the full mess scan for
   production. Prefer event-driven checks where the game gives an event.
 - Player-facing client messages use the `Client` logger, or they are invisible in
-  the AP client window.
+  the AP client window. A stack trace goes to the `VCDClient` logger, which
+  reaches the file log and never the client window.
+- Connect-time and command steps that run as tasks go through
+  `start_reported_task`, so a failed step is reported in the client window
+  instead of dying into the file log as an unretrieved task exception.
+- The game-process probe reads `tasklist` output as bytes, never `text=True`:
+  the console prints in the OEM code page and localizes its no-match line, so
+  an ANSI decode raises on an umlaut and hands back None.
 
 ## apworld Python: lint and tests
 

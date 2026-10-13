@@ -24,7 +24,7 @@ import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, Coroutine, NamedTuple
 
 import Utils
 from CommonClient import (ClientCommandProcessor, CommonContext, get_base_parser,
@@ -46,6 +46,9 @@ from .locations import (COLLECTIBLE_LOCATION_NAMES, DIGSITE_GATES_LOCATION,
 # Player-facing lines go to the "Client" logger, or they do not show in the client
 # window.
 client_logger = logging.getLogger("Client")
+# Tracebacks go here: the window shows the Client logger, the file log takes
+# every logger, so this one keeps a stack trace out of the player's view.
+file_logger = logging.getLogger("VCDClient")
 
 STATE_SECTION = "[vcarchipelago.vcarchipelagostate]"
 POLL_SECONDS = 1.0
@@ -374,16 +377,21 @@ def game_process_running() -> bool:
         return False
     try:
         # A short timeout: this runs on the event loop, and tasklist answers in
-        # well under a second when healthy.
+        # well under a second when healthy. Bytes, never text: tasklist prints
+        # in the console's OEM code page and localizes its no-match line, so
+        # an ANSI decode raises on a character the two pages do not share.
         result = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq UDK.exe", "/NH"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True, timeout=3,
             creationflags=subprocess.CREATE_NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired):
         # The callers guard destructive moves (a save swap, a package
         # overwrite), so an unanswerable check fails closed: assume running.
         return True
-    return "UDK.exe" in result.stdout
+    if result.stdout is None:
+        # The reader thread died, so the answer is unknown: fail closed.
+        return True
+    return b"UDK.exe" in result.stdout
 
 
 def looks_like_install(path: Path) -> bool:
@@ -448,7 +456,7 @@ class VCDCommandProcessor(ClientCommandProcessor):
     def _cmd_installmod(self) -> None:
         """Install (or update) the precompiled VCArchipelago game mod into the
         install folder. Close the game first."""
-        asyncio.create_task(self.ctx.install_mod())
+        self.ctx.start_reported_task(self.ctx.install_mod(), "Mod install")
 
     def _cmd_uninstall(self) -> None:
         """Remove the mod and all its wiring from the install folder and restore
@@ -618,6 +626,21 @@ class VCDContext(CommonContext):
             client_logger.warning(
                 f"Could not save the install folder to host.yaml ({error}); set "
                 "viscera_cleanup_detail_options -> install_folder there yourself.")
+
+    def start_reported_task(self, coroutine: "Coroutine[Any, Any, None]",
+                            step_name: str) -> "asyncio.Task":
+        """Schedule a connect or command step so a failure in it shows in the
+        client window. A bare task's exception only reaches the file log, and
+        a step that dies that way looks like nothing happened."""
+        async def run_and_report() -> None:
+            try:
+                await coroutine
+            except Exception as error:
+                client_logger.error(
+                    f"{step_name} failed: {error!r}. The client log holds the "
+                    "details; please report it.")
+                file_logger.error(f"{step_name} failed.", exc_info=error)
+        return asyncio.create_task(run_and_report())
 
     async def setup_and_launch(self) -> None:
         """On connect: make sure an install folder is known (picker on first run),
@@ -1002,7 +1025,7 @@ class VCDContext(CommonContext):
             {"cmd": "SetNotify", "keys": keys},
             {"cmd": "Get", "keys": keys},
         ]))
-        asyncio.create_task(self.setup_and_launch())
+        self.start_reported_task(self.setup_and_launch(), "Connect setup")
 
     def refresh_links(self, slot_data: dict) -> None:
         """Apply both link tags for a connected slot. Runs on every connect, so

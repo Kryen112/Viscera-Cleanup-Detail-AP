@@ -873,8 +873,80 @@ class TestGameProcessRunning(unittest.TestCase):
         from unittest import mock
         with mock.patch.object(client.sys, "platform", "win32"), \
                 mock.patch.object(client.subprocess, "run",
-                                  return_value=Namespace(stdout="INFO: none")):
+                                  return_value=Namespace(stdout=b"INFO: none")):
             self.assertFalse(client.game_process_running())
+
+    def test_present_process_reads_running(self) -> None:
+        from types import SimpleNamespace as Namespace
+        from unittest import mock
+        row = b"UDK.exe                      1234 Console                    1    512.000 K\r\n"
+        with mock.patch.object(client.sys, "platform", "win32"), \
+                mock.patch.object(client.subprocess, "run",
+                                  return_value=Namespace(stdout=row)):
+            self.assertTrue(client.game_process_running())
+
+    def test_localized_no_match_line_is_never_decoded(self) -> None:
+        # tasklist prints in the console's OEM code page, and a German
+        # no-match line carries an umlaut byte (0x81) the ANSI code page does
+        # not define. The probe must read bytes, so no decode can fail.
+        from types import SimpleNamespace as Namespace
+        from unittest import mock
+        line = b"INFO: Es werden keine Aufgaben mit den angegebenen Kriterien ausgef\x81hrt.\r\n"
+        with mock.patch.object(client.sys, "platform", "win32"), \
+                mock.patch.object(client.subprocess, "run",
+                                  return_value=Namespace(stdout=line)) as run:
+            self.assertFalse(client.game_process_running())
+        kwargs = run.call_args.kwargs
+        self.assertNotIn("text", kwargs)
+        self.assertNotIn("encoding", kwargs)
+        self.assertNotIn("universal_newlines", kwargs)
+
+    def test_lost_output_fails_closed(self) -> None:
+        # A dead reader thread hands back None. That is an unanswered check,
+        # so it reads as running, never as safe to swap saves under.
+        from types import SimpleNamespace as Namespace
+        from unittest import mock
+        with mock.patch.object(client.sys, "platform", "win32"), \
+                mock.patch.object(client.subprocess, "run",
+                                  return_value=Namespace(stdout=None)):
+            self.assertTrue(client.game_process_running())
+
+
+class TestStartReportedTask(unittest.TestCase):
+    """A connect or command step scheduled as a bare task fails into the file
+    log only, so the player sees nothing happen. The wrapper reports it in
+    the client window and keeps the traceback out of that window."""
+
+    def test_failed_step_reports_to_the_client_window(self) -> None:
+        ctx = VCDContext.__new__(VCDContext)
+
+        async def step() -> None:
+            raise TypeError("argument of type 'NoneType' is not iterable")
+
+        async def run() -> None:
+            await ctx.start_reported_task(step(), "Connect setup")
+
+        with self.assertLogs("Client", level="ERROR") as window, \
+                self.assertLogs("VCDClient", level="ERROR") as file_log:
+            asyncio.run(run())
+        self.assertEqual(len(window.output), 1)
+        self.assertIn("Connect setup failed: TypeError(", window.output[0])
+        self.assertNotIn("Traceback", window.output[0])
+        self.assertIn("Traceback", file_log.output[0])
+
+    def test_clean_step_is_quiet(self) -> None:
+        ctx = VCDContext.__new__(VCDContext)
+        ran = []
+
+        async def step() -> None:
+            ran.append(True)
+
+        async def run() -> None:
+            await ctx.start_reported_task(step(), "Connect setup")
+
+        with self.assertNoLogs("Client", level="ERROR"):
+            asyncio.run(run())
+        self.assertEqual(ran, [True])
 
 
 class TestStartScoreMismatch(unittest.TestCase):
